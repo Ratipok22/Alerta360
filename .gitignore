@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+backend/ml/data/
+backend/ml/artifacts/
+node_modules/
+dist/
