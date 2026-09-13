@@ -24,11 +24,11 @@ Alerta360/
 │   ├── backend/     # FastAPI + modelo de Machine Learning (ver detalle abajo)
 │   └── frontend/    # React + TypeScript + Vite + Leaflet
 ├── docs/            # Documentación por fase (FASE 1, FASE 2, FASE 3)
-├── database/        # Modelo de datos / migraciones (pendiente)
 ├── docker/          # docker-compose.yml
-├── tests/           # Pruebas (pendiente)
 └── run.sh           # Script para levantar backend + frontend en local
 ```
+
+`database/` y `tests/` se removieron por ahora (no se estaban usando en esta fase); se vuelven a crear cuando corresponda según el checklist de abajo (modelo de datos real y pruebas automatizadas).
 
 ## Stack
 
