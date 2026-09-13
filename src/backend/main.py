@@ -3,10 +3,18 @@ from datetime import datetime
 from typing import Literal
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+# Carga variables desde .env (JWT_SECRET_KEY, etc.) cuando se corre
+# directo con uvicorn; docker-compose ya las inyecta por su cuenta, pero
+# esto no interfiere en ese caso (load_dotenv no sobreescribe variables
+# que ya vengan puestas por el entorno).
+load_dotenv()
+
+from core.auth import Usuario, crear_token, verificar_credenciales, verificar_token
 from core.companies import todas_las_unidades
 from core.eta import calcular_eta
 from core.radio_codes import CLAVES_RADIALES
@@ -49,12 +57,49 @@ class Emergency(BaseModel):
     lat: float
     lng: float
 
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class LoginResponse(BaseModel):
+    token: str
+    nombre: str
+    email: str
+
 @app.get("/health")
 def health():
     return {"status":"ok","service":"emergency-resource-api"}
 
+@app.post("/auth/login", response_model=LoginResponse)
+def login(datos: LoginRequest):
+    """Login sin registro: solo los 3 operadores fijos definidos en
+    core/auth.py pueden entrar. Las contraseñas se verifican contra su
+    hash bcrypt, nunca en texto plano."""
+    usuario = verificar_credenciales(datos.email, datos.password)
+    if not usuario:
+        raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
+    return LoginResponse(token=crear_token(usuario), nombre=usuario.nombre, email=usuario.email)
+
+def usuario_actual(authorization: str | None = Header(default=None)) -> Usuario:
+    """Dependencia de FastAPI: exige un JWT valido en el header
+    Authorization: Bearer <token> para acceder a los endpoints reales de
+    datos -- ver core/auth.py."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="No autenticado")
+    usuario = verificar_token(authorization.split(" ", 1)[1])
+    if not usuario:
+        raise HTTPException(status_code=401, detail="Sesión inválida o expirada, inicia sesión de nuevo")
+    return usuario
+
+@app.get("/auth/me")
+def auth_me(usuario: Usuario = Depends(usuario_actual)):
+    """Permite al frontend validar si el token guardado localmente sigue
+    siendo valido (p.ej. al recargar la pagina) sin pedir login de nuevo
+    si no hace falta."""
+    return {"email": usuario.email, "nombre": usuario.nombre}
+
 @app.get("/resources")
-def resources():
+def resources(usuario: Usuario = Depends(usuario_actual)):
     """Flota real: companias de Bomberos de Valparaiso y Vina del Mar
     (ver core/companies.py para el detalle de que esta verificado)."""
     out = []
@@ -75,7 +120,7 @@ def resources():
     return {"resources": out}
 
 @app.get("/catalog/claves")
-def catalog_claves():
+def catalog_claves(usuario: Usuario = Depends(usuario_actual)):
     """Catalogo de claves radiales 10-X (nombre, prioridad, terreno) para uso del frontend."""
     return {"claves": [
         {
@@ -88,7 +133,7 @@ def catalog_claves():
     ]}
 
 @app.get("/zones")
-def zones():
+def zones(usuario: Usuario = Depends(usuario_actual)):
     return {"zones": [
         {
             "zona_id": z.id,
@@ -99,7 +144,7 @@ def zones():
     ]}
 
 @app.get("/prediction/demand")
-def prediction_demand(horizon: int = 4, fecha: str | None = None):
+def prediction_demand(horizon: int = 4, fecha: str | None = None, usuario: Usuario = Depends(usuario_actual)):
     """Prediccion de demanda esperada por zona/periodo/tipo (modelo ML).
 
     `fecha` (opcional) permite simular una fecha/hora distinta a la actual,
@@ -119,7 +164,7 @@ def prediction_demand(horizon: int = 4, fecha: str | None = None):
         raise HTTPException(status_code=503, detail=str(e))
 
 @app.get("/route")
-def route(origen_lat: float, origen_lng: float, destino_lat: float, destino_lng: float):
+def route(origen_lat: float, origen_lng: float, destino_lat: float, destino_lng: float, usuario: Usuario = Depends(usuario_actual)):
     """Ruta real siguiendo calles (no una linea recta), calculada por el
     motor de ruteo local OSRM sobre datos reales de OpenStreetMap de la
     Region de Valparaiso (ver routing/README.md). Si el servicio OSRM no

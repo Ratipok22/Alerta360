@@ -219,9 +219,25 @@ header p{font-size:12px;color:var(--gris-tenue);margin:5px 0 0}
 .configRow input:not([type="checkbox"]){flex:1;min-width:0}
 .configRow input[type="checkbox"]{accent-color:var(--azul-operativo)}
 .configNote{font-size:12px;color:var(--gris-tenue)}
+.logoutBtn{color:var(--rojo-alerta);border-color:#ff3b3055}
+.logoutBtn:hover{background:#ff3b3015}
 
 .mobileMenu{display:none;border:0;background:transparent;color:var(--blanco);cursor:pointer;padding:0}
 .navBackdrop{display:none}
+
+/* ============ LOGIN ============ */
+.loginPage{min-height:100vh;width:100%;display:flex;align-items:center;justify-content:center;background:var(--negro-panel)}
+.loginCard{width:100%;max-width:360px;background:var(--negro-tarjeta);border:1px solid var(--borde-sutil);border-radius:12px;padding:32px 28px;box-shadow:0 20px 60px #0008}
+.loginCard .brand{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+.loginSubtitle{color:var(--blanco);font-size:15px;font-weight:700;margin:0 0 20px}
+.loginLabel{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gris-tenue);font-weight:600;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.4px}
+.loginInput{width:100%;box-sizing:border-box;background:var(--negro-panel);border:1px solid var(--borde-sutil);border-radius:7px;padding:10px 12px;color:var(--blanco);font-size:13px;font-family:inherit}
+.loginInput:focus{outline:none;border-color:var(--azul-operativo)}
+.loginError{color:var(--rojo-alerta);font-size:12px;margin:12px 0 0;line-height:1.4}
+.loginSubmit{width:100%;margin-top:20px;padding:11px;border:0;border-radius:7px;background:var(--azul-operativo);color:var(--blanco);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit}
+.loginSubmit:disabled{opacity:.6;cursor:default}
+.loginSubmit:not(:disabled):hover{filter:brightness(1.1)}
+.loginFooter{margin:20px 0 0;font-size:11px;color:var(--gris-tenue);line-height:1.5;text-align:center}
 
 /* ============ MARCADORES DE MAPA ============ */
 .emergency-marker div{width:40px;height:40px;border-radius:50%;background:var(--rojo-alerta);color:var(--blanco);display:grid;place-items:center;font-size:23px;font-weight:800;border:3px solid #ff9995;box-shadow:0 0 0 12px #ff3b3025,0 0 0 25px #ff3b3012;animation:pulso-alerta 1.8s ease-in-out infinite}

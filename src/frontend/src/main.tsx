@@ -3,7 +3,7 @@ import {createRoot} from 'react-dom/client';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
-import {AlertTriangle, BarChart3, Bell, Building2, CheckCircle2, Clock3, Crosshair, Droplet, Flame, HardHat, History, Layers3, MapPin, Menu, Navigation, Radio, RefreshCw, Settings, ShieldCheck, Truck, TreePine, Users, XCircle, Zap} from 'lucide-react';
+import {AlertTriangle, BarChart3, Bell, Building2, CheckCircle2, Clock3, Crosshair, Droplet, Flame, HardHat, History, Layers3, Lock, LogOut, Mail, MapPin, Menu, Navigation, Radio, RefreshCw, Settings, ShieldCheck, Truck, TreePine, Users, XCircle, Zap} from 'lucide-react';
 
 // En localhost apunta al backend local de siempre. Si la app se abre a
 // traves de un dev tunnel (ej. VS Code Ports / *.devtunnels.ms), reconstruye
@@ -18,6 +18,14 @@ function detectarApiBase():string{
   return 'http://localhost:8000';
 }
 const API_BASE = detectarApiBase();
+// Token de sesion actual (JWT), en una variable de modulo -- lo necesitan
+// funciones sueltas fuera de React (como obtenerRutaReal) que no reciben
+// props/estado directamente. Se mantiene sincronizada con el estado real
+// de auth en App() mediante un efecto (ver mas abajo).
+let currentToken:string|null=null;
+function authHeaders():Record<string,string>{
+  return currentToken?{Authorization:`Bearer ${currentToken}`}:{};
+}
 
 // Ubicacion por defecto: Valparaiso. A futuro, cuando el sistema se despliegue
 // en una central real, este valor se reemplaza por la geolocalizacion del
@@ -125,7 +133,7 @@ function segmentoActual(r:Resource, nowMs:number):{origen:{lat:number;lng:number
 async function obtenerRutaReal(origen:{lat:number;lng:number}, destino:{lat:number;lng:number}):Promise<{puntos:{lat:number;lng:number}[]; acumKm:number[]}|null>{
   try{
     const url=`${API_BASE}/route?origen_lat=${origen.lat}&origen_lng=${origen.lng}&destino_lat=${destino.lat}&destino_lng=${destino.lng}`;
-    const resp=await fetch(url,{credentials:'include'});
+    const resp=await fetch(url,{credentials:'include', headers:authHeaders()});
     if(!resp.ok) return null;
     const data=await resp.json();
     const puntos:{lat:number;lng:number}[]=data.puntos;
@@ -573,26 +581,47 @@ function iconoCuartel(letras:string[]):string{
   return `<div style="width:22px;height:22px;border-radius:5px;background:#1c2029;border:2px solid #5b6472;color:#cbd5e1;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;box-shadow:0 1px 4px #000a;">${texto}</div>`;
 }
 
+// Boton "asignar manualmente" dentro de un popup: solo aparece si hay una
+// emergencia activa y la unidad realmente esta disponible (esDisponible) —
+// el click real se maneja por delegacion de eventos en MapPanel (los
+// popups de Leaflet son HTML plano, no componentes de React), identificando
+// la unidad por el atributo data-asignar-id.
+function botonAsignarManual(unidad:Resource, hayEmergenciaActiva:boolean):string{
+  if(!hayEmergenciaActiva || !esDisponible(unidad)) return '';
+  return `<button data-asignar-id="${unidad.id}" style="margin-top:6px;width:100%;padding:6px 8px;border-radius:6px;border:none;background:#e5484d;color:#fff;font-weight:700;font-size:11px;cursor:pointer;">Asignar ${unidad.id} a la emergencia activa</button>`;
+}
+
 // Contenido HTML de la popup al hacer click en una unidad: detalle completo
-// (no solo el nombre/estado del tooltip al pasar el mouse).
-function popupVehiculo(r:Resource):string{
+// (no solo el nombre/estado del tooltip al pasar el mouse), mas el boton
+// de asignacion manual si corresponde.
+function popupVehiculo(r:Resource, hayEmergenciaActiva:boolean):string{
   const detalleTramo=r.destino
     ? `<br/>→ ${r.destino.address}`
     : '';
   return `<b>${r.name}</b><br/>${r.compania}<br/><span style="opacity:.75">${r.sector}</span><br/>
     Tipo: ${r.type} · Dotación: ${r.crew}<br/>
-    Estado: <b>${RADIO_LABELS[r.radioState]}</b>${detalleTramo}`;
+    Estado: <b>${RADIO_LABELS[r.radioState]}</b>${detalleTramo}
+    ${botonAsignarManual(r, hayEmergenciaActiva)}`;
 }
 
 // Popup del cuartel: lista todas las unidades basadas ahi y su estado
-// actual, ya que un mismo cuartel puede tener mas de una unidad.
-function popupCuartel(compania:string, sector:string, unidades:Resource[]):string{
-  const filas=unidades.map(u=>`${u.id} (${u.type}) — <b>${RADIO_LABELS[u.radioState]}</b>`).join('<br/>');
+// actual (un mismo cuartel puede tener mas de una), con un boton de
+// asignacion manual por cada unidad que este realmente disponible.
+function popupCuartel(compania:string, sector:string, unidades:Resource[], hayEmergenciaActiva:boolean):string{
+  const filas=unidades.map(u=>
+    `${u.id} (${u.type}) — <b>${RADIO_LABELS[u.radioState]}</b>${botonAsignarManual(u, hayEmergenciaActiva)}`
+  ).join('<br/>');
   return `<b>${compania}</b><br/><span style="opacity:.75">${sector}</span><br/><br/>${filas}`;
 }
 
-function MapPanel({resources, emergencies, focus, center}:{resources:Resource[]; emergencies:Emergency[]; focus:{lat:number;lng:number}|null; center:{lat:number;lng:number}}){
+function MapPanel({resources, emergencies, focus, center, onAsignarManual}:{resources:Resource[]; emergencies:Emergency[]; focus:{lat:number;lng:number}|null; center:{lat:number;lng:number}; onAsignarManual:(resourceId:string)=>void}){
   const mapRef=useRef<L.Map|null>(null);
+  // Refs para leer siempre el valor mas reciente desde callbacks que
+  // Leaflet dispara mas tarde (popups, clicks) sin que queden desactualizados.
+  const onAsignarManualRef=useRef(onAsignarManual);
+  onAsignarManualRef.current=onAsignarManual;
+  const emergenciesRef=useRef(emergencies);
+  emergenciesRef.current=emergencies;
   // Capa "estatica": emergencias, marcador de emergencia asignada y el
   // trazado de ruta -- se redibuja solo cuando cambian los datos (no en
   // cada tick), porque nada de esto se mueve cuadro a cuadro.
@@ -630,6 +659,21 @@ function MapPanel({resources, emergencies, focus, center}:{resources:Resource[];
     layerRef.current=layer;
     marcadoresRef.current={};
     estadoIconoRef.current={};
+    // Los popups de Leaflet son HTML plano (no componentes de React), asi
+    // que el click del boton "Asignar manualmente" se maneja por
+    // delegacion de eventos: cada vez que se abre un popup, se buscan
+    // botones con data-asignar-id adentro y se conecta el callback real.
+    map.on('popupopen', (e:any)=>{
+      const el=e.popup?.getElement?.();
+      if(!el) return;
+      el.querySelectorAll('[data-asignar-id]').forEach((btn:Element)=>{
+        btn.addEventListener('click', ()=>{
+          const id=btn.getAttribute('data-asignar-id');
+          if(id) onAsignarManualRef.current(id);
+          map.closePopup();
+        }, {once:true});
+      });
+    });
     const cleanupResize=fixMapSize(map);
     return()=>{cleanupResize(); map.remove(); mapRef.current=null; layerRef.current=null;};
   },[center]);
@@ -657,7 +701,7 @@ function MapPanel({resources, emergencies, focus, center}:{resources:Resource[];
       L.marker([lat,lng],{
         icon:L.divIcon({className:'cuartel-marker', html:iconoCuartel(letras), iconSize:[22,22], iconAnchor:[11,11]}),
         zIndexOffset:-100,
-      }).addTo(layer).bindTooltip(`${compania} · ${sector}`).bindPopup(popupCuartel(compania, sector, unidades));
+      }).addTo(layer).bindTooltip(`${compania} · ${sector}`).bindPopup(popupCuartel(compania, sector, unidades, emergencies.length>0));
     });
     emergencies.forEach(e=>{
       L.marker([e.lat,e.lng],{icon:L.divIcon({className:'emergency-marker',html:'<div>!</div>',iconSize:[36,36],iconAnchor:[18,18]})}).addTo(layer).bindPopup(`<b>Emergencia #${e.id}</b><br/>Clave ${e.codigo}<br/>${e.address}`);
@@ -724,7 +768,7 @@ function MapPanel({resources, emergencies, focus, center}:{resources:Resource[];
           icon:L.divIcon({className:'resource-marker', html:iconoVehiculo(color, RESOURCE_LETRA[r.type], rumbo), iconSize:[30,30], iconAnchor:[15,15]}),
         }).addTo(map);
         m.bindTooltip(()=>{const d=datosRef.current[r.id]; return `${d.name} · ${RADIO_LABELS[d.radioState]}`;});
-        m.bindPopup(()=>popupVehiculo(datosRef.current[r.id]));
+        m.bindPopup(()=>popupVehiculo(datosRef.current[r.id], emergenciesRef.current.length>0));
         marcadoresRef.current[r.id]=m;
         estadoIconoRef.current[r.id]=claveIcono;
       }else{
@@ -849,11 +893,11 @@ function RecursosView({resources}:{resources:Resource[]}){
   </div>;
 }
 
-function MapaView({resources,emergencies,center,zonas,zonaSeleccionada,onSelectZona}:{resources:Resource[];emergencies:Emergency[];center:{lat:number;lng:number};zonas:ZoneDemand[];zonaSeleccionada:string|null;onSelectZona:(zona:ZoneDemand)=>void}){
+function MapaView({resources,emergencies,center,zonas,zonaSeleccionada,onSelectZona,onAsignarManual}:{resources:Resource[];emergencies:Emergency[];center:{lat:number;lng:number};zonas:ZoneDemand[];zonaSeleccionada:string|null;onSelectZona:(zona:ZoneDemand)=>void;onAsignarManual:(resourceId:string)=>void}){
   return <div className="sectionGrid">
     <div className="card sectionCard mapaFull">
       <div className="cardHead"><div><b>Mapa operacional</b><span>Todas las unidades y emergencias activas</span></div></div>
-      <div className="mapaFullWrap"><MapPanel resources={resources} emergencies={emergencies} focus={null} center={center}/></div>
+      <div className="mapaFullWrap"><MapPanel resources={resources} emergencies={emergencies} focus={null} center={center} onAsignarManual={onAsignarManual}/></div>
     </div>
     <div className="card sectionCard mapaFull">
       <div className="cardHead"><div><b>Mapa de calor · Demanda de Bomberos</b><span>Predicción ML · toca una zona para ver el detalle</span></div></div>
@@ -866,6 +910,58 @@ function HistorialView({historial,now}:{historial:HistorialEntry[];now:number}){
   return <div className="card sectionCard">
     <div className="cardHead"><div><b>Historial de acciones</b><span>{historial.length} eventos registrados esta sesión</span></div></div>
     <div className="activityRows">{historial.length?historial.map(h=><Activity key={h.id} icon={historialIcon(h.tipo)} title={historialTitle(h.tipo)} detail={h.texto} time={timeAgo(h.ts,now)}/>):<p className="emptyState">Aún no hay acciones registradas. Asigna o rechaza una recomendación desde el Dashboard para empezar a construir el historial.</p>}</div>
+  </div>;
+}
+
+// Login sin registro publico: solo los operadores fijos que existen en el
+// backend (core/auth.py) pueden entrar. Mismo estandar visual "Tech
+// Corporativo Nocturno" del resto de la app (misma marca, mismos colores),
+// sin elementos de mas -- correo, contraseña, listo.
+function LoginView({onLogin}:{onLogin:(token:string, nombre:string, email:string)=>void}){
+  const [email,setEmail]=useState('');
+  const [password,setPassword]=useState('');
+  const [error,setError]=useState('');
+  const [cargando,setCargando]=useState(false);
+
+  const submit=async(e:React.FormEvent)=>{
+    e.preventDefault();
+    if(cargando) return;
+    setError('');
+    setCargando(true);
+    try{
+      const resp=await fetch(`${API_BASE}/auth/login`,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        credentials:'include',
+        body:JSON.stringify({email,password}),
+      });
+      const data=await resp.json().catch(()=>({}));
+      if(!resp.ok){
+        setError(data.detail || 'Correo o contraseña incorrectos.');
+        return;
+      }
+      onLogin(data.token, data.nombre, data.email);
+    }catch{
+      setError(`No se pudo conectar con el servidor (${API_BASE}). ¿Está corriendo el backend?`);
+    }finally{
+      setCargando(false);
+    }
+  };
+
+  return <div className="loginPage">
+    <div className="loginCard">
+      <div className="brand"><div className="brandIcon"><Zap size={20}/></div><div><b>ALERTA360</b><span>BOMBEROS · VALPARAÍSO</span></div></div>
+      <p className="loginSubtitle">Acceso de operadores</p>
+      <form onSubmit={submit}>
+        <label className="loginLabel"><Mail size={13}/> Correo</label>
+        <input className="loginInput" type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="nombre@bomberos.cl" autoComplete="username" required autoFocus/>
+        <label className="loginLabel"><Lock size={13}/> Contraseña</label>
+        <input className="loginInput" type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••" autoComplete="current-password" required/>
+        {error && <p className="loginError">{error}</p>}
+        <button className="loginSubmit" type="submit" disabled={cargando}>{cargando?'Ingresando…':'Ingresar'}</button>
+      </form>
+      <p className="loginFooter">Acceso restringido a operadores autorizados del Cuerpo de Bomberos. Sin registro público.</p>
+    </div>
   </div>;
 }
 
@@ -883,16 +979,16 @@ function ReportesView({historial}:{historial:HistorialEntry[]}){
   </div>;
 }
 
-function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRefresh,perfil,onChangePerfil,onNotify}:{soundOn:boolean;onToggleSound:(v:boolean)=>void;autoRefreshSec:number;onChangeAutoRefresh:(v:number)=>void;perfil:{nombre:string;correo:string;telefono:string};onChangePerfil:(p:Partial<{nombre:string;correo:string;telefono:string}>)=>void;onNotify:(s:string)=>void}){
+function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRefresh,perfil,onChangePerfil,onNotify,auth,onLogout}:{soundOn:boolean;onToggleSound:(v:boolean)=>void;autoRefreshSec:number;onChangeAutoRefresh:(v:number)=>void;perfil:{telefono:string};onChangePerfil:(p:Partial<{telefono:string}>)=>void;onNotify:(s:string)=>void;auth:{nombre:string;email:string};onLogout:()=>void}){
   return <div className="sectionGrid">
     <div className="card sectionCard">
-      <div className="cardHead"><div><b>Perfil del operador</b><span>Información de contacto</span></div></div>
+      <div className="cardHead"><div><b>Cuenta</b><span>Sesión iniciada</span></div></div>
       <div className="configBody">
-        <label className="configRow">Nombre<input value={perfil.nombre} onChange={e=>onChangePerfil({nombre:e.target.value})}/></label>
-        <label className="configRow">Correo<input type="email" value={perfil.correo} onChange={e=>onChangePerfil({correo:e.target.value})}/></label>
-        <label className="configRow">Teléfono de contacto<input value={perfil.telefono} onChange={e=>onChangePerfil({telefono:e.target.value})}/></label>
-        <button className="locateBtn" onClick={()=>onNotify('El cambio de contraseña requiere un sistema de autenticación en el backend (pendiente de implementar).')}>Cambiar contraseña</button>
-        <div className="configNote">Estos datos se guardan solo en esta sesión del navegador — aún no hay backend de usuarios/autenticación.</div>
+        <label className="configRow">Nombre<input value={auth.nombre} disabled/></label>
+        <label className="configRow">Correo<input value={auth.email} disabled/></label>
+        <label className="configRow">Teléfono de contacto<input value={perfil.telefono} onChange={e=>onChangePerfil({telefono:e.target.value})} placeholder="+56 9 0000 0000"/></label>
+        <div className="configNote">Nombre y correo vienen de la cuenta real verificada por el backend (login con JWT) — no son editables, ni hay registro público: solo los operadores autorizados del equipo pueden entrar. El teléfono es la única preferencia local (se guarda solo en esta sesión del navegador).</div>
+        <button className="locateBtn logoutBtn" onClick={onLogout}><LogOut size={14}/> Cerrar sesión</button>
       </div>
     </div>
     <div className="card sectionCard">
@@ -912,7 +1008,44 @@ function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRef
   </div>;
 }
 
+// Clave usada para guardar la sesion en localStorage -- solo el token y
+// los datos basicos del usuario, nada sensible (la contraseña nunca pasa
+// por aca, solo se usa una vez en el login).
+const AUTH_STORAGE_KEY='alerta360_auth';
+
 function App(){
+ const [auth,setAuth]=useState<{token:string; nombre:string; email:string}|null>(null);
+ // Mientras se valida un token guardado de una sesion anterior (al recargar
+ // la pagina) contra el backend, antes de decidir si mostrar el login o el
+ // dashboard directamente.
+ const [verificandoSesion,setVerificandoSesion]=useState(true);
+
+ useEffect(()=>{
+   const guardado=localStorage.getItem(AUTH_STORAGE_KEY);
+   if(!guardado){ setVerificandoSesion(false); return; }
+   let datos:{token:string;nombre:string;email:string};
+   try{ datos=JSON.parse(guardado); }
+   catch{ localStorage.removeItem(AUTH_STORAGE_KEY); setVerificandoSesion(false); return; }
+   fetch(`${API_BASE}/auth/me`,{headers:{Authorization:`Bearer ${datos.token}`}, credentials:'include'})
+     .then(r=>{ if(r.ok) setAuth(datos); else localStorage.removeItem(AUTH_STORAGE_KEY); })
+     .catch(()=>{ /* backend no disponible: se queda en login, no se asume sesion valida */ })
+     .finally(()=>setVerificandoSesion(false));
+ },[]);
+
+ // currentToken (variable de modulo) es lo que leen las funciones sueltas
+ // fuera de React (obtenerRutaReal) para mandar el header Authorization.
+ useEffect(()=>{ currentToken=auth?.token ?? null; },[auth]);
+
+ const handleLogin=(token:string, nombre:string, email:string)=>{
+   const datos={token,nombre,email};
+   localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(datos));
+   setAuth(datos);
+ };
+ const handleLogout=()=>{
+   localStorage.removeItem(AUTH_STORAGE_KEY);
+   setAuth(null);
+ };
+
  const [section,setSection]=useState('Dashboard');
  const [toast,setToast]=useState('');
  const [refresh,setRefresh]=useState(0);
@@ -925,13 +1058,20 @@ function App(){
  const [queue,setQueue]=useState<Emergency[]>(()=>POOL_EMERGENCIAS.slice(0,4).map((e,i)=>({...e,id:1258+i,status:'Activa',creadaEn:Date.now()})));
  const [rechazadosPorEmergencia,setRechazadosPorEmergencia]=useState<Record<number,Set<string>>>({});
  const [historial,setHistorial]=useState<HistorialEntry[]>([]);
+ // ETA real e idoneidad de tipo de cada asignacion hecha esta sesion —
+ // base para "Tiempo promedio" y "Cobertura estimada" del dashboard,
+ // calculados de verdad en vez de numeros fijos.
+ const [metricasAsignacion,setMetricasAsignacion]=useState<{etaMin:number; idoneidadTipo:number}[]>([]);
  const [focus,setFocus]=useState<{lat:number;lng:number}|null>(null);
  const [now,setNow]=useState(Date.now());
  const [soundOn,setSoundOn]=useState(false);
  const [autoRefreshSec,setAutoRefreshSec]=useState(0);
  const [zonaSeleccionada,setZonaSeleccionada]=useState<string|null>(null);
  const [mobileNavOpen,setMobileNavOpen]=useState(false);
- const [perfil,setPerfil]=useState({nombre:'Operador OP', correo:'operador@bomberosvalparaiso.cl', telefono:'+56 9 0000 0000'});
+ // Nombre/correo ya no viven aca -- son los de la cuenta real (auth), no
+ // editables. Lo unico que es una preferencia local de verdad es el
+ // telefono de contacto.
+ const [perfil,setPerfil]=useState({telefono:''});
 
  const emergenciaIdRef=useRef(1258+4);
  const poolIndexRef=useRef(4%POOL_EMERGENCIAS.length);
@@ -1029,9 +1169,13 @@ function App(){
  };
 
  useEffect(()=>{
+   // No arranca el patrullaje (ni sus llamadas a /route) hasta que haya
+   // sesion iniciada -- antes del login no deberia haber ninguna unidad
+   // "trabajando" de fondo.
+   if(!auth) return;
    const t=setInterval(intentarPatrullaje, 6000);
    return()=>clearInterval(t);
- },[]);
+ },[auth]);
 
  const currentEmergencia=queue[0]??null;
  const claveActual=currentEmergencia?claves[currentEmergencia.codigo]:undefined;
@@ -1106,22 +1250,26 @@ function App(){
    registerResourceTimer(resourceId, t1);
  };
 
- const handleAsignar=()=>{
-   if(!currentEmergencia || !recommendation || !recomendacionInfo) return;
-   const emergenciaSnap=currentEmergencia;
-   const resourceId=recommendation.id;
+ // Nucleo compartido del despacho real: lo usan tanto la asignacion
+ // automatica (el boton ASIGNAR sobre la recomendacion) como la asignacion
+ // MANUAL (elegida por el operador desde el mapa) -- misma logica real de
+ // movimiento/ruta/registro en ambos casos, solo cambia quien eligio la
+ // unidad.
+ const despacharUnidad=(unidad:Resource, emergenciaSnap:Emergency, manual:boolean)=>{
+   const resourceId=unidad.id;
    const nombreClave=claves[emergenciaSnap.codigo]?.nombre??emergenciaSnap.codigo;
-   const fueRedirigida=recommendation.radioState==='6-8';
+   const fueRedirigida=unidad.radioState==='6-8';
    // Origen del viaje: si la unidad va de regreso de otra emergencia, se usa
    // su posicion actual en la ruta (no su cuartel) — se la redirige desde
    // donde esta en este instante.
-   const origen=posicionActual(recommendation, now);
+   const origen=posicionActual(unidad, now);
+   const destinoEmergencia={lat:emergenciaSnap.lat,lng:emergenciaSnap.lng};
+   const info=distanciaYEtaHacia(unidad, destinoEmergencia, claveActual, now);
    // Duracion del recorrido animado: proporcional al ETA real, pero mas
    // lenta que "tiempo real x1" para que se vea circular de verdad por el
    // mapa (con el reloj de 300ms de MapPanel) en vez de saltar de golpe.
-   const duracionMs=Math.max(25000, Math.min(recomendacionInfo.etaMin*3200, 90000));
+   const duracionMs=Math.max(25000, Math.min(info.etaMin*3200, 90000));
    const inicioIda=Date.now();
-   const destinoEmergencia={lat:emergenciaSnap.lat,lng:emergenciaSnap.lng};
    setResources(rs=>rs.map(r=>r.id===resourceId?{
      ...r,
      radioState:'6-3',
@@ -1129,11 +1277,41 @@ function App(){
      tramo:{origen, destino:destinoEmergencia, inicio:inicioIda, duracionMs},
    }:r));
    aplicarRutaCuandoLlegue(resourceId, inicioIda, origen, destinoEmergencia);
-   pushHistorial('asignacion',`${recommendation.name} asignada a Emergencia #${emergenciaSnap.id} · Clave ${emergenciaSnap.codigo} (${nombreClave}) — score ${Math.round(score(recommendation,claveActual,recomendacionInfo.distanciaKm,recomendacionInfo.etaMin))}/100${fueRedirigida?' (redirigida mientras regresaba a cuartel)':''}`);
-   notify(`${recommendation.name} asignada a la Emergencia #${emergenciaSnap.id}${fueRedirigida?' (redirigida en ruta)':''}`);
+   // Se guarda el ETA real y la idoneidad de tipo de ESTA asignacion puntual
+   // (mismo desglose que ya usa el puntaje/justificacion) para calcular
+   // "Tiempo promedio" y "Cobertura estimada" del dashboard con datos
+   // reales de la sesion, no numeros fijos inventados.
+   setMetricasAsignacion(m=>[...m, {
+     etaMin: info.etaMin,
+     idoneidadTipo: scoreDetalle(unidad, claveActual, info.distanciaKm, info.etaMin).idoneidadTipo,
+   }]);
+   pushHistorial('asignacion',`${unidad.name} asignada${manual?' MANUALMENTE por el operador':''} a Emergencia #${emergenciaSnap.id} · Clave ${emergenciaSnap.codigo} (${nombreClave}) — score ${Math.round(score(unidad,claveActual,info.distanciaKm,info.etaMin))}/100${fueRedirigida?' (redirigida mientras regresaba a cuartel)':''}`);
+   notify(`${unidad.name} asignada${manual?' manualmente':''} a la Emergencia #${emergenciaSnap.id}${fueRedirigida?' (redirigida en ruta)':''}`);
    setFocus({lat:emergenciaSnap.lat,lng:emergenciaSnap.lng});
-   scheduleResourceLifecycle(resourceId, emergenciaSnap, {lat:recommendation.lat,lng:recommendation.lng}, duracionMs);
+   scheduleResourceLifecycle(resourceId, emergenciaSnap, {lat:unidad.lat,lng:unidad.lng}, duracionMs);
    advanceQueue(emergenciaSnap.id);
+ };
+
+ const handleAsignar=()=>{
+   if(!currentEmergencia || !recommendation || !recomendacionInfo) return;
+   despacharUnidad(recommendation, currentEmergencia, false);
+ };
+
+ // Asignacion manual: el operador elige una unidad especifica desde el
+ // mapa (boton en el popup de un vehiculo o de un cuartel), en vez de
+ // aceptar la recomendacion automatica. Solo se exige que la unidad este
+ // realmente disponible (no se puede "asignar" algo que ya va en camino a
+ // otra emergencia) -- a diferencia del algoritmo automatico, aqui no se
+ // filtra por "compania ocupada" ni por rechazos previos, porque es una
+ // decision deliberada del operador, no un ciclo de recomendacion.
+ const handleAsignarManual=(resourceId:string)=>{
+   if(!currentEmergencia) return;
+   const unidad=resources.find(r=>r.id===resourceId);
+   if(!unidad || !esDisponible(unidad)){
+     notify('Esa unidad ya no está disponible para asignar.');
+     return;
+   }
+   despacharUnidad(unidad, currentEmergencia, true);
  };
 
  const handleRechazar=()=>{
@@ -1169,14 +1347,16 @@ function App(){
  },[]);
 
  useEffect(()=>{
-   fetch(`${API_BASE}/prediction/demand?horizon=4`, {credentials:'include'})
+   if(!auth) return;
+   fetch(`${API_BASE}/prediction/demand?horizon=4`, {credentials:'include', headers:authHeaders()})
      .then(r=>{if(!r.ok)throw new Error(`API respondió ${r.status}`); return r.json();})
      .then(d=>{setPeriodos(d.periodos||[]); setImportanciaVariables(Object.values(d.importancia_variables||{})); setApiError(null);})
      .catch(err=>{setPeriodos([]); setApiError(`No se pudo conectar a ${API_BASE}: ${err.message||err}`);});
- },[refresh]);
+ },[refresh, auth]);
 
  useEffect(()=>{
-   fetch(`${API_BASE}/catalog/claves`, {credentials:'include'})
+   if(!auth) return;
+   fetch(`${API_BASE}/catalog/claves`, {credentials:'include', headers:authHeaders()})
      .then(r=>{if(!r.ok)throw new Error(`API respondió ${r.status}`); return r.json();})
      .then(d=>{
        const porCodigo:Record<string,Clave>={};
@@ -1184,7 +1364,7 @@ function App(){
        setClaves(porCodigo);
      })
      .catch(err=>{setClaves({}); setApiError(`No se pudo conectar a ${API_BASE}: ${err.message||err}`);});
- },[]);
+ },[auth]);
 
  useEffect(()=>{
    if(!autoRefreshSec) return;
@@ -1196,9 +1376,32 @@ function App(){
  const currentZonas=periodoActual?.zonas||[];
  const alerts=useMemo(()=>buildAlerts(periodos, claves),[periodos, claves]);
  const disponibles=resources.filter(esDisponible).length;
+ // "Tiempo promedio": promedio real del ETA calculado en cada asignacion
+ // hecha esta sesion (metricasAsignacion), no un numero fijo. Sin
+ // asignaciones aun, se muestra "—" en vez de inventar un valor.
+ const tiempoPromedioLabel=metricasAsignacion.length?(()=>{
+   const avg=metricasAsignacion.reduce((s,m)=>s+m.etaMin,0)/metricasAsignacion.length;
+   const mm=Math.floor(avg), ss=Math.round((avg-mm)*60);
+   return `${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+ })():'—';
+ const tiempoPromedioMeta=metricasAsignacion.length?`promedio de ${metricasAsignacion.length} asignación${metricasAsignacion.length===1?'':'es'} · esta sesión`:'sin asignaciones aún';
+ // "Cobertura estimada": % de asignaciones con idoneidad de tipo >= 0.5 —
+ // misma definicion exacta que "cobertura_tipo_adecuado_pct" del benchmark
+ // (backend/evaluacion/benchmark_asignacion.py), no un numero aparte.
+ const coberturaPct=metricasAsignacion.length?Math.round(metricasAsignacion.filter(m=>m.idoneidadTipo>=0.5).length/metricasAsignacion.length*100):null;
+ const coberturaLabel=coberturaPct===null?'—':`${coberturaPct}%`;
+ const coberturaMeta=coberturaPct===null?'sin asignaciones aún':'con tipo de unidad adecuado';
  const resumenHeatmap=useMemo(()=>resumenGeneral(periodoActual, currentZonas, claves),[periodoActual, currentZonas, claves]);
  const zonaDetalle=zonaSeleccionada?currentZonas.find(z=>z.zona_id===zonaSeleccionada):undefined;
  const explicacionZona=(zonaDetalle && periodoActual)?explicarZona(periodoActual, zonaDetalle, claves):undefined;
+
+ // Nada de la app real se muestra sin sesion iniciada -- ni siquiera el
+ // dashboard simulado. Mientras se valida un token guardado, una pantalla
+ // de carga simple en vez de parpadear el login y luego el dashboard.
+ if(verificandoSesion) return <div className="loginPage"><p className="loginFooter">Cargando…</p></div>;
+ if(!auth) return <LoginView onLogin={handleLogin}/>;
+
+ const iniciales=auth.nombre.split(' ').filter(Boolean).slice(0,2).map(p=>p[0].toUpperCase()).join('')||'OP';
 
  return <div className="app">
    {mobileNavOpen && <div className="navBackdrop" onClick={()=>setMobileNavOpen(false)}/>}
@@ -1206,16 +1409,16 @@ function App(){
     <nav>{[['Dashboard',BarChart3],['Emergencias',AlertTriangle],['Recursos',Truck],['Mapa',MapPin],['Historial',History],['Reportes',Layers3],['Configuración',Settings]].map(([label,Icon]:any)=><button key={label} className={section===label?'active':''} onClick={()=>{setSection(label);setMobileNavOpen(false);}}><Icon size={18}/><span>{label}</span></button>)}</nav>
     <div className="sidebarBottom"><div className="online"><span></span>Sistema operativo</div><small>Última sincronización<br/><b>hace 18 segundos</b></small></div>
    </aside>
-   <main className="main"><header><button className="mobileMenu" onClick={()=>setMobileNavOpen(o=>!o)}><Menu/></button><div><h1>{section}</h1><p>Central de coordinación · Valparaíso</p></div><div className="headerActions"><div className="live"><span/> EN VIVO</div><button onClick={()=>{setRefresh(x=>x+1);notify('Datos actualizados')}}><RefreshCw size={17}/></button><button onClick={()=>notify(`${queue.length} emergencias en cola`)}><Bell size={18}/></button><button className="avatar" onClick={()=>setSection('Configuración')} title="Ver perfil del operador">OP</button></div></header>
+   <main className="main"><header><button className="mobileMenu" onClick={()=>setMobileNavOpen(o=>!o)}><Menu/></button><div><h1>{section}</h1><p>Central de coordinación · Valparaíso</p></div><div className="headerActions"><div className="live"><span/> EN VIVO</div><button onClick={()=>{setRefresh(x=>x+1);notify('Datos actualizados')}}><RefreshCw size={17}/></button><button onClick={()=>notify(`${queue.length} emergencias en cola`)}><Bell size={18}/></button><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
     {section==='Emergencias' && <EmergenciasView queue={queue} claves={claves} now={now} onAtender={atenderEmergencia}/>}
     {section==='Recursos' && <RecursosView resources={resources}/>}
-    {section==='Mapa' && <MapaView resources={resources} emergencies={queue} center={operationalCenter} zonas={currentZonas} zonaSeleccionada={zonaSeleccionada} onSelectZona={z=>setZonaSeleccionada(z.zona_id)}/>}
+    {section==='Mapa' && <MapaView resources={resources} emergencies={queue} center={operationalCenter} zonas={currentZonas} zonaSeleccionada={zonaSeleccionada} onSelectZona={z=>setZonaSeleccionada(z.zona_id)} onAsignarManual={handleAsignarManual}/>}
     {section==='Historial' && <HistorialView historial={historial} now={now}/>}
     {section==='Reportes' && <ReportesView historial={historial}/>}
-    {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} perfil={perfil} onChangePerfil={p=>setPerfil(prev=>({...prev,...p}))} onNotify={notify}/>}
+    {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} perfil={perfil} onChangePerfil={p=>setPerfil(prev=>({...prev,...p}))} onNotify={notify} auth={auth} onLogout={handleLogout}/>}
     {section==='Dashboard' && <>
-    <section className="kpis"><Kpi icon={<AlertTriangle/>} label="Emergencias activas" value={String(queue.length)} meta={currentEmergencia?`atendiendo clave ${currentEmergencia.codigo}`:'sin emergencia activa'}/><Kpi icon={<Truck/>} label="Recursos disponibles" value={String(disponibles)} meta={`de ${resources.length} unidades`}/><Kpi icon={<Clock3/>} label="Tiempo promedio" value="07:42" meta="−11% esta semana"/><Kpi icon={<ShieldCheck/>} label="Cobertura estimada" value="86%" meta="objetivo 90%"/></section>
-    <section className="workspace"><div className="mapCard"><div className="cardHead"><div><b>Mapa operacional</b><span>Emergencias y recursos en tiempo real</span></div></div><MapPanel resources={resources} emergencies={queue} focus={focus} center={operationalCenter}/><div className="legend"><span><i className="dot green"/> Disponible</span><span><i className="dot red"/> En misión</span><span><i className="dot blue"/> Ruta recomendada</span></div></div>
+    <section className="kpis"><Kpi icon={<AlertTriangle/>} label="Emergencias activas" value={String(queue.length)} meta={currentEmergencia?`atendiendo clave ${currentEmergencia.codigo}`:'sin emergencia activa'}/><Kpi icon={<Truck/>} label="Recursos disponibles" value={String(disponibles)} meta={`de ${resources.length} unidades`}/><Kpi icon={<Clock3/>} label="Tiempo promedio" value={tiempoPromedioLabel} meta={tiempoPromedioMeta}/><Kpi icon={<ShieldCheck/>} label="Cobertura estimada" value={coberturaLabel} meta={coberturaMeta}/></section>
+    <section className="workspace"><div className="mapCard"><div className="cardHead"><div><b>Mapa operacional</b><span>Emergencias y recursos en tiempo real · toca un cuartel o vehículo para asignarlo manualmente</span></div></div><MapPanel resources={resources} emergencies={queue} focus={focus} center={operationalCenter} onAsignarManual={handleAsignarManual}/><div className="legend"><span><i className="dot green"/> Disponible</span><span><i className="dot red"/> En misión</span><span><i className="dot blue"/> Ruta recomendada</span></div></div>
       <div className="sideCards">
       {currentEmergencia?<div className="emergencyCard"><div className={`tag prio prio-${claveActual?.prioridad_nivel??4}`}>{claveActual?`${claveActual.prioridad.toUpperCase()} PRIORIDAD`:'PRIORIDAD'}</div><div className="emergencyTitle"><div className="danger"><AlertTriangle/></div><div><b>Emergencia #{currentEmergencia.id}</b><span>{claveActual?.nombre??currentEmergencia.codigo}</span></div></div><div className="details"><p><MapPin size={15}/> {currentEmergencia.address}</p><p><Clock3 size={15}/> Tiempo transcurrido: <b>{elapsedLabel(currentEmergencia.creadaEn,now)}</b></p><p><Radio size={15}/> Estado: <b>{currentEmergencia.status}</b></p></div><p className="recJustificacion">{explicarEmergenciaActual(currentEmergencia.codigo, now)}</p><button className="locateBtn" onClick={()=>setFocus({lat:currentEmergencia.lat,lng:currentEmergencia.lng})}><Crosshair size={13}/> Ver en el mapa</button></div>:<div className="emergencyCard"><p className="emptyState">Sin emergencias activas por el momento.</p></div>}
       <div className="recommend"><div className="recHead"><div><span>RECURSO RECOMENDADO</span><small>Asignación multicriterio</small></div>{recommendation && recomendacionInfo && <div className="score" style={{color:scoreColor(Math.round(score(recommendation,claveActual,recomendacionInfo.distanciaKm,recomendacionInfo.etaMin)))}}>{Math.round(score(recommendation,claveActual,recomendacionInfo.distanciaKm,recomendacionInfo.etaMin))}<small>/100</small></div>}</div>

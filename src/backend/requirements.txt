@@ -7,3 +7,6 @@ scikit-learn
 joblib
 tzdata
 httpx
+python-dotenv
+PyJWT
+bcrypt
