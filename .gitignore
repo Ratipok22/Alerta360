@@ -1,0 +1,10 @@
+**/.venv/
+**/__pycache__/
+*.pyc
+**/ml/data/
+**/ml/artifacts/
+**/node_modules/
+**/dist/
+**/evaluacion/resultados_benchmark.json
+**/routing/data/*.osm
+**/routing/data/*.osrm*
