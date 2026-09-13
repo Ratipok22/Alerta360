@@ -1,7 +1,14 @@
-.venv/
-__pycache__/
+**/.venv/
+**/__pycache__/
 *.pyc
-backend/ml/data/
-backend/ml/artifacts/
-node_modules/
-dist/
+**/ml/data/
+**/ml/artifacts/
+**/node_modules/
+**/dist/
+**/evaluacion/resultados_benchmark.json
+**/routing/data/*.osm
+**/routing/data/*.osrm*
+
+# Secretos locales -- nunca se suben (ver docker/.env.example para la plantilla)
+.env
+**/.env

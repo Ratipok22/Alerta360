@@ -102,6 +102,32 @@ El algoritmo de recomendación de recurso es multicriterio: considera tipo de em
 - [ ] Pruebas automatizadas (`tests/`).
 - [ ] Benchmark del algoritmo de asignación contra un baseline simple (recurso disponible más cercano), con métricas de tiempo de respuesta, distancia recorrida, cobertura territorial y utilización de recursos.
 
+## Seguridad y manejo de credenciales
+
+Hoy el proyecto corre 100% local (sin usuarios reales, sin datos personales,
+sin acceso a internet salvo llamadas explícitas y documentadas como
+Overpass/OSM para verificar direcciones reales). Aun así, se sigue la
+misma disciplina que se usaría en un despliegue real, para que la base ya
+esté lista si este proyecto se termina levantando en un servidor:
+
+- **Ninguna credencial se escribe directo en el código ni en `docker-compose.yml`.**
+  Cada servicio que necesita una (hoy solo la base de datos Postgres) la lee
+  desde un archivo `.env`, que **nunca se sube al repositorio** (ver
+  `.gitignore`). En su lugar se versiona `docker/.env.example`, una
+  plantilla sin datos reales que cada persona copia a `.env` y completa con
+  sus propios valores locales.
+- **Si una credencial llega a subirse por error a un repo público**, la
+  respuesta correcta no es solo borrarla del código: hay que asumirla como
+  comprometida y **rotarla** (cambiarla por una nueva), porque el valor
+  viejo puede seguir visible en el historial de commits.
+- **Pendiente para cuando esto se despliegue de verdad** (no implementado
+  aún, pero la estructura ya está pensada para esto): las credenciales de
+  producción no irían en un `.env` a mano en el servidor, sino en el
+  gestor de secretos que ofrezca la plataforma de hosting elegida (variables
+  de entorno del proveedor, Docker/Kubernetes secrets, etc.), y recién ahí
+  correspondería agregar autenticación/roles reales (ver checklist más
+  abajo) y HTTPS en vez de HTTP plano.
+
 ## Próxima etapa para el APT
 
 1. Conectar `src/frontend` con `src/backend` reemplazando los datos simulados en memoria por la API real.
