@@ -3,7 +3,7 @@ import {createRoot} from 'react-dom/client';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
-import {AlertTriangle, BarChart3, Bell, Building2, CheckCircle2, Clock3, Crosshair, Droplet, Flame, HardHat, History, Layers3, MapPin, Menu, Navigation, Radio, RefreshCw, Settings, ShieldCheck, Truck, TreePine, Users, XCircle, Zap} from 'lucide-react';
+import {AlertTriangle, BarChart3, Bell, Building2, CheckCircle2, Clock3, Crosshair, Droplet, Flame, HardHat, History, Layers3, Lock, LogOut, Mail, MapPin, Menu, Navigation, Radio, RefreshCw, Settings, ShieldCheck, Truck, TreePine, Users, XCircle, Zap} from 'lucide-react';
 
 // En localhost apunta al backend local de siempre. Si la app se abre a
 // traves de un dev tunnel (ej. VS Code Ports / *.devtunnels.ms), reconstruye
@@ -18,6 +18,14 @@ function detectarApiBase():string{
   return 'http://localhost:8000';
 }
 const API_BASE = detectarApiBase();
+// Token de sesion actual (JWT), en una variable de modulo -- lo necesitan
+// funciones sueltas fuera de React (como obtenerRutaReal) que no reciben
+// props/estado directamente. Se mantiene sincronizada con el estado real
+// de auth en App() mediante un efecto (ver mas abajo).
+let currentToken:string|null=null;
+function authHeaders():Record<string,string>{
+  return currentToken?{Authorization:`Bearer ${currentToken}`}:{};
+}
 
 // Ubicacion por defecto: Valparaiso. A futuro, cuando el sistema se despliegue
 // en una central real, este valor se reemplaza por la geolocalizacion del
@@ -32,11 +40,26 @@ const CHILE_TZ = 'America/Santiago';
 
 type ResourceType = 'Bomberos' | 'Forestal' | 'Rescate' | 'Hazmat' | 'Escala' | 'Cisterna';
 type RadioState = '6-0' | '6-3' | '6-7' | '6-8' | '6-9';
+// Tramo que la unidad esta recorriendo ahora mismo (ida a la emergencia o
+// vuelta al cuartel), usado para calcular su posicion real en el mapa en
+// cada instante en vez de dejarla fija en su cuartel mientras se mueve.
+// `puntos` es la ruta real por calles (motor de ruteo local OSRM, ver
+// backend GET /route); mientras esa ruta no ha llegado (o si el servicio de
+// rutas no esta disponible), se anima con una linea recta entre origen y
+// destino como respaldo. `acumKm` es la distancia acumulada hasta cada
+// punto de la ruta, precalculada una sola vez, para ubicar la posicion
+// exacta segun cuanto se ha avanzado sin recalcular todo en cada cuadro.
+type Tramo={
+  origen:{lat:number;lng:number}; destino:{lat:number;lng:number};
+  inicio:number; duracionMs:number;
+  puntos?:{lat:number;lng:number}[]; acumKm?:number[];
+};
 type Resource={
   id:string; name:string; type:ResourceType; lat:number; lng:number;
   radioState:RadioState; eta:number; distance:number; capacity:string; crew:number;
   compania:string; sector:string;
   destino?:{emergenciaId:number; lat:number; lng:number; address:string};
+  tramo?:Tramo;
 };
 type Emergency={id:number; codigo:string; address:string; lat:number; lng:number; status:'Activa'|'Asignada'; creadaEn:number;};
 type ZoneDemand={zona_id:string; nombre:string; bounds:{lat_min:number;lat_max:number;lng_min:number;lng_max:number}; centroid:{lat:number;lng:number}; demanda_total:number; desglose:Record<string,number>;};
@@ -49,6 +72,118 @@ type HistorialEntry={id:number; ts:number; tipo:HistorialTipo; texto:string;};
 const RADIO_LABELS:Record<RadioState,string>={'6-0':'Disponible en cuartel','6-3':'En trayecto','6-7':'En la emergencia','6-8':'Regresando','6-9':'Fuera de servicio'};
 const RADIO_COLORS:Record<RadioState,string>={'6-0':'#34C759','6-3':'#2C9AF6','6-7':'#FFCC00','6-8':'#2C9AF6','6-9':'#FF3B30'};
 function scoreColor(v:number){return v>=70?'#34C759':v>=40?'#FFCC00':'#FF3B30';}
+
+// Punto exacto sobre una ruta de varios tramos (segmentos reales de calle)
+// segun la fraccion (0 a 1) del trayecto ya recorrida, usando la distancia
+// acumulada precalculada — no un simple promedio entre inicio y fin.
+function puntoEnFraccion(puntos:{lat:number;lng:number}[], acumKm:number[], fraccion:number):{lat:number;lng:number}{
+  const total=acumKm[acumKm.length-1]||0;
+  if(total<=0) return puntos[0];
+  const objetivo=Math.max(0,Math.min(1,fraccion))*total;
+  let i=1;
+  while(i<acumKm.length-1 && acumKm[i]<objetivo) i++;
+  const previo=puntos[i-1], actual=puntos[i];
+  const segTotal=acumKm[i]-acumKm[i-1];
+  const segFrac=segTotal>0?(objetivo-acumKm[i-1])/segTotal:0;
+  return {lat:previo.lat+(actual.lat-previo.lat)*segFrac, lng:previo.lng+(actual.lng-previo.lng)*segFrac};
+}
+
+// Posicion real de la unidad en este instante: si esta en camino a una
+// emergencia o regresando al cuartel, se interpola sobre su tramo actual
+// segun cuanto tiempo ha pasado — siguiendo la ruta real por calles
+// (r.tramo.puntos) cuando esta disponible, o una linea recta de respaldo
+// si el motor de rutas no alcanzo a responder. Si esta en el cuartel,
+// trabajando en la emergencia o fuera de servicio, es su posicion conocida.
+function posicionActual(r:Resource, nowMs:number):{lat:number;lng:number}{
+  if((r.radioState==='6-3'||r.radioState==='6-8') && r.tramo){
+    const t=Math.min(1, Math.max(0, (nowMs-r.tramo.inicio)/r.tramo.duracionMs));
+    if(r.tramo.puntos && r.tramo.acumKm && r.tramo.puntos.length>=2){
+      return puntoEnFraccion(r.tramo.puntos, r.tramo.acumKm, t);
+    }
+    return {
+      lat: r.tramo.origen.lat + (r.tramo.destino.lat-r.tramo.origen.lat)*t,
+      lng: r.tramo.origen.lng + (r.tramo.destino.lng-r.tramo.origen.lng)*t,
+    };
+  }
+  if(r.radioState==='6-7' && r.destino) return {lat:r.destino.lat, lng:r.destino.lng};
+  return {lat:r.lat, lng:r.lng};
+}
+
+// Segmento (par de puntos consecutivos de la ruta real) que la unidad esta
+// cruzando ahora mismo, usado solo para orientar el icono del vehiculo
+// segun hacia donde dobla en ese tramo puntual (no el rumbo general del
+// viaje completo).
+function segmentoActual(r:Resource, nowMs:number):{origen:{lat:number;lng:number}; destino:{lat:number;lng:number}}|null{
+  if(!((r.radioState==='6-3'||r.radioState==='6-8') && r.tramo)) return null;
+  const {puntos,acumKm}=r.tramo;
+  if(!puntos || !acumKm || puntos.length<2) return {origen:r.tramo.origen, destino:r.tramo.destino};
+  const t=Math.min(1, Math.max(0, (nowMs-r.tramo.inicio)/r.tramo.duracionMs));
+  const total=acumKm[acumKm.length-1]||0;
+  const objetivo=t*total;
+  let i=1;
+  while(i<acumKm.length-1 && acumKm[i]<objetivo) i++;
+  return {origen:puntos[i-1], destino:puntos[i]};
+}
+
+// Pide al backend la ruta real por calles (motor OSRM local, ver
+// GET /route) entre dos puntos, y precalcula la distancia acumulada de
+// cada tramo de la ruta. Si el servicio de rutas no responde (apagado,
+// error de red), devuelve null y quien llama sigue usando la linea recta
+// de respaldo — el mapa nunca se rompe por esto, solo se ve menos realista.
+async function obtenerRutaReal(origen:{lat:number;lng:number}, destino:{lat:number;lng:number}):Promise<{puntos:{lat:number;lng:number}[]; acumKm:number[]}|null>{
+  try{
+    const url=`${API_BASE}/route?origen_lat=${origen.lat}&origen_lng=${origen.lng}&destino_lat=${destino.lat}&destino_lng=${destino.lng}`;
+    const resp=await fetch(url,{credentials:'include', headers:authHeaders()});
+    if(!resp.ok) return null;
+    const data=await resp.json();
+    const puntos:{lat:number;lng:number}[]=data.puntos;
+    if(!Array.isArray(puntos) || puntos.length<2) return null;
+    const acumKm=[0];
+    for(let i=1;i<puntos.length;i++){
+      acumKm.push(acumKm[i-1]+haversineKm(puntos[i-1].lat,puntos[i-1].lng,puntos[i].lat,puntos[i].lng));
+    }
+    return {puntos, acumKm};
+  }catch{
+    return null;
+  }
+}
+
+// Distancia real (Haversine) y ETA, con la misma logica que el backend
+// (core/eta.py): 35 km/h en tramos urbanos, 50 km/h en tramos forestales.
+// Antes el frontend usaba un numero de distancia/ETA fijo por unidad,
+// calculado una sola vez respecto a un punto de referencia; ahora se
+// calcula en vivo para la emergencia real que se esta evaluando y desde la
+// posicion actual de la unidad (no siempre su cuartel) — asi una unidad
+// que va de regreso y es redirigida a otra emergencia se evalua desde
+// donde esta en ese momento, no desde su cuartel de origen.
+const VELOCIDAD_URBANO_KMH=35;
+const VELOCIDAD_FORESTAL_KMH=50;
+function haversineKm(lat1:number,lng1:number,lat2:number,lng2:number):number{
+  const R=6371;
+  const toRad=(d:number)=>d*Math.PI/180;
+  const dLat=toRad(lat2-lat1), dLng=toRad(lng2-lng1);
+  const a=Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+function etaMinutos(distanciaKm:number, terreno:string):number{
+  const velocidad=terreno==='forestal'?VELOCIDAD_FORESTAL_KMH:VELOCIDAD_URBANO_KMH;
+  return (distanciaKm/velocidad)*60;
+}
+function distanciaYEtaHacia(r:Resource, destino:{lat:number;lng:number}, clave:Clave|undefined, nowMs:number):{distanciaKm:number; etaMin:number}{
+  const origen=posicionActual(r, nowMs);
+  const distanciaKm=haversineKm(origen.lat, origen.lng, destino.lat, destino.lng);
+  const etaMin=etaMinutos(distanciaKm, clave?.terreno??'urbano');
+  return {distanciaKm:Math.round(distanciaKm*100)/100, etaMin:Math.round(etaMin*10)/10};
+}
+
+// Rumbo real (0°=norte, 90°=este, sentido horario) entre dos puntos, para
+// orientar el icono del vehiculo hacia donde va de verdad, no un icono fijo.
+function rumboGrados(lat1:number,lng1:number,lat2:number,lng2:number):number{
+  const toRad=(d:number)=>d*Math.PI/180, toDeg=(r:number)=>r*180/Math.PI;
+  const y=Math.sin(toRad(lng2-lng1))*Math.cos(toRad(lat2));
+  const x=Math.cos(toRad(lat1))*Math.sin(toRad(lat2)) - Math.sin(toRad(lat1))*Math.cos(toRad(lat2))*Math.cos(toRad(lng2-lng1));
+  return (toDeg(Math.atan2(y,x))+360)%360;
+}
 
 // Flota real: 16 compañías del Cuerpo de Bomberos de Valparaíso (fundado 1851)
 // + 3 compañías confirmadas del Cuerpo de Bomberos de Viña del Mar. Nombre,
@@ -108,6 +243,40 @@ const POOL_EMERGENCIAS:{codigo:string; address:string; lat:number; lng:number}[]
 {codigo:'10-3', address:'Cerro Bellavista, Valparaíso', lat:-33.0501, lng:-71.6223},
 ];
 
+// Puntos reales de patrullaje: mismas coordenadas ya verificadas usadas en
+// otras partes del sistema (companias, pool de emergencias, zonas del
+// modelo de ML), reutilizadas aca para que las unidades "sueltas" circulen
+// entre lugares reales y no coordenadas inventadas (que podrian caer en el
+// mar o en un sitio inexistente, como ya paso antes en este proyecto).
+// Los puntos de Valparaiso Centro tienen mas peso porque es el area que se
+// ve por defecto al abrir el mapa — asi hay actividad visible ahi la
+// mayor parte del tiempo, no solo ocasionalmente en el resto de la region.
+const PUNTOS_PATRULLAJE:{nombre:string; lat:number; lng:number; peso:number}[]=[
+  {nombre:'Plaza Sotomayor', lat:-33.0388, lng:-71.6286, peso:3},
+  {nombre:'Av. Argentina / Almendral', lat:-33.0499, lng:-71.6031, peso:3},
+  {nombre:'Cerro Alegre / Concepción', lat:-33.0423, lng:-71.6265, peso:3},
+  {nombre:'Cerro Placeres', lat:-33.0366, lng:-71.5952, peso:3},
+  {nombre:'Barrio Puerto', lat:-33.0383, lng:-71.6284, peso:3},
+  {nombre:'Playa Ancha', lat:-33.0284, lng:-71.6379, peso:1},
+  {nombre:'Viña del Mar Centro', lat:-33.0245, lng:-71.5518, peso:1},
+  {nombre:'Reñaca', lat:-32.9730, lng:-71.5266, peso:1},
+  {nombre:'Concón', lat:-32.9305, lng:-71.5030, peso:1},
+  {nombre:'Placilla', lat:-33.1149, lng:-71.5680, peso:1},
+];
+function elegirPuntoPatrullaje(){
+  const total=PUNTOS_PATRULLAJE.reduce((s,p)=>s+p.peso,0);
+  let r=Math.random()*total;
+  for(const p of PUNTOS_PATRULLAJE){
+    if(r<p.peso) return p;
+    r-=p.peso;
+  }
+  return PUNTOS_PATRULLAJE[0];
+}
+// Cuantas unidades disponibles como maximo circulan "sueltas" a la vez —
+// una fraccion de la flota, no todas, para que el mapa se vea vivo sin
+// perder la nocion de que la mayoria esta en su cuartel.
+const MAX_EN_PATRULLAJE=5;
+
 const CODIGO_TIPO_PREFERIDO:Record<string,ResourceType>={'10-0':'Bomberos','10-1':'Bomberos','10-2':'Forestal','10-3':'Rescate','10-4':'Rescate','10-5':'Hazmat'};
 // Tiempo (ms, escalado para demo) que la unidad permanece "trabajando" en el
 // lugar segun la clave — un incendio estructural o forestal toma mas tiempo
@@ -115,7 +284,6 @@ const CODIGO_TIPO_PREFERIDO:Record<string,ResourceType>={'10-0':'Bomberos','10-1
 // queda excluido de nuevas recomendaciones (no vuelve a estar "disponible"
 // hasta terminar este tiempo + el regreso a cuartel).
 const TIEMPO_TRABAJO_MS:Record<string,number>={'10-0':26000,'10-1':14000,'10-2':32000,'10-3':16000,'10-4':17000,'10-5':22000};
-const CAPACIDAD_CLAVE:Record<ResourceType,string>={Forestal:'forestal',Hazmat:'peligrosos',Rescate:'rescate',Bomberos:'estructural',Escala:'escala',Cisterna:'cisterna'};
 
 // Conocimiento sobre los factores horarios/estacionales que usa el modelo de
 // ML (backend/ml/generate_dataset.py) para cada clave, usado para explicar
@@ -187,55 +355,98 @@ function resumenGeneral(periodo:Periodo|undefined, zonas:ZoneDemand[], claves:Re
   return `Bloque actual ${String(hora).padStart(2,'0')}:00–${String(horaFin).padStart(2,'0')}:00, ${DIA_NOMBRES[dow]} de ${MES_NOMBRES[mes-1]}. La zona con mayor demanda esperada es ${top.nombre}, con riesgo ${nivel} (${top.demanda_total.toFixed(1)} casos esperados), dominada por la clave ${codigoTop} (${nombreTop}).${contexto} Toca cualquier zona del mapa para ver el detalle.`;
 }
 
-function esDisponible(r:Resource){return r.radioState==='6-0';}
+// Disponible para una nueva recomendacion: en cuartel (6-0) o ya regresando
+// de una emergencia anterior (6-8) — esta ultima puede ser redirigida a una
+// emergencia nueva desde donde se encuentre en ese momento, en vez de
+// obligarla a llegar primero al cuartel. Mientras esta en camino (6-3) o
+// trabajando en el lugar (6-7) sigue comprometida y no se ofrece de nuevo.
+function esDisponible(r:Resource){return r.radioState==='6-0' || r.radioState==='6-8';}
+
+// Idoneidad real (0 a 1) de cada tipo de unidad para cada clave: no es
+// blanco o negro (solo el tipo "ideal" sirve) — reconoce, por ejemplo, que
+// un Carro Bomba puede apoyar un rescate vehicular liviano aunque lo ideal
+// sea una unidad de Rescate, o que una Cisterna aporta bastante en un
+// incendio (forestal o estructural) aunque no sea el tipo preferido. Cada
+// punto de idoneidad se traduce directo en puntaje: mientras mas util es
+// realmente ese tipo de unidad para ESTA clave, mas puntos suma.
+const IDONEIDAD_TIPO_CLAVE:Record<string, Partial<Record<ResourceType, number>>>={
+  '10-0':{Bomberos:1.0, Escala:0.5, Cisterna:0.45, Rescate:0.2, Hazmat:0.2, Forestal:0.25},
+  '10-1':{Bomberos:1.0, Cisterna:0.5, Forestal:0.3, Rescate:0.25, Hazmat:0.2, Escala:0.15},
+  '10-2':{Forestal:1.0, Cisterna:0.6, Bomberos:0.4, Rescate:0.1, Hazmat:0.15, Escala:0.1},
+  '10-3':{Rescate:1.0, Bomberos:0.5, Escala:0.4, Hazmat:0.2, Cisterna:0.1, Forestal:0.1},
+  '10-4':{Rescate:1.0, Bomberos:0.5, Escala:0.2, Hazmat:0.2, Cisterna:0.1, Forestal:0.1},
+  '10-5':{Hazmat:1.0, Bomberos:0.4, Rescate:0.3, Cisterna:0.2, Escala:0.1, Forestal:0.1},
+};
+function idoneidadTipoPara(tipo:ResourceType, codigoClave:string|undefined):number{
+  if(!codigoClave) return 0.4;
+  return IDONEIDAD_TIPO_CLAVE[codigoClave]?.[tipo] ?? 0.15;
+}
 
 type ScoreDesglose={
-  total:number; tipoPreferido:ResourceType; coincideTipo:boolean; coincideTerreno:boolean;
-  esCritica:boolean; dotacionBonus:number; penalizacionVelocidad:number;
+  total:number; tipoPreferido:ResourceType; coincideTipo:boolean; idoneidadTipo:number; coincideTerreno:boolean;
+  esCritica:boolean; dotacionBonus:number; disponibilidadBonus:number; penalizacionVelocidad:number;
 };
 
-// Asignacion multicriterio: ademas de tipo/capacidad y distancia (ya
-// existentes), considera la dotacion de la unidad (mas relevante mientras
-// mas critica es la clave, porque en incidentes graves se necesitan mas
-// manos de inmediato) y si el terreno de la unidad coincide con el terreno
-// real de la clave (urbano/forestal) — no solo el tipo preferido puntual.
-// La velocidad de respuesta (ETA/distancia) tambien pesa mas en emergencias
-// criticas/altas que en las de baja prioridad.
-function scoreDetalle(r:Resource, clave:Clave|undefined):ScoreDesglose{
+// Asignacion multicriterio, con cada factor pesando segun que tan
+// relacionado esta con la necesidad real de la emergencia:
+// - Tipo/capacidad de la unidad (idoneidadTipoPara): el factor con mas peso
+//   (hasta 45 pts), graduado segun que tan util es ese tipo para esta clave
+//   especifica, no solo "es o no es el tipo ideal".
+// - Terreno (urbano/forestal): bonifica o penaliza segun coincida con el
+//   terreno real de la clave.
+// - Dotacion: mas relevante mientras mas critica es la clave, porque en
+//   incidentes graves se necesitan mas manos de inmediato.
+// - Disponibilidad: una unidad ya en su cuartel (6-0) suma un poco mas que
+//   una que hay que redirigir desde otra emergencia (6-8) — sigue siendo
+//   elegible, pero a igualdad de lo demas se prefiere la que ya esta lista.
+// - Velocidad de respuesta (ETA/distancia real, ver distanciaYEtaHacia):
+//   penaliza mas fuerte en emergencias criticas/altas que en las de baja
+//   prioridad, donde importa mas la idoneidad que la rapidez.
+function scoreDetalle(r:Resource, clave:Clave|undefined, distanciaKm:number, etaMin:number):ScoreDesglose{
   const tipoPreferido=clave?(CODIGO_TIPO_PREFERIDO[clave.codigo]||'Bomberos'):'Bomberos';
   const prioridadNivel=clave?.prioridad_nivel??3;
   const terrenoClave=clave?.terreno??'urbano';
   const esCritica=prioridadNivel<=2;
 
   const coincideTipo=r.type===tipoPreferido;
-  const typeBonus=coincideTipo?32:(r.type==='Bomberos'?16:10);
-  const capacityBonus=r.capacity.toLowerCase().includes(CAPACIDAD_CLAVE[tipoPreferido])?25:12;
+  const idoneidadTipo=idoneidadTipoPara(r.type, clave?.codigo);
+  const idoneidadBonus=Math.round(idoneidadTipo*45);
 
   const coincideTerreno=(terrenoClave==='forestal')===(r.type==='Forestal');
   const terrenoBonus=coincideTerreno?6:-6;
 
   const dotacionBonus=Math.min(r.crew,6)*(esCritica?1.4:0.8);
 
-  const pesoVelocidad=esCritica?1.2:0.85;
-  const penalizacionVelocidad=(Math.min(r.eta*2,25)+Math.min(r.distance*2,18))*pesoVelocidad;
+  const disponibilidadBonus=r.radioState==='6-0'?4:0;
 
-  const total=35+typeBonus+capacityBonus+terrenoBonus+dotacionBonus-penalizacionVelocidad;
-  return {total, tipoPreferido, coincideTipo, coincideTerreno, esCritica, dotacionBonus, penalizacionVelocidad};
+  // Sin techo: antes esta penalizacion se limitaba con Math.min(...,25/18),
+  // lo que hacia que, pasado cierto punto (~9 km), una unidad a 9 km y otra
+  // a 90 km recibieran EXACTAMENTE la misma penalizacion — es decir, mas
+  // alla de esa distancia dejaba de importar cuan lejos estuviera de verdad.
+  // Eso podia hacer ganar a una unidad lejana con mejor tipo/dotacion por
+  // sobre una mucho mas cercana. Sin techo, estar el doble de lejos siempre
+  // pesa el doble, sin importar cuan lejos ya este.
+  const pesoVelocidad=esCritica?1.2:0.85;
+  const penalizacionVelocidad=(etaMin*1.5+distanciaKm*2)*pesoVelocidad;
+
+  const total=25+idoneidadBonus+terrenoBonus+dotacionBonus+disponibilidadBonus-penalizacionVelocidad;
+  return {total, tipoPreferido, coincideTipo, idoneidadTipo, coincideTerreno, esCritica, dotacionBonus, disponibilidadBonus, penalizacionVelocidad};
 }
 
-function score(r:Resource, clave:Clave|undefined):number{
-  return scoreDetalle(r,clave).total;
+function score(r:Resource, clave:Clave|undefined, distanciaKm:number, etaMin:number):number{
+  return scoreDetalle(r,clave,distanciaKm,etaMin).total;
 }
 
 // Texto legible de por que el algoritmo eligio esta unidad, a partir del
 // mismo desglose que calcula el puntaje (no un texto aparte inventado).
-function justificarRecomendacion(r:Resource, clave:Clave|undefined):string{
-  const d=scoreDetalle(r,clave);
+function justificarRecomendacion(r:Resource, clave:Clave|undefined, distanciaKm:number, etaMin:number):string{
+  const d=scoreDetalle(r,clave,distanciaKm,etaMin);
   const partes:string[]=[];
-  partes.push(d.coincideTipo?`tipo compatible con la clave (${d.tipoPreferido})`:`tipo más cercano disponible (${r.type})`);
+  partes.push(d.coincideTipo?`tipo ideal para esta clave (${d.tipoPreferido})`:`idoneidad ${Math.round(d.idoneidadTipo*100)}% para esta clave (tipo ${r.type}, ideal sería ${d.tipoPreferido})`);
   partes.push(d.coincideTerreno?'coincide con el terreno de la emergencia':'no es el terreno ideal, pero es la mejor opción disponible');
   partes.push(`dotación de ${r.crew} personas${d.esCritica?' (más relevante por ser clave crítica/alta)':''}`);
-  partes.push(`${r.eta} min / ${r.distance} km${d.esCritica?' (la velocidad pesa más por la prioridad de esta clave)':''}`);
+  partes.push(r.radioState==='6-0'?'ya disponible en su cuartel':'disponible tras redirigirla desde otra emergencia');
+  partes.push(`${etaMin} min / ${distanciaKm} km${r.radioState==='6-8'?' desde su posición actual':' desde su cuartel'}${d.esCritica?' — la velocidad pesa más por la prioridad de esta clave':''}`);
   return partes.join(' · ');
 }
 
@@ -243,15 +454,21 @@ function justificarRecomendacion(r:Resource, clave:Clave|undefined):string{
 // trabajando en OTRA emergencia (6-3/6-7). Mientras eso ocurra, el resto de
 // unidades de esa misma compania/cuartel tampoco se recomiendan, para que
 // no se despache el mismo cuartel a dos emergencias distintas al mismo tiempo.
+// Una unidad regresando (6-8) NO cuenta como "ocupada": ya termino su
+// atencion anterior y esta libre para una nueva emergencia.
 function companiaOcupada(resources:Resource[], compania:string):boolean{
   return resources.some(r=>r.compania===compania && (r.radioState==='6-3'||r.radioState==='6-7'));
 }
 
-function pickRecommendation(resources:Resource[], emergencia:Emergency|null, rechazados:Set<string>, clave:Clave|undefined):Resource|null{
+function pickRecommendation(resources:Resource[], emergencia:Emergency|null, rechazados:Set<string>, clave:Clave|undefined, nowMs:number):Resource|null{
   if(!emergencia) return null;
   const candidatos=resources.filter(r=>esDisponible(r) && !rechazados.has(r.id) && !companiaOcupada(resources, r.compania));
   if(!candidatos.length) return null;
-  return candidatos.slice().sort((a,b)=>score(b,clave)-score(a,clave))[0];
+  return candidatos.slice().sort((a,b)=>{
+    const da=distanciaYEtaHacia(a,emergencia,clave,nowMs);
+    const db=distanciaYEtaHacia(b,emergencia,clave,nowMs);
+    return score(b,clave,db.distanciaKm,db.etaMin)-score(a,clave,da.distanciaKm,da.etaMin);
+  })[0];
 }
 
 function resourceIcon(type:ResourceType){
@@ -334,29 +551,158 @@ function fixMapSize(map:L.Map):()=>void{
   return()=>{window.clearTimeout(t); window.removeEventListener('resize',invalidate);};
 }
 
-function MapPanel({resources, emergencies, focus, center}:{resources:Resource[]; emergencies:Emergency[]; focus:{lat:number;lng:number}|null; center:{lat:number;lng:number}}){
+// Icono de vehiculo EN MOVIMIENTO: una silueta orientada segun el rumbo
+// real de viaje (rumboGrados), en un contenedor que NO rota (para que la
+// insignia con el tipo de unidad se mantenga siempre legible), con un
+// anillo de color que lo distingue a simple vista del icono fijo del
+// cuartel (iconoCuartel) -- este es "el carro andando", ese otro es "el
+// cuartel", nunca se confunden ni se superponen en la misma idea visual.
+function iconoVehiculo(color:string, letra:string, rumbo:number):string{
+  return `<div style="position:relative;width:30px;height:30px;">
+    <div style="position:absolute;inset:0;border-radius:50%;border:2px solid #29a9ff;box-shadow:0 0 6px #29a9ffaa;"></div>
+    <div class="vehiculo-giro" style="position:absolute;inset:2px;transform:rotate(${rumbo}deg);transition:transform .3s linear;">
+      <svg viewBox="0 0 24 24" width="26" height="26">
+        <path d="M12 2 L19 15 L14.5 15 L14.5 22 L9.5 22 L9.5 15 L5 15 Z" fill="${color}" stroke="#12141a" stroke-width="1.4"/>
+        <circle cx="12" cy="9" r="2" fill="#12141a" opacity="0.45"/>
+      </svg>
+    </div>
+    <div style="position:absolute;bottom:-3px;right:-3px;width:14px;height:14px;border-radius:50%;background:#12141a;border:1.5px solid ${color};color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;">${letra}</div>
+  </div>`;
+}
+
+// Icono del CUARTEL: fijo, siempre en el mismo lugar (nunca se mueve ni se
+// anima), a proposito distinto del vehiculo -- forma cuadrada/insignia en
+// vez de flecha, sin anillo de movimiento, un color neutro que no depende
+// del estado de radio de ninguna unidad puntual (representa el lugar, no
+// una unidad especifica). Muestra las letras de todos los tipos de unidad
+// que pertenecen a esa compania (algunas companias tienen mas de una).
+function iconoCuartel(letras:string[]):string{
+  const texto=Array.from(new Set(letras)).join('·');
+  return `<div style="width:22px;height:22px;border-radius:5px;background:#1c2029;border:2px solid #5b6472;color:#cbd5e1;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;box-shadow:0 1px 4px #000a;">${texto}</div>`;
+}
+
+// Boton "asignar manualmente" dentro de un popup: solo aparece si hay una
+// emergencia activa y la unidad realmente esta disponible (esDisponible) —
+// el click real se maneja por delegacion de eventos en MapPanel (los
+// popups de Leaflet son HTML plano, no componentes de React), identificando
+// la unidad por el atributo data-asignar-id.
+function botonAsignarManual(unidad:Resource, hayEmergenciaActiva:boolean):string{
+  if(!hayEmergenciaActiva || !esDisponible(unidad)) return '';
+  return `<button data-asignar-id="${unidad.id}" style="margin-top:6px;width:100%;padding:6px 8px;border-radius:6px;border:none;background:#e5484d;color:#fff;font-weight:700;font-size:11px;cursor:pointer;">Asignar ${unidad.id} a la emergencia activa</button>`;
+}
+
+// Contenido HTML de la popup al hacer click en una unidad: detalle completo
+// (no solo el nombre/estado del tooltip al pasar el mouse), mas el boton
+// de asignacion manual si corresponde.
+function popupVehiculo(r:Resource, hayEmergenciaActiva:boolean):string{
+  const detalleTramo=r.destino
+    ? `<br/>→ ${r.destino.address}`
+    : '';
+  return `<b>${r.name}</b><br/>${r.compania}<br/><span style="opacity:.75">${r.sector}</span><br/>
+    Tipo: ${r.type} · Dotación: ${r.crew}<br/>
+    Estado: <b>${RADIO_LABELS[r.radioState]}</b>${detalleTramo}
+    ${botonAsignarManual(r, hayEmergenciaActiva)}`;
+}
+
+// Popup del cuartel: lista todas las unidades basadas ahi y su estado
+// actual (un mismo cuartel puede tener mas de una), con un boton de
+// asignacion manual por cada unidad que este realmente disponible.
+function popupCuartel(compania:string, sector:string, unidades:Resource[], hayEmergenciaActiva:boolean):string{
+  const filas=unidades.map(u=>
+    `${u.id} (${u.type}) — <b>${RADIO_LABELS[u.radioState]}</b>${botonAsignarManual(u, hayEmergenciaActiva)}`
+  ).join('<br/>');
+  return `<b>${compania}</b><br/><span style="opacity:.75">${sector}</span><br/><br/>${filas}`;
+}
+
+function MapPanel({resources, emergencies, focus, center, onAsignarManual}:{resources:Resource[]; emergencies:Emergency[]; focus:{lat:number;lng:number}|null; center:{lat:number;lng:number}; onAsignarManual:(resourceId:string)=>void}){
   const mapRef=useRef<L.Map|null>(null);
+  // Refs para leer siempre el valor mas reciente desde callbacks que
+  // Leaflet dispara mas tarde (popups, clicks) sin que queden desactualizados.
+  const onAsignarManualRef=useRef(onAsignarManual);
+  onAsignarManualRef.current=onAsignarManual;
+  const emergenciesRef=useRef(emergencies);
+  emergenciesRef.current=emergencies;
+  // Capa "estatica": emergencias, marcador de emergencia asignada y el
+  // trazado de ruta -- se redibuja solo cuando cambian los datos (no en
+  // cada tick), porque nada de esto se mueve cuadro a cuadro.
   const layerRef=useRef<L.LayerGroup|null>(null);
+  // Marcadores de unidades: PERSISTENTES (no se destruyen y recrean cada
+  // tick). Se mueven con marker.setLatLng() -- que junto con la transicion
+  // CSS de .resource-marker se ve como un vehiculo deslizandose de verdad,
+  // no "teletransportandose" entre posiciones sueltas.
+  const marcadoresRef=useRef<Record<string, L.Marker>>({});
+  const estadoIconoRef=useRef<Record<string, string>>({}); // para saber cuando reconstruir el icono (cambio de estado/tipo)
+  // Ultimo dato conocido de cada unidad, leido por la popup al abrirse (el
+  // marcador es persistente y no se recrea, asi que su closure inicial
+  // quedaria desactualizada si no se lee desde aca en vez de capturarla).
+  const datosRef=useRef<Record<string, Resource>>({});
+
+  // Reloj de animacion propio del mapa (no el `now` general de la app, que
+  // solo marca segundos completos): mueve las unidades cada 300ms para que
+  // el recorrido de ida/vuelta se vea avanzar de a poco por su ruta.
+  const [tick,setTick]=useState(0);
+  useEffect(()=>{const t=setInterval(()=>setTick(x=>x+1),300); return()=>clearInterval(t);},[]);
 
   // El mapa (tiles, zoom, paneo) se crea una sola vez por cada `center` nuevo
   // (p.ej. cuando resuelve la geolocalizacion). Así, mientras el operador hace
   // zoom o mueve el mapa, los cambios de estado de las unidades no lo reinician.
   useEffect(()=>{
     const map=L.map('map',{zoomControl:false}).setView([center.lat,center.lng],12);
+    // OpenStreetMap estandar (gratuito, sin API key) con un filtro CSS
+    // oscuro (ver #map en styles.css). Se probo CARTO Dark Matter, pero
+    // ahora exige API key -- devuelve HTTP 200 igual, solo que con una
+    // imagen de aviso en vez del mapa real, por eso se detecto recien al
+    // revisar una captura de pantalla real y no solo el codigo de estado.
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors'}).addTo(map);
     const layer=L.layerGroup().addTo(map);
     mapRef.current=map;
     layerRef.current=layer;
+    marcadoresRef.current={};
+    estadoIconoRef.current={};
+    // Los popups de Leaflet son HTML plano (no componentes de React), asi
+    // que el click del boton "Asignar manualmente" se maneja por
+    // delegacion de eventos: cada vez que se abre un popup, se buscan
+    // botones con data-asignar-id adentro y se conecta el callback real.
+    map.on('popupopen', (e:any)=>{
+      const el=e.popup?.getElement?.();
+      if(!el) return;
+      el.querySelectorAll('[data-asignar-id]').forEach((btn:Element)=>{
+        btn.addEventListener('click', ()=>{
+          const id=btn.getAttribute('data-asignar-id');
+          if(id) onAsignarManualRef.current(id);
+          map.closePopup();
+        }, {once:true});
+      });
+    });
     const cleanupResize=fixMapSize(map);
     return()=>{cleanupResize(); map.remove(); mapRef.current=null; layerRef.current=null;};
   },[center]);
 
-  // Marcadores y rutas se redibujan encima del mapa existente cada vez que
-  // cambian los datos, sin recrear el mapa (no se pierde el zoom/paneo manual).
+  // Capa estatica: emergencias, marcador "asignada" y trazado de ruta.
+  // Se redibuja solo cuando cambian los datos, no en cada tick (nada de
+  // esto se mueve cuadro a cuadro).
   useEffect(()=>{
     const layer=layerRef.current;
     if(!layer) return;
     layer.clearLayers();
+    // Marcador de cuartel: FIJO, uno por compañía (varias unidades pueden
+    // compartir el mismo cuartel), nunca se mueve -- independiente del
+    // marcador de vehiculo (que si se anima) para que nunca parezca que
+    // "el cuartel entero" se desplaza cuando en realidad sale un carro.
+    const unidadesPorCompania=new Map<string, Resource[]>();
+    resources.forEach(r=>{
+      const arr=unidadesPorCompania.get(r.compania) || [];
+      arr.push(r);
+      unidadesPorCompania.set(r.compania, arr);
+    });
+    unidadesPorCompania.forEach((unidades, compania)=>{
+      const {lat,lng,sector}=unidades[0];
+      const letras=unidades.map(u=>RESOURCE_LETRA[u.type]);
+      L.marker([lat,lng],{
+        icon:L.divIcon({className:'cuartel-marker', html:iconoCuartel(letras), iconSize:[22,22], iconAnchor:[11,11]}),
+        zIndexOffset:-100,
+      }).addTo(layer).bindTooltip(`${compania} · ${sector}`).bindPopup(popupCuartel(compania, sector, unidades, emergencies.length>0));
+    });
     emergencies.forEach(e=>{
       L.marker([e.lat,e.lng],{icon:L.divIcon({className:'emergency-marker',html:'<div>!</div>',iconSize:[36,36],iconAnchor:[18,18]})}).addTo(layer).bindPopup(`<b>Emergencia #${e.id}</b><br/>Clave ${e.codigo}<br/>${e.address}`);
     });
@@ -371,15 +717,86 @@ function MapPanel({resources, emergencies, focus, center}:{resources:Resource[];
       }
     });
     resources.forEach(r=>{
-      const color=RADIO_COLORS[r.radioState];
-      const icon=L.divIcon({className:'resource-marker',html:`<div style="background:${color}">${RESOURCE_LETRA[r.type]}</div>`,iconSize:[30,30],iconAnchor:[15,15]});
-      const m=L.marker([r.lat,r.lng],{icon}).addTo(layer);
-      m.bindTooltip(`${r.name} · ${RADIO_LABELS[r.radioState]}`);
-      if(r.destino && (r.radioState==='6-3'||r.radioState==='6-7')){
-        L.polyline([[r.lat,r.lng],[r.destino.lat,r.destino.lng]],{color:'#29a9ff',weight:4,dashArray:'8 8'}).addTo(layer);
-      }
+      const enMovimiento=!!r.tramo && (r.radioState==='6-3'||r.radioState==='6-8');
+      if(!r.tramo || !enMovimiento) return;
+      // La ruta dibujada es la real por calles (r.tramo.puntos, motor OSRM
+      // local) cuando ya llego del backend; mientras tanto, una linea recta
+      // de respaldo entre origen y destino del tramo actual.
+      const trazado:[number,number][]=(r.tramo.puntos && r.tramo.puntos.length>=2)
+        ? r.tramo.puntos.map(p=>[p.lat,p.lng])
+        : [[r.tramo.origen.lat,r.tramo.origen.lng],[r.tramo.destino.lat,r.tramo.destino.lng]];
+      // className "ruta-viva" tiene una animacion CSS de guiones fluyendo,
+      // para que se sienta una ruta activa y no una linea estatica.
+      L.polyline(trazado,{color:'#29a9ff',weight:4,dashArray:'10 8',className:'ruta-viva'}).addTo(layer);
     });
   },[resources, emergencies]);
+
+  // Unidades: marcadores persistentes, movidos suavemente cada tick (no
+  // recreados) -- ver comentario de marcadoresRef mas arriba.
+  useEffect(()=>{
+    const map=mapRef.current;
+    if(!map) return;
+    const nowMs=Date.now();
+    const idsVistos=new Set<string>();
+
+    resources.forEach(r=>{
+      datosRef.current[r.id]=r;
+      // El marcador de vehiculo solo existe mientras la unidad esta
+      // realmente fuera de su cuartel: en camino, trabajando en el lugar,
+      // regresando, O en patrullaje (que mantiene radioState '6-0' a
+      // proposito -- sigue "disponible" -- pero SI tiene un tramo activo,
+      // por eso no basta con mirar el radioState solo). En 6-0 sin tramo o
+      // en 6-9 esta fisicamente en el mismo punto que el marcador fijo del
+      // cuartel -- no hace falta un segundo icono ahi encima.
+      const enCuartelQuieto=(r.radioState==='6-0' && !r.tramo) || r.radioState==='6-9';
+      const fueraDeCuartel=!enCuartelQuieto;
+      if(!fueraDeCuartel){
+        const existente=marcadoresRef.current[r.id];
+        if(existente){existente.remove(); delete marcadoresRef.current[r.id]; delete estadoIconoRef.current[r.id];}
+        return;
+      }
+      idsVistos.add(r.id);
+      const pos=posicionActual(r, nowMs);
+      const color=RADIO_COLORS[r.radioState];
+      const segmento=segmentoActual(r, nowMs);
+      const rumbo=segmento ? rumboGrados(segmento.origen.lat,segmento.origen.lng,segmento.destino.lat,segmento.destino.lng) : 0;
+      const claveIcono=`${r.radioState}|${r.type}`;
+
+      let m=marcadoresRef.current[r.id];
+      if(!m){
+        m=L.marker([pos.lat,pos.lng],{
+          icon:L.divIcon({className:'resource-marker', html:iconoVehiculo(color, RESOURCE_LETRA[r.type], rumbo), iconSize:[30,30], iconAnchor:[15,15]}),
+        }).addTo(map);
+        m.bindTooltip(()=>{const d=datosRef.current[r.id]; return `${d.name} · ${RADIO_LABELS[d.radioState]}`;});
+        m.bindPopup(()=>popupVehiculo(datosRef.current[r.id], emergenciesRef.current.length>0));
+        marcadoresRef.current[r.id]=m;
+        estadoIconoRef.current[r.id]=claveIcono;
+      }else{
+        m.setLatLng([pos.lat,pos.lng]);
+        if(estadoIconoRef.current[r.id]!==claveIcono){
+          // Solo se reconstruye el icono cuando cambia el estado/tipo (poco
+          // frecuente) -- la posicion/rotacion se actualiza aparte, sin
+          // recrear el DOM, para que la transicion CSS se vea fluida.
+          m.setIcon(L.divIcon({className:'resource-marker', html:iconoVehiculo(color, RESOURCE_LETRA[r.type], rumbo), iconSize:[30,30], iconAnchor:[15,15]}));
+          estadoIconoRef.current[r.id]=claveIcono;
+        }else{
+          const el=m.getElement();
+          const giro=el?.querySelector<HTMLElement>('.vehiculo-giro');
+          if(giro) giro.style.transform=`rotate(${rumbo}deg)`;
+        }
+      }
+    });
+
+    // Unidades que ya no existen en el array (no deberia pasar en este
+    // proyecto, la flota es fija, pero se limpia por robustez).
+    Object.keys(marcadoresRef.current).forEach(id=>{
+      if(!idsVistos.has(id)){
+        marcadoresRef.current[id].remove();
+        delete marcadoresRef.current[id];
+        delete estadoIconoRef.current[id];
+      }
+    });
+  },[resources, tick]);
 
   // Recentrar solo cuando el operador pide explicitamente ubicar algo
   // ("Ver en el mapa"), no en cada actualizacion de datos.
@@ -447,7 +864,7 @@ function EmergenciasView({queue,claves,now,onAtender}:{queue:Emergency[];claves:
         <td>#{e.id}</td>
         <td>{e.codigo} · {c?.nombre??'—'}</td>
         <td><span className={`prio prio-${c?.prioridad_nivel??3}`}>{c?.prioridad??'—'}</span></td>
-        <td>{e.address}</td>
+        <td className="wrap">{e.address}</td>
         <td>{elapsedLabel(e.creadaEn,now)}</td>
         <td>{e.status}</td>
         <td><button className="linkBtn" onClick={()=>onAtender(e.id)}>Atender</button></td>
@@ -456,12 +873,34 @@ function EmergenciasView({queue,claves,now,onAtender}:{queue:Emergency[];claves:
   </div>;
 }
 
+const TODOS='todos' as const;
 function RecursosView({resources}:{resources:Resource[]}){
+  const [busqueda,setBusqueda]=useState('');
+  const [filtroTipo,setFiltroTipo]=useState<typeof TODOS|ResourceType>(TODOS);
+  const [filtroEstado,setFiltroEstado]=useState<typeof TODOS|RadioState>(TODOS);
+  const texto=busqueda.trim().toLowerCase();
+  const filtrados=resources.filter(r=>
+    (filtroTipo===TODOS||r.type===filtroTipo) &&
+    (filtroEstado===TODOS||r.radioState===filtroEstado) &&
+    (!texto || r.name.toLowerCase().includes(texto) || r.compania.toLowerCase().includes(texto) || r.sector.toLowerCase().includes(texto))
+  );
+  const tipos=Array.from(new Set(resources.map(r=>r.type)));
   return <div className="card sectionCard">
-    <div className="cardHead"><div><b>Flota de Bomberos</b><span>{resources.length} unidades registradas · Cuerpos de Bomberos de Valparaíso y Viña del Mar</span></div></div>
+    <div className="cardHead"><div><b>Flota de Bomberos</b><span>{filtrados.length} de {resources.length} unidades · Cuerpos de Bomberos de Valparaíso y Viña del Mar</span></div></div>
+    <div className="filterRow">
+      <input placeholder="Buscar por unidad, compañía o sector…" value={busqueda} onChange={e=>setBusqueda(e.target.value)}/>
+      <select value={filtroTipo} onChange={e=>setFiltroTipo(e.target.value as typeof TODOS|ResourceType)}>
+        <option value={TODOS}>Todos los tipos</option>
+        {tipos.map(t=><option key={t} value={t}>{t}</option>)}
+      </select>
+      <select value={filtroEstado} onChange={e=>setFiltroEstado(e.target.value as typeof TODOS|RadioState)}>
+        <option value={TODOS}>Todos los estados</option>
+        {(Object.keys(RADIO_LABELS) as RadioState[]).map(s=><option key={s} value={s}>{RADIO_LABELS[s]}</option>)}
+      </select>
+    </div>
     <div className="tableWrap"><table className="dataTable">
       <thead><tr><th></th><th>Unidad</th><th>Compañía</th><th>Sector</th><th>Tipo</th><th>Dotación</th><th>Distancia</th><th>ETA</th><th>Estado</th></tr></thead>
-      <tbody>{resources.map(r=><tr key={r.id}>
+      <tbody>{filtrados.length?filtrados.map(r=><tr key={r.id}>
         <td className="resIconCell">{resourceIcon(r.type)}</td>
         <td>{r.name}</td>
         <td>{r.compania}</td>
@@ -471,16 +910,16 @@ function RecursosView({resources}:{resources:Resource[]}){
         <td>{r.distance} km</td>
         <td>{r.eta} min</td>
         <td><span className={`estado estado-${r.radioState.replace('6-','')}`}>{r.radioState} · {RADIO_LABELS[r.radioState]}</span></td>
-      </tr>)}</tbody>
+      </tr>):<tr><td colSpan={9}><p className="emptyState">Ninguna unidad coincide con el filtro.</p></td></tr>}</tbody>
     </table></div>
   </div>;
 }
 
-function MapaView({resources,emergencies,center,zonas,zonaSeleccionada,onSelectZona}:{resources:Resource[];emergencies:Emergency[];center:{lat:number;lng:number};zonas:ZoneDemand[];zonaSeleccionada:string|null;onSelectZona:(zona:ZoneDemand)=>void}){
+function MapaView({resources,emergencies,center,zonas,zonaSeleccionada,onSelectZona,onAsignarManual}:{resources:Resource[];emergencies:Emergency[];center:{lat:number;lng:number};zonas:ZoneDemand[];zonaSeleccionada:string|null;onSelectZona:(zona:ZoneDemand)=>void;onAsignarManual:(resourceId:string)=>void}){
   return <div className="sectionGrid">
     <div className="card sectionCard mapaFull">
       <div className="cardHead"><div><b>Mapa operacional</b><span>Todas las unidades y emergencias activas</span></div></div>
-      <div className="mapaFullWrap"><MapPanel resources={resources} emergencies={emergencies} focus={null} center={center}/></div>
+      <div className="mapaFullWrap"><MapPanel resources={resources} emergencies={emergencies} focus={null} center={center} onAsignarManual={onAsignarManual}/></div>
     </div>
     <div className="card sectionCard mapaFull">
       <div className="cardHead"><div><b>Mapa de calor · Demanda de Bomberos</b><span>Predicción ML · toca una zona para ver el detalle</span></div></div>
@@ -489,10 +928,71 @@ function MapaView({resources,emergencies,center,zonas,zonaSeleccionada,onSelectZ
   </div>;
 }
 
+const TIPOS_HISTORIAL:HistorialTipo[]=['asignacion','rechazo','en_emergencia','liberacion','nueva_emergencia'];
 function HistorialView({historial,now}:{historial:HistorialEntry[];now:number}){
+  const [filtroTipo,setFiltroTipo]=useState<typeof TODOS|HistorialTipo>(TODOS);
+  const filtrado=filtroTipo===TODOS?historial:historial.filter(h=>h.tipo===filtroTipo);
   return <div className="card sectionCard">
-    <div className="cardHead"><div><b>Historial de acciones</b><span>{historial.length} eventos registrados esta sesión</span></div></div>
-    <div className="activityRows">{historial.length?historial.map(h=><Activity key={h.id} icon={historialIcon(h.tipo)} title={historialTitle(h.tipo)} detail={h.texto} time={timeAgo(h.ts,now)}/>):<p className="emptyState">Aún no hay acciones registradas. Asigna o rechaza una recomendación desde el Dashboard para empezar a construir el historial.</p>}</div>
+    <div className="cardHead"><div><b>Historial de acciones</b><span>{filtrado.length} de {historial.length} eventos registrados esta sesión</span></div></div>
+    <div className="filterRow">
+      <select value={filtroTipo} onChange={e=>setFiltroTipo(e.target.value as typeof TODOS|HistorialTipo)}>
+        <option value={TODOS}>Todos los eventos</option>
+        {TIPOS_HISTORIAL.map(t=><option key={t} value={t}>{historialTitle(t)}</option>)}
+      </select>
+    </div>
+    <div className="activityRows">{filtrado.length?filtrado.map(h=><Activity key={h.id} icon={historialIcon(h.tipo)} title={historialTitle(h.tipo)} detail={h.texto} time={timeAgo(h.ts,now)}/>):<p className="emptyState">{historial.length?'Ningún evento coincide con el filtro.':'Aún no hay acciones registradas. Asigna o rechaza una recomendación desde el Dashboard para empezar a construir el historial.'}</p>}</div>
+  </div>;
+}
+
+// Login sin registro publico: solo los operadores fijos que existen en el
+// backend (core/auth.py) pueden entrar. Mismo estandar visual "Tech
+// Corporativo Nocturno" del resto de la app (misma marca, mismos colores),
+// sin elementos de mas -- correo, contraseña, listo.
+function LoginView({onLogin}:{onLogin:(token:string, nombre:string, email:string)=>void}){
+  const [email,setEmail]=useState('');
+  const [password,setPassword]=useState('');
+  const [error,setError]=useState('');
+  const [cargando,setCargando]=useState(false);
+
+  const submit=async(e:React.FormEvent)=>{
+    e.preventDefault();
+    if(cargando) return;
+    setError('');
+    setCargando(true);
+    try{
+      const resp=await fetch(`${API_BASE}/auth/login`,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        credentials:'include',
+        body:JSON.stringify({email,password}),
+      });
+      const data=await resp.json().catch(()=>({}));
+      if(!resp.ok){
+        setError(data.detail || 'Correo o contraseña incorrectos.');
+        return;
+      }
+      onLogin(data.token, data.nombre, data.email);
+    }catch{
+      setError(`No se pudo conectar con el servidor (${API_BASE}). ¿Está corriendo el backend?`);
+    }finally{
+      setCargando(false);
+    }
+  };
+
+  return <div className="loginPage">
+    <div className="loginCard">
+      <div className="brand"><div className="brandIcon"><Zap size={20}/></div><div><b>ALERTA360</b><span>BOMBEROS · VALPARAÍSO</span></div></div>
+      <p className="loginSubtitle">Acceso de operadores</p>
+      <form onSubmit={submit}>
+        <label className="loginLabel"><Mail size={13}/> Correo</label>
+        <input className="loginInput" type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="nombre@bomberos.cl" autoComplete="username" required autoFocus/>
+        <label className="loginLabel"><Lock size={13}/> Contraseña</label>
+        <input className="loginInput" type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••" autoComplete="current-password" required/>
+        {error && <p className="loginError">{error}</p>}
+        <button className="loginSubmit" type="submit" disabled={cargando}>{cargando?'Ingresando…':'Ingresar'}</button>
+      </form>
+      <p className="loginFooter">Acceso restringido a operadores autorizados del Cuerpo de Bomberos. Sin registro público.</p>
+    </div>
   </div>;
 }
 
@@ -510,16 +1010,16 @@ function ReportesView({historial}:{historial:HistorialEntry[]}){
   </div>;
 }
 
-function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRefresh,perfil,onChangePerfil,onNotify}:{soundOn:boolean;onToggleSound:(v:boolean)=>void;autoRefreshSec:number;onChangeAutoRefresh:(v:number)=>void;perfil:{nombre:string;correo:string;telefono:string};onChangePerfil:(p:Partial<{nombre:string;correo:string;telefono:string}>)=>void;onNotify:(s:string)=>void}){
+function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRefresh,perfil,onChangePerfil,onNotify,auth,onLogout}:{soundOn:boolean;onToggleSound:(v:boolean)=>void;autoRefreshSec:number;onChangeAutoRefresh:(v:number)=>void;perfil:{telefono:string};onChangePerfil:(p:Partial<{telefono:string}>)=>void;onNotify:(s:string)=>void;auth:{nombre:string;email:string};onLogout:()=>void}){
   return <div className="sectionGrid">
     <div className="card sectionCard">
-      <div className="cardHead"><div><b>Perfil del operador</b><span>Información de contacto</span></div></div>
+      <div className="cardHead"><div><b>Cuenta</b><span>Sesión iniciada</span></div></div>
       <div className="configBody">
-        <label className="configRow">Nombre<input value={perfil.nombre} onChange={e=>onChangePerfil({nombre:e.target.value})}/></label>
-        <label className="configRow">Correo<input type="email" value={perfil.correo} onChange={e=>onChangePerfil({correo:e.target.value})}/></label>
-        <label className="configRow">Teléfono de contacto<input value={perfil.telefono} onChange={e=>onChangePerfil({telefono:e.target.value})}/></label>
-        <button className="locateBtn" onClick={()=>onNotify('El cambio de contraseña requiere un sistema de autenticación en el backend (pendiente de implementar).')}>Cambiar contraseña</button>
-        <div className="configNote">Estos datos se guardan solo en esta sesión del navegador — aún no hay backend de usuarios/autenticación.</div>
+        <label className="configRow">Nombre<input value={auth.nombre} disabled/></label>
+        <label className="configRow">Correo<input value={auth.email} disabled/></label>
+        <label className="configRow">Teléfono de contacto<input value={perfil.telefono} onChange={e=>onChangePerfil({telefono:e.target.value})} placeholder="+56 9 0000 0000"/></label>
+        <div className="configNote">Nombre y correo vienen de la cuenta real verificada por el backend (login con JWT) — no son editables, ni hay registro público: solo los operadores autorizados del equipo pueden entrar. El teléfono es la única preferencia local (se guarda solo en esta sesión del navegador).</div>
+        <button className="locateBtn logoutBtn" onClick={onLogout}><LogOut size={14}/> Cerrar sesión</button>
       </div>
     </div>
     <div className="card sectionCard">
@@ -540,6 +1040,24 @@ function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRef
 }
 
 function App(){
+ // La sesion vive SOLO en memoria (no en localStorage a proposito): cada
+ // vez que se recarga la pagina o se reinicia el servidor de desarrollo,
+ // se pide login de nuevo. De paso, esto elimina la validacion asincrona
+ // de un token guardado al montar la app -- que era la causa de una
+ // carrera con el patrullaje (401 sueltos en /route justo al reiniciar).
+ const [auth,setAuth]=useState<{token:string; nombre:string; email:string}|null>(null);
+
+ // currentToken (variable de modulo) es lo que leen las funciones sueltas
+ // fuera de React (obtenerRutaReal) para mandar el header Authorization.
+ useEffect(()=>{ currentToken=auth?.token ?? null; },[auth]);
+
+ const handleLogin=(token:string, nombre:string, email:string)=>{
+   setAuth({token,nombre,email});
+ };
+ const handleLogout=()=>{
+   setAuth(null);
+ };
+
  const [section,setSection]=useState('Dashboard');
  const [toast,setToast]=useState('');
  const [refresh,setRefresh]=useState(0);
@@ -552,29 +1070,137 @@ function App(){
  const [queue,setQueue]=useState<Emergency[]>(()=>POOL_EMERGENCIAS.slice(0,4).map((e,i)=>({...e,id:1258+i,status:'Activa',creadaEn:Date.now()})));
  const [rechazadosPorEmergencia,setRechazadosPorEmergencia]=useState<Record<number,Set<string>>>({});
  const [historial,setHistorial]=useState<HistorialEntry[]>([]);
+ // ETA real e idoneidad de tipo de cada asignacion hecha esta sesion —
+ // base para "Tiempo promedio" y "Cobertura estimada" del dashboard,
+ // calculados de verdad en vez de numeros fijos.
+ const [metricasAsignacion,setMetricasAsignacion]=useState<{etaMin:number; idoneidadTipo:number}[]>([]);
  const [focus,setFocus]=useState<{lat:number;lng:number}|null>(null);
  const [now,setNow]=useState(Date.now());
  const [soundOn,setSoundOn]=useState(false);
  const [autoRefreshSec,setAutoRefreshSec]=useState(0);
  const [zonaSeleccionada,setZonaSeleccionada]=useState<string|null>(null);
  const [mobileNavOpen,setMobileNavOpen]=useState(false);
- const [perfil,setPerfil]=useState({nombre:'Operador OP', correo:'operador@bomberosvalparaiso.cl', telefono:'+56 9 0000 0000'});
+ // Nombre/correo ya no viven aca -- son los de la cuenta real (auth), no
+ // editables. Lo unico que es una preferencia local de verdad es el
+ // telefono de contacto.
+ const [perfil,setPerfil]=useState({telefono:''});
 
  const emergenciaIdRef=useRef(1258+4);
  const poolIndexRef=useRef(4%POOL_EMERGENCIAS.length);
  const historialIdRef=useRef(1);
  const timeoutsRef=useRef<number[]>([]);
+ // Temporizadores pendientes POR unidad (llegada, fin de trabajo, llegada a
+ // cuartel). Se necesitan por separado del listado global de arriba porque,
+ // si una unidad que va de regreso (6-8) es redirigida a otra emergencia,
+ // hay que cancelar su temporizador de "llegada a cuartel" pendiente antes
+ // de programar el nuevo ciclo — si no, ese temporizador viejo terminaria
+ // pisando el nuevo estado (la dejaria en 6-0 aunque ya vaya a otro lado).
+ const resourceTimersRef=useRef<Record<string, number[]>>({});
+ // Unidades "sueltas" circulando en patrullaje ahora mismo (ver
+ // intentarPatrullaje), para no exceder MAX_EN_PATRULLAJE ni elegir dos
+ // veces a la misma unidad.
+ const enPatrullajeRef=useRef<Set<string>>(new Set());
+ // Espejo de `resources` para leer el valor mas reciente desde el
+ // setInterval de patrullaje sin recrearlo en cada cambio de estado (mismo
+ // patron que soundOnRef mas abajo).
+ const resourcesRef=useRef(resources);
  const soundOnRef=useRef(soundOn);
 
  useEffect(()=>{soundOnRef.current=soundOn;},[soundOn]);
+ useEffect(()=>{resourcesRef.current=resources;},[resources]);
  useEffect(()=>{const t=setInterval(()=>setNow(Date.now()),1000); return()=>clearInterval(t);},[]);
  useEffect(()=>()=>{timeoutsRef.current.forEach(id=>clearTimeout(id));},[]);
+
+ const clearResourceTimers=(resourceId:string)=>{
+   (resourceTimersRef.current[resourceId]||[]).forEach(id=>window.clearTimeout(id));
+   resourceTimersRef.current[resourceId]=[];
+ };
+ const registerResourceTimer=(resourceId:string, id:number)=>{
+   resourceTimersRef.current[resourceId]=[...(resourceTimersRef.current[resourceId]||[]), id];
+   timeoutsRef.current.push(id);
+ };
+
+ // Envia una unidad disponible (6-0), elegida al azar entre las que no
+ // estan ya en misión ni en patrullaje, a circular hacia un punto real de
+ // la ciudad y de vuelta — usa el mismo mecanismo de tramo/posicionActual
+ // que un despacho real, asi que si le toca ser recomendada a mitad de
+ // camino, se la redirige correctamente desde donde este en ese momento
+ // (ver esDisponible/pickRecommendation, que ya aceptan unidades en ruta).
+ // Pide la ruta real por calles para el tramo que acaba de empezar, y la
+ // aplica SOLO si esa unidad sigue en el mismo tramo cuando la respuesta
+ // llega (compara `inicio`) — si mientras tanto fue redirigida a otro
+ // lado, el tramo viejo ya no existe y no corresponde pisarlo.
+ const aplicarRutaCuandoLlegue=(resourceId:string, inicio:number, origen:{lat:number;lng:number}, destino:{lat:number;lng:number})=>{
+   obtenerRutaReal(origen, destino).then(ruta=>{
+     if(!ruta) return;
+     setResources(rs=>rs.map(x=>x.id===resourceId && x.tramo && x.tramo.inicio===inicio
+       ? {...x, tramo:{...x.tramo, puntos:ruta.puntos, acumKm:ruta.acumKm}}
+       : x));
+   });
+ };
+
+ const intentarPatrullaje=()=>{
+   if(enPatrullajeRef.current.size>=MAX_EN_PATRULLAJE) return;
+   const libres=resourcesRef.current.filter(r=>r.radioState==='6-0' && !r.tramo && !enPatrullajeRef.current.has(r.id));
+   if(!libres.length) return;
+   const elegido=libres[Math.floor(Math.random()*libres.length)];
+   const punto=elegirPuntoPatrullaje();
+   const resourceId=elegido.id;
+   const home={lat:elegido.lat, lng:elegido.lng};
+   const destinoPatrullaje={lat:punto.lat, lng:punto.lng};
+   const distanciaKm=haversineKm(home.lat,home.lng,punto.lat,punto.lng);
+   // Recorrido lento a proposito (no es la velocidad real): se ve circular
+   // de a poco por el mapa, no llegar de un salto.
+   const duracionMs=Math.round(Math.max(20000, Math.min(etaMinutos(distanciaKm,'urbano')*3200, 70000)));
+
+   enPatrullajeRef.current.add(resourceId);
+   clearResourceTimers(resourceId);
+   const inicioIda=Date.now();
+   setResources(rs=>rs.map(x=>x.id===resourceId?{...x,tramo:{origen:home, destino:destinoPatrullaje, inicio:inicioIda, duracionMs}}:x));
+   aplicarRutaCuandoLlegue(resourceId, inicioIda, home, destinoPatrullaje);
+
+   const tLlegada=window.setTimeout(()=>{
+     const dwellMs=6000+Math.random()*8000;
+     const tRegreso=window.setTimeout(()=>{
+       // Si mientras tanto fue despachada a una emergencia real, ya no esta
+       // en 6-0 y no le corresponde este regreso de patrullaje.
+       const inicioVuelta=Date.now();
+       setResources(rs=>rs.map(x=>x.id===resourceId && x.radioState==='6-0'
+         ?{...x,tramo:{origen:destinoPatrullaje, destino:home, inicio:inicioVuelta, duracionMs}}
+         :x));
+       aplicarRutaCuandoLlegue(resourceId, inicioVuelta, destinoPatrullaje, home);
+       const tFin=window.setTimeout(()=>{
+         setResources(rs=>rs.map(x=>x.id===resourceId && x.radioState==='6-0'?{...x,tramo:undefined}:x));
+         enPatrullajeRef.current.delete(resourceId);
+       }, duracionMs);
+       registerResourceTimer(resourceId, tFin);
+     }, dwellMs);
+     registerResourceTimer(resourceId, tRegreso);
+   }, duracionMs);
+   registerResourceTimer(resourceId, tLlegada);
+ };
+
+ useEffect(()=>{
+   // No arranca el patrullaje (ni sus llamadas a /route) hasta que haya
+   // sesion iniciada -- antes del login no deberia haber ninguna unidad
+   // "trabajando" de fondo.
+   if(!auth) return;
+   const t=setInterval(intentarPatrullaje, 6000);
+   return()=>clearInterval(t);
+ },[auth]);
 
  const currentEmergencia=queue[0]??null;
  const claveActual=currentEmergencia?claves[currentEmergencia.codigo]:undefined;
  const recommendation=useMemo(
-   ()=>pickRecommendation(resources,currentEmergencia,rechazadosPorEmergencia[currentEmergencia?.id??-1]||new Set(), claveActual),
-   [resources,currentEmergencia,rechazadosPorEmergencia,claveActual]
+   ()=>pickRecommendation(resources,currentEmergencia,rechazadosPorEmergencia[currentEmergencia?.id??-1]||new Set(), claveActual, now),
+   [resources,currentEmergencia,rechazadosPorEmergencia,claveActual,now]
+ );
+ // Distancia/ETA reales para la recomendacion actual: se recalculan segun
+ // la posicion vigente de la unidad (cuartel, o su posicion actual si va
+ // de regreso de otra emergencia) y la ubicacion real de esta emergencia.
+ const recomendacionInfo=useMemo(
+   ()=>(recommendation && currentEmergencia)?distanciaYEtaHacia(recommendation, currentEmergencia, claveActual, now):null,
+   [recommendation, currentEmergencia, claveActual, now]
  );
 
  const notify=(s:string)=>{setToast(s); setTimeout(()=>setToast(''),2800)};
@@ -604,36 +1230,100 @@ function App(){
    setRechazadosPorEmergencia(r=>{const c={...r}; delete c[resolvedId]; return c;});
  };
 
- const scheduleResourceLifecycle=(resourceId:string, emergenciaSnap:Emergency, etaMin:number)=>{
+ // El tramo de vuelta (6-8) usa la misma duracion que la ida: mismo
+ // trayecto recorrido en sentido inverso, misma velocidad estimada.
+ const scheduleResourceLifecycle=(resourceId:string, emergenciaSnap:Emergency, home:{lat:number;lng:number}, duracionTramoMs:number)=>{
+   // Cancela cualquier temporizador pendiente de un ciclo anterior de esta
+   // MISMA unidad (p.ej. si iba de regreso y fue redirigida a esta nueva
+   // emergencia antes de llegar a su cuartel, o si estaba en patrullaje).
+   clearResourceTimers(resourceId);
+   enPatrullajeRef.current.delete(resourceId);
    const tiempoTrabajo=TIEMPO_TRABAJO_MS[emergenciaSnap.codigo]??18000;
    const t1=window.setTimeout(()=>{
      setResources(rs=>rs.map(r=>r.id===resourceId?{...r,radioState:'6-7'}:r));
      pushHistorial('en_emergencia',`${resourceId} llegó a la Emergencia #${emergenciaSnap.id} (${emergenciaSnap.address})`);
      const t2=window.setTimeout(()=>{
-       setResources(rs=>rs.map(r=>r.id===resourceId?{...r,radioState:'6-8'}:r));
+       const origenVuelta={lat:emergenciaSnap.lat,lng:emergenciaSnap.lng};
+       const inicioVuelta=Date.now();
+       setResources(rs=>rs.map(r=>r.id===resourceId?{
+         ...r,radioState:'6-8',
+         tramo:{origen:origenVuelta, destino:home, inicio:inicioVuelta, duracionMs:duracionTramoMs},
+       }:r));
+       aplicarRutaCuandoLlegue(resourceId, inicioVuelta, origenVuelta, home);
        pushHistorial('liberacion',`${resourceId} finalizó la atención de la Emergencia #${emergenciaSnap.id}, regresando a cuartel`);
        const t3=window.setTimeout(()=>{
-         setResources(rs=>rs.map(r=>r.id===resourceId?{...r,radioState:'6-0',destino:undefined}:r));
+         setResources(rs=>rs.map(r=>r.id===resourceId?{...r,radioState:'6-0',destino:undefined,tramo:undefined}:r));
          pushHistorial('liberacion',`${resourceId} disponible nuevamente en cuartel`);
-       }, 7000);
-       timeoutsRef.current.push(t3);
+       }, duracionTramoMs);
+       registerResourceTimer(resourceId, t3);
      }, tiempoTrabajo);
-     timeoutsRef.current.push(t2);
-   }, Math.max(2000, Math.min(etaMin*1000, 12000)));
-   timeoutsRef.current.push(t1);
+     registerResourceTimer(resourceId, t2);
+   }, duracionTramoMs);
+   registerResourceTimer(resourceId, t1);
+ };
+
+ // Nucleo compartido del despacho real: lo usan tanto la asignacion
+ // automatica (el boton ASIGNAR sobre la recomendacion) como la asignacion
+ // MANUAL (elegida por el operador desde el mapa) -- misma logica real de
+ // movimiento/ruta/registro en ambos casos, solo cambia quien eligio la
+ // unidad.
+ const despacharUnidad=(unidad:Resource, emergenciaSnap:Emergency, manual:boolean)=>{
+   const resourceId=unidad.id;
+   const nombreClave=claves[emergenciaSnap.codigo]?.nombre??emergenciaSnap.codigo;
+   const fueRedirigida=unidad.radioState==='6-8';
+   // Origen del viaje: si la unidad va de regreso de otra emergencia, se usa
+   // su posicion actual en la ruta (no su cuartel) — se la redirige desde
+   // donde esta en este instante.
+   const origen=posicionActual(unidad, now);
+   const destinoEmergencia={lat:emergenciaSnap.lat,lng:emergenciaSnap.lng};
+   const info=distanciaYEtaHacia(unidad, destinoEmergencia, claveActual, now);
+   // Duracion del recorrido animado: proporcional al ETA real, pero mas
+   // lenta que "tiempo real x1" para que se vea circular de verdad por el
+   // mapa (con el reloj de 300ms de MapPanel) en vez de saltar de golpe.
+   const duracionMs=Math.max(25000, Math.min(info.etaMin*3200, 90000));
+   const inicioIda=Date.now();
+   setResources(rs=>rs.map(r=>r.id===resourceId?{
+     ...r,
+     radioState:'6-3',
+     destino:{emergenciaId:emergenciaSnap.id,lat:emergenciaSnap.lat,lng:emergenciaSnap.lng,address:emergenciaSnap.address},
+     tramo:{origen, destino:destinoEmergencia, inicio:inicioIda, duracionMs},
+   }:r));
+   aplicarRutaCuandoLlegue(resourceId, inicioIda, origen, destinoEmergencia);
+   // Se guarda el ETA real y la idoneidad de tipo de ESTA asignacion puntual
+   // (mismo desglose que ya usa el puntaje/justificacion) para calcular
+   // "Tiempo promedio" y "Cobertura estimada" del dashboard con datos
+   // reales de la sesion, no numeros fijos inventados.
+   setMetricasAsignacion(m=>[...m, {
+     etaMin: info.etaMin,
+     idoneidadTipo: scoreDetalle(unidad, claveActual, info.distanciaKm, info.etaMin).idoneidadTipo,
+   }]);
+   pushHistorial('asignacion',`${unidad.name} asignada${manual?' MANUALMENTE por el operador':''} a Emergencia #${emergenciaSnap.id} · Clave ${emergenciaSnap.codigo} (${nombreClave}) — score ${Math.round(score(unidad,claveActual,info.distanciaKm,info.etaMin))}/100${fueRedirigida?' (redirigida mientras regresaba a cuartel)':''}`);
+   notify(`${unidad.name} asignada${manual?' manualmente':''} a la Emergencia #${emergenciaSnap.id}${fueRedirigida?' (redirigida en ruta)':''}`);
+   setFocus({lat:emergenciaSnap.lat,lng:emergenciaSnap.lng});
+   scheduleResourceLifecycle(resourceId, emergenciaSnap, {lat:unidad.lat,lng:unidad.lng}, duracionMs);
+   advanceQueue(emergenciaSnap.id);
  };
 
  const handleAsignar=()=>{
-   if(!currentEmergencia || !recommendation) return;
-   const emergenciaSnap=currentEmergencia;
-   const resourceId=recommendation.id;
-   const nombreClave=claves[emergenciaSnap.codigo]?.nombre??emergenciaSnap.codigo;
-   setResources(rs=>rs.map(r=>r.id===resourceId?{...r,radioState:'6-3',destino:{emergenciaId:emergenciaSnap.id,lat:emergenciaSnap.lat,lng:emergenciaSnap.lng,address:emergenciaSnap.address}}:r));
-   pushHistorial('asignacion',`${recommendation.name} asignada a Emergencia #${emergenciaSnap.id} · Clave ${emergenciaSnap.codigo} (${nombreClave}) — score ${Math.round(score(recommendation,claveActual))}/100`);
-   notify(`${recommendation.name} asignada a la Emergencia #${emergenciaSnap.id}`);
-   setFocus({lat:emergenciaSnap.lat,lng:emergenciaSnap.lng});
-   scheduleResourceLifecycle(resourceId, emergenciaSnap, recommendation.eta);
-   advanceQueue(emergenciaSnap.id);
+   if(!currentEmergencia || !recommendation || !recomendacionInfo) return;
+   despacharUnidad(recommendation, currentEmergencia, false);
+ };
+
+ // Asignacion manual: el operador elige una unidad especifica desde el
+ // mapa (boton en el popup de un vehiculo o de un cuartel), en vez de
+ // aceptar la recomendacion automatica. Solo se exige que la unidad este
+ // realmente disponible (no se puede "asignar" algo que ya va en camino a
+ // otra emergencia) -- a diferencia del algoritmo automatico, aqui no se
+ // filtra por "compania ocupada" ni por rechazos previos, porque es una
+ // decision deliberada del operador, no un ciclo de recomendacion.
+ const handleAsignarManual=(resourceId:string)=>{
+   if(!currentEmergencia) return;
+   const unidad=resources.find(r=>r.id===resourceId);
+   if(!unidad || !esDisponible(unidad)){
+     notify('Esa unidad ya no está disponible para asignar.');
+     return;
+   }
+   despacharUnidad(unidad, currentEmergencia, true);
  };
 
  const handleRechazar=()=>{
@@ -669,14 +1359,16 @@ function App(){
  },[]);
 
  useEffect(()=>{
-   fetch(`${API_BASE}/prediction/demand?horizon=4`, {credentials:'include'})
+   if(!auth) return;
+   fetch(`${API_BASE}/prediction/demand?horizon=4`, {credentials:'include', headers:authHeaders()})
      .then(r=>{if(!r.ok)throw new Error(`API respondió ${r.status}`); return r.json();})
      .then(d=>{setPeriodos(d.periodos||[]); setImportanciaVariables(Object.values(d.importancia_variables||{})); setApiError(null);})
      .catch(err=>{setPeriodos([]); setApiError(`No se pudo conectar a ${API_BASE}: ${err.message||err}`);});
- },[refresh]);
+ },[refresh, auth]);
 
  useEffect(()=>{
-   fetch(`${API_BASE}/catalog/claves`, {credentials:'include'})
+   if(!auth) return;
+   fetch(`${API_BASE}/catalog/claves`, {credentials:'include', headers:authHeaders()})
      .then(r=>{if(!r.ok)throw new Error(`API respondió ${r.status}`); return r.json();})
      .then(d=>{
        const porCodigo:Record<string,Clave>={};
@@ -684,7 +1376,7 @@ function App(){
        setClaves(porCodigo);
      })
      .catch(err=>{setClaves({}); setApiError(`No se pudo conectar a ${API_BASE}: ${err.message||err}`);});
- },[]);
+ },[auth]);
 
  useEffect(()=>{
    if(!autoRefreshSec) return;
@@ -696,9 +1388,32 @@ function App(){
  const currentZonas=periodoActual?.zonas||[];
  const alerts=useMemo(()=>buildAlerts(periodos, claves),[periodos, claves]);
  const disponibles=resources.filter(esDisponible).length;
+ // "Tiempo promedio": promedio real del ETA calculado en cada asignacion
+ // hecha esta sesion (metricasAsignacion), no un numero fijo. Sin
+ // asignaciones aun, se muestra "—" en vez de inventar un valor.
+ const tiempoPromedioLabel=metricasAsignacion.length?(()=>{
+   const avg=metricasAsignacion.reduce((s,m)=>s+m.etaMin,0)/metricasAsignacion.length;
+   const mm=Math.floor(avg), ss=Math.round((avg-mm)*60);
+   return `${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+ })():'—';
+ const tiempoPromedioMeta=metricasAsignacion.length?`promedio de ${metricasAsignacion.length} asignación${metricasAsignacion.length===1?'':'es'} · esta sesión`:'sin asignaciones aún';
+ // "Cobertura estimada": % de asignaciones con idoneidad de tipo >= 0.5 —
+ // misma definicion exacta que "cobertura_tipo_adecuado_pct" del benchmark
+ // (backend/evaluacion/benchmark_asignacion.py), no un numero aparte.
+ const coberturaPct=metricasAsignacion.length?Math.round(metricasAsignacion.filter(m=>m.idoneidadTipo>=0.5).length/metricasAsignacion.length*100):null;
+ const coberturaLabel=coberturaPct===null?'—':`${coberturaPct}%`;
+ const coberturaMeta=coberturaPct===null?'sin asignaciones aún':'con tipo de unidad adecuado';
  const resumenHeatmap=useMemo(()=>resumenGeneral(periodoActual, currentZonas, claves),[periodoActual, currentZonas, claves]);
  const zonaDetalle=zonaSeleccionada?currentZonas.find(z=>z.zona_id===zonaSeleccionada):undefined;
  const explicacionZona=(zonaDetalle && periodoActual)?explicarZona(periodoActual, zonaDetalle, claves):undefined;
+
+ // Nada de la app real se muestra sin sesion iniciada -- ni siquiera el
+ // dashboard simulado. La sesion no se persiste (ver useState de auth mas
+ // arriba), asi que esto se cumple en cada recarga/reinicio, no solo la
+ // primera vez.
+ if(!auth) return <LoginView onLogin={handleLogin}/>;
+
+ const iniciales=auth.nombre.split(' ').filter(Boolean).slice(0,2).map(p=>p[0].toUpperCase()).join('')||'OP';
 
  return <div className="app">
    {mobileNavOpen && <div className="navBackdrop" onClick={()=>setMobileNavOpen(false)}/>}
@@ -706,23 +1421,23 @@ function App(){
     <nav>{[['Dashboard',BarChart3],['Emergencias',AlertTriangle],['Recursos',Truck],['Mapa',MapPin],['Historial',History],['Reportes',Layers3],['Configuración',Settings]].map(([label,Icon]:any)=><button key={label} className={section===label?'active':''} onClick={()=>{setSection(label);setMobileNavOpen(false);}}><Icon size={18}/><span>{label}</span></button>)}</nav>
     <div className="sidebarBottom"><div className="online"><span></span>Sistema operativo</div><small>Última sincronización<br/><b>hace 18 segundos</b></small></div>
    </aside>
-   <main className="main"><header><button className="mobileMenu" onClick={()=>setMobileNavOpen(o=>!o)}><Menu/></button><div><h1>{section}</h1><p>Central de coordinación · Valparaíso</p></div><div className="headerActions"><div className="live"><span/> EN VIVO</div><button onClick={()=>{setRefresh(x=>x+1);notify('Datos actualizados')}}><RefreshCw size={17}/></button><button onClick={()=>notify(`${queue.length} emergencias en cola`)}><Bell size={18}/></button><button className="avatar" onClick={()=>setSection('Configuración')} title="Ver perfil del operador">OP</button></div></header>
+   <main className="main"><header><button className="mobileMenu" onClick={()=>setMobileNavOpen(o=>!o)}><Menu/></button><div><h1>{section}</h1><p>Central de coordinación · Valparaíso</p></div><div className="headerActions"><div className="live"><span/> EN VIVO</div><button onClick={()=>{setRefresh(x=>x+1);notify('Datos actualizados')}}><RefreshCw size={17}/></button><button onClick={()=>notify(`${queue.length} emergencias en cola`)}><Bell size={18}/></button><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
     {section==='Emergencias' && <EmergenciasView queue={queue} claves={claves} now={now} onAtender={atenderEmergencia}/>}
     {section==='Recursos' && <RecursosView resources={resources}/>}
-    {section==='Mapa' && <MapaView resources={resources} emergencies={queue} center={operationalCenter} zonas={currentZonas} zonaSeleccionada={zonaSeleccionada} onSelectZona={z=>setZonaSeleccionada(z.zona_id)}/>}
+    {section==='Mapa' && <MapaView resources={resources} emergencies={queue} center={operationalCenter} zonas={currentZonas} zonaSeleccionada={zonaSeleccionada} onSelectZona={z=>setZonaSeleccionada(z.zona_id)} onAsignarManual={handleAsignarManual}/>}
     {section==='Historial' && <HistorialView historial={historial} now={now}/>}
     {section==='Reportes' && <ReportesView historial={historial}/>}
-    {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} perfil={perfil} onChangePerfil={p=>setPerfil(prev=>({...prev,...p}))} onNotify={notify}/>}
+    {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} perfil={perfil} onChangePerfil={p=>setPerfil(prev=>({...prev,...p}))} onNotify={notify} auth={auth} onLogout={handleLogout}/>}
     {section==='Dashboard' && <>
-    <section className="kpis"><Kpi icon={<AlertTriangle/>} label="Emergencias activas" value={String(queue.length)} meta={currentEmergencia?`atendiendo clave ${currentEmergencia.codigo}`:'sin emergencia activa'}/><Kpi icon={<Truck/>} label="Recursos disponibles" value={String(disponibles)} meta={`de ${resources.length} unidades`}/><Kpi icon={<Clock3/>} label="Tiempo promedio" value="07:42" meta="−11% esta semana"/><Kpi icon={<ShieldCheck/>} label="Cobertura estimada" value="86%" meta="objetivo 90%"/></section>
-    <section className="workspace"><div className="mapCard"><div className="cardHead"><div><b>Mapa operacional</b><span>Emergencias y recursos en tiempo real</span></div></div><MapPanel resources={resources} emergencies={queue} focus={focus} center={operationalCenter}/><div className="legend"><span><i className="dot green"/> Disponible</span><span><i className="dot red"/> En misión</span><span><i className="dot blue"/> Ruta recomendada</span></div></div>
+    <section className="kpis"><Kpi icon={<AlertTriangle/>} label="Emergencias activas" value={String(queue.length)} meta={currentEmergencia?`atendiendo clave ${currentEmergencia.codigo}`:'sin emergencia activa'}/><Kpi icon={<Truck/>} label="Recursos disponibles" value={String(disponibles)} meta={`de ${resources.length} unidades`}/><Kpi icon={<Clock3/>} label="Tiempo promedio" value={tiempoPromedioLabel} meta={tiempoPromedioMeta}/><Kpi icon={<ShieldCheck/>} label="Cobertura estimada" value={coberturaLabel} meta={coberturaMeta}/></section>
+    <section className="workspace"><div className="mapCard"><div className="cardHead"><div><b>Mapa operacional</b><span>Emergencias y recursos en tiempo real · toca un cuartel o vehículo para asignarlo manualmente</span></div></div><MapPanel resources={resources} emergencies={queue} focus={focus} center={operationalCenter} onAsignarManual={handleAsignarManual}/><div className="legend"><span><i className="dot green"/> Disponible</span><span><i className="dot red"/> En misión</span><span><i className="dot blue"/> Ruta recomendada</span></div></div>
       <div className="sideCards">
       {currentEmergencia?<div className="emergencyCard"><div className={`tag prio prio-${claveActual?.prioridad_nivel??4}`}>{claveActual?`${claveActual.prioridad.toUpperCase()} PRIORIDAD`:'PRIORIDAD'}</div><div className="emergencyTitle"><div className="danger"><AlertTriangle/></div><div><b>Emergencia #{currentEmergencia.id}</b><span>{claveActual?.nombre??currentEmergencia.codigo}</span></div></div><div className="details"><p><MapPin size={15}/> {currentEmergencia.address}</p><p><Clock3 size={15}/> Tiempo transcurrido: <b>{elapsedLabel(currentEmergencia.creadaEn,now)}</b></p><p><Radio size={15}/> Estado: <b>{currentEmergencia.status}</b></p></div><p className="recJustificacion">{explicarEmergenciaActual(currentEmergencia.codigo, now)}</p><button className="locateBtn" onClick={()=>setFocus({lat:currentEmergencia.lat,lng:currentEmergencia.lng})}><Crosshair size={13}/> Ver en el mapa</button></div>:<div className="emergencyCard"><p className="emptyState">Sin emergencias activas por el momento.</p></div>}
-      <div className="recommend"><div className="recHead"><div><span>RECURSO RECOMENDADO</span><small>Asignación multicriterio</small></div>{recommendation && <div className="score" style={{color:scoreColor(Math.round(score(recommendation,claveActual)))}}>{Math.round(score(recommendation,claveActual))}<small>/100</small></div>}</div>
-      {recommendation?<>
-       <div className="recBody"><div className="vehicleIcon">{resourceIcon(recommendation.type)}</div><div><b>{recommendation.name}</b><span className="recBodyCia">{recommendation.compania} · {recommendation.sector}</span><p><Clock3 size={14}/> ETA estimado: <strong>{recommendation.eta} min</strong></p><p><Navigation size={14}/> Distancia: <strong>{recommendation.distance} km</strong></p><p><CheckCircle2 size={14}/> Disponibilidad: <strong>Disponible</strong></p><p><ShieldCheck size={14}/> Capacidad: <strong>{recommendation.capacity}</strong></p><p><Users size={14}/> Dotación: <strong>{recommendation.crew} personas</strong></p></div></div>
-       <p className="recJustificacion">Por qué esta unidad: {justificarRecomendacion(recommendation,claveActual)}.</p>
-       <button className="locateBtn" onClick={()=>setFocus({lat:recommendation.lat,lng:recommendation.lng})}><Crosshair size={13}/> Ver en el mapa</button>
+      <div className="recommend"><div className="recHead"><div><span>RECURSO RECOMENDADO</span><small>Asignación multicriterio</small></div>{recommendation && recomendacionInfo && <div className="score" style={{color:scoreColor(Math.round(score(recommendation,claveActual,recomendacionInfo.distanciaKm,recomendacionInfo.etaMin)))}}>{Math.round(score(recommendation,claveActual,recomendacionInfo.distanciaKm,recomendacionInfo.etaMin))}<small>/100</small></div>}</div>
+      {recommendation && recomendacionInfo?<>
+       <div className="recBody"><div className="vehicleIcon">{resourceIcon(recommendation.type)}</div><div><b>{recommendation.name}</b><span className="recBodyCia">{recommendation.compania} · {recommendation.sector}</span><p><Clock3 size={14}/> ETA estimado: <strong>{recomendacionInfo.etaMin} min</strong></p><p><Navigation size={14}/> Distancia: <strong>{recomendacionInfo.distanciaKm} km</strong></p><p><CheckCircle2 size={14}/> Disponibilidad: <strong>{recommendation.radioState==='6-8'?'Regresando (redirigida a esta emergencia)':'Disponible en cuartel'}</strong></p><p><ShieldCheck size={14}/> Capacidad: <strong>{recommendation.capacity}</strong></p><p><Users size={14}/> Dotación: <strong>{recommendation.crew} personas</strong></p></div></div>
+       <p className="recJustificacion">Por qué esta unidad: {justificarRecomendacion(recommendation,claveActual,recomendacionInfo.distanciaKm,recomendacionInfo.etaMin)}.</p>
+       <button className="locateBtn" onClick={()=>{const pos=posicionActual(recommendation,now); setFocus({lat:pos.lat,lng:pos.lng});}}><Crosshair size={13}/> Ver en el mapa</button>
        <div className="actions"><button className="assign" onClick={handleAsignar}>ASIGNAR</button><button className="reject" onClick={handleRechazar}>RECHAZAR</button></div>
       </>:<p className="emptyState">Sin unidades disponibles para esta emergencia en este momento — todas las compatibles están en misión.</p>}
       </div></div></section>

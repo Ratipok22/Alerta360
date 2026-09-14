@@ -75,7 +75,14 @@ header p{font-size:12px;color:var(--gris-tenue);margin:5px 0 0}
 .mapControls{display:flex;gap:6px}
 .mapControls button{background:var(--negro-tarjeta);color:var(--gris-texto);border:1px solid var(--borde-sutil);border-radius:6px;width:31px;height:29px;display:grid;place-items:center;cursor:pointer}
 .mapControls button:hover{border-color:var(--azul-operativo);color:var(--azul-operativo)}
-.mapCard #map{flex:1;min-height:300px;filter:brightness(.72) contrast(1.05)}
+.mapCard #map{flex:1;min-height:300px}
+/* OSM estandar no tiene una variante oscura gratuita sin API key (se
+   probo CARTO Dark Matter, ahora la exige). El filtro se aplica SOLO al
+   pane de tiles de Leaflet (#map .leaflet-tile-pane), no a #map completo:
+   asi el invert()+hue-rotate() que da el tono oscuro no le llega a los
+   marcadores (estan en un pane hermano, .leaflet-marker-pane), y sus
+   colores reales (verde=disponible, rojo=alerta, etc.) quedan intactos. */
+#map .leaflet-tile-pane{filter:invert(1) hue-rotate(200deg) brightness(.92) contrast(.92) saturate(.85)}
 .legend{position:absolute;bottom:11px;left:15px;background:#0b0c0ee6;border:1px solid var(--borde-sutil);border-radius:6px;padding:7px 9px;display:flex;gap:14px;font-size:10px;color:var(--gris-tenue)}
 .dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:5px}
 .green{background:var(--verde-disponible)}
@@ -183,10 +190,14 @@ header p{font-size:12px;color:var(--gris-tenue);margin:5px 0 0}
 .sectionCard{margin-bottom:16px}
 .sectionGrid{display:flex;flex-direction:column;gap:16px}
 .emptyState{padding:16px 4px;color:var(--gris-tenue);font-size:12px}
+.filterRow{display:flex;flex-wrap:wrap;gap:8px;padding:0 20px 14px}
+.filterRow input,.filterRow select{background:var(--negro-panel);color:var(--gris-texto);border:1px solid var(--borde-sutil);border-radius:6px;padding:7px 10px;font-size:12px;font-family:inherit}
+.filterRow input{flex:1;min-width:160px}
 .tableWrap{overflow-x:auto;padding:0 20px 16px}
 .dataTable{width:100%;border-collapse:collapse;font-size:12px}
 .dataTable th{text-align:left;color:var(--gris-tenue);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:1px;padding:9px 10px;border-bottom:1px solid var(--borde-sutil);white-space:nowrap}
 .dataTable td{padding:10px;border-bottom:1px solid var(--borde-sutil);color:var(--gris-texto);white-space:nowrap}
+.dataTable td.wrap{white-space:normal;max-width:260px}
 .dataTable tr:last-child td{border-bottom:none}
 .dataTable tr:hover td{background:var(--negro-panel)}
 .resIconCell{color:var(--azul-operativo)}
@@ -204,6 +215,15 @@ header p{font-size:12px;color:var(--gris-tenue);margin:5px 0 0}
 .estado-9{color:var(--rojo-alerta);border-color:var(--rojo-alerta)}
 
 .mapaFull .mapaFullWrap #map,.mapaFull .mapaFullWrap #heatmap{height:420px;border-radius:0 0 12px 12px}
+/* Leaflet trae sus propios z-index internos (200-800 para tiles, marcadores,
+   controles, popups) que por defecto quedan MAS ALTOS que el menu movil
+   (.sidebar z-index:40) y su fondo oscuro (.navBackdrop z-index:35) -- sin
+   esto, al abrir el menu en una pantalla chica, el mapa se dibuja encima
+   del menu en vez de quedar debajo. Al ponerle su propio z-index bajo al
+   contenedor, todos esos valores internos de Leaflet quedan "atrapados"
+   dentro de este contexto de apilamiento, sin poder pasar por encima de
+   nada que este afuera con un z-index mayor. */
+#map,#heatmap{position:relative;z-index:1}
 
 /* ============ CONFIGURACION ============ */
 .configBody{padding:0 20px 20px;display:flex;flex-direction:column;gap:16px}
@@ -212,14 +232,41 @@ header p{font-size:12px;color:var(--gris-tenue);margin:5px 0 0}
 .configRow input:not([type="checkbox"]){flex:1;min-width:0}
 .configRow input[type="checkbox"]{accent-color:var(--azul-operativo)}
 .configNote{font-size:12px;color:var(--gris-tenue)}
+.logoutBtn{color:var(--rojo-alerta);border-color:#ff3b3055}
+.logoutBtn:hover{background:#ff3b3015}
 
 .mobileMenu{display:none;border:0;background:transparent;color:var(--blanco);cursor:pointer;padding:0}
 .navBackdrop{display:none}
 
+/* ============ LOGIN ============ */
+.loginPage{min-height:100vh;width:100%;display:flex;align-items:center;justify-content:center;background:var(--negro-panel)}
+.loginCard{width:100%;max-width:360px;background:var(--negro-tarjeta);border:1px solid var(--borde-sutil);border-radius:12px;padding:32px 28px;box-shadow:0 20px 60px #0008}
+.loginCard .brand{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+.loginSubtitle{color:var(--blanco);font-size:15px;font-weight:700;margin:0 0 20px}
+.loginLabel{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gris-tenue);font-weight:600;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.4px}
+.loginInput{width:100%;box-sizing:border-box;background:var(--negro-panel);border:1px solid var(--borde-sutil);border-radius:7px;padding:10px 12px;color:var(--blanco);font-size:13px;font-family:inherit}
+.loginInput:focus{outline:none;border-color:var(--azul-operativo)}
+.loginError{color:var(--rojo-alerta);font-size:12px;margin:12px 0 0;line-height:1.4}
+.loginSubmit{width:100%;margin-top:20px;padding:11px;border:0;border-radius:7px;background:var(--azul-operativo);color:var(--blanco);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit}
+.loginSubmit:disabled{opacity:.6;cursor:default}
+.loginSubmit:not(:disabled):hover{filter:brightness(1.1)}
+.loginFooter{margin:20px 0 0;font-size:11px;color:var(--gris-tenue);line-height:1.5;text-align:center}
+
 /* ============ MARCADORES DE MAPA ============ */
-.emergency-marker div{width:40px;height:40px;border-radius:50%;background:var(--rojo-alerta);color:var(--blanco);display:grid;place-items:center;font-size:23px;font-weight:800;border:3px solid #ff9995;box-shadow:0 0 0 12px #ff3b3025,0 0 0 25px #ff3b3012}
-.emergency-marker-asignada div{width:34px;height:34px;font-size:17px;background:var(--azul-operativo);border-color:#8fc7fb;box-shadow:0 0 0 10px #2c9af625,0 0 0 20px #2c9af612}
-.resource-marker div{width:30px;height:30px;border-radius:6px;color:var(--negro-panel);display:grid;place-items:center;font-weight:900;border:2px solid var(--negro-panel);box-shadow:0 2px 8px #0007}
+.emergency-marker div{width:40px;height:40px;border-radius:50%;background:var(--rojo-alerta);color:var(--blanco);display:grid;place-items:center;font-size:23px;font-weight:800;border:3px solid #ff9995;box-shadow:0 0 0 12px #ff3b3025,0 0 0 25px #ff3b3012;animation:pulso-alerta 1.8s ease-in-out infinite}
+.emergency-marker-asignada div{width:34px;height:34px;font-size:17px;background:var(--azul-operativo);border-color:#8fc7fb;box-shadow:0 0 0 10px #2c9af625,0 0 0 20px #2c9af612;animation:none}
+@keyframes pulso-alerta{0%,100%{box-shadow:0 0 0 12px #ff3b3025,0 0 0 25px #ff3b3012}50%{box-shadow:0 0 0 16px #ff3b3038,0 0 0 32px #ff3b3018}}
+/* Vehiculo: el icono en si (SVG + insignia) ya dibuja su propia forma y
+   borde -- aca solo se agrega la sombra de profundidad y la transicion de
+   posicion, para que marker.setLatLng() se vea deslizar en vez de saltar
+   (Leaflet mueve el marcador cambiando su transform; al animar esa misma
+   propiedad, el navegador interpola el movimiento). */
+.resource-marker{filter:drop-shadow(0 2px 4px #0009)}
+.leaflet-marker-icon.resource-marker{transition:transform .3s linear}
+/* Ruta activa: guiones "fluyendo" en la direccion de avance, para que se
+   sienta una ruta viva y no una linea estatica. */
+.ruta-viva{animation:flujo-ruta 1s linear infinite}
+@keyframes flujo-ruta{to{stroke-dashoffset:-18}}
 
 @media(max-width:1050px){
   .sidebar{width:205px}

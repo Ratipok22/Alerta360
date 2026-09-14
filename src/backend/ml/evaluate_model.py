@@ -35,6 +35,13 @@ def evaluate() -> dict:
     artifact = joblib.load(ARTIFACT_PATH)
     pipeline = artifact["pipeline"]
 
+    if artifact.get("modelo_ganador"):
+        print(f"Familia de modelo en produccion: {artifact['modelo_ganador']}")
+        for nombre, info in artifact.get("comparacion_modelos", {}).items():
+            marca = " <- elegido" if nombre == artifact["modelo_ganador"] else ""
+            print(f"  {nombre}: MAE holdout interno {info['mae_holdout']}{marca}")
+        print()
+
     df = generate_validation()
     df = add_rolling_features(df)
 
