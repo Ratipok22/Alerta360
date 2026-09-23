@@ -11,6 +11,7 @@ falta guardar sesiones en memoria ni en base de datos.
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 import bcrypt
 import jwt
@@ -19,12 +20,15 @@ SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "clave-de-desarrollo-cambiar-en-pr
 ALGORITHM = "HS256"
 EXPIRACION_HORAS = 12
 
+Rol = Literal["admin", "visualizador"]
+
 
 @dataclass(frozen=True)
 class Usuario:
     email: str
     nombre: str
     password_hash: bytes
+    rol: Rol
 
 
 # Hash bcrypt de la contraseña compartida de estos 3 usuarios de prueba
@@ -34,11 +38,21 @@ _HASH_DEMO = b"$2b$12$GMWH1LEAzB8MQx0H.WD.v.F2vRz1YGqYGWgAowxcX2eu3kKnAvbWO"
 
 # Los 3 unicos operadores habilitados (uno por integrante del equipo). No
 # hay registro: si no esta en esta lista, no puede entrar.
+#
+# Rol de cada operador (RBAC):
+# - "admin": coordinacion/despacho -- puede asignar/rechazar unidades, usar
+#   el filtro de cuartel y editar configuracion administrativa (ej. el
+#   umbral de timeout de unidades).
+# - "visualizador": solo lectura -- puede ver mapas, tableros y usar el
+#   filtro de cuartel para consultar, pero no puede asignar ni editar nada
+#   operacional. El backend nunca confia en un rol que venga del cliente:
+#   siempre se resuelve aca, contra este mismo diccionario, sea cual sea el
+#   contenido del JWT.
 USUARIOS: dict[str, Usuario] = {
     u.email: u for u in [
-        Usuario("ben.saavedrab@bomberos.cl", "Benjamin Saavedra", _HASH_DEMO),
-        Usuario("alex.aravena@bomberos.cl", "Alexsander Aravena", _HASH_DEMO),
-        Usuario("bru.molina@bomberos.cl", "Bruno Molina", _HASH_DEMO),
+        Usuario("ben.saavedrab@bomberos.cl", "Benjamin Saavedra", _HASH_DEMO, "admin"),
+        Usuario("alex.aravena@bomberos.cl", "Alexsander Aravena", _HASH_DEMO, "admin"),
+        Usuario("bru.molina@bomberos.cl", "Bruno Molina", _HASH_DEMO, "visualizador"),
     ]
 }
 

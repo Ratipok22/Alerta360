@@ -65,6 +65,7 @@ class LoginResponse(BaseModel):
     token: str
     nombre: str
     email: str
+    rol: str
 
 @app.get("/health")
 def health():
@@ -78,7 +79,7 @@ def login(datos: LoginRequest):
     usuario = verificar_credenciales(datos.email, datos.password)
     if not usuario:
         raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
-    return LoginResponse(token=crear_token(usuario), nombre=usuario.nombre, email=usuario.email)
+    return LoginResponse(token=crear_token(usuario), nombre=usuario.nombre, email=usuario.email, rol=usuario.rol)
 
 def usuario_actual(authorization: str | None = Header(default=None)) -> Usuario:
     """Dependencia de FastAPI: exige un JWT valido en el header
@@ -91,12 +92,22 @@ def usuario_actual(authorization: str | None = Header(default=None)) -> Usuario:
         raise HTTPException(status_code=401, detail="Sesión inválida o expirada, inicia sesión de nuevo")
     return usuario
 
+def requiere_admin(usuario: Usuario = Depends(usuario_actual)) -> Usuario:
+    """Dependencia de FastAPI para RBAC: exige ademas que el operador
+    autenticado tenga rol "admin" (coordinacion/despacho). El rol se lee
+    siempre desde core.auth.USUARIOS (la fuente de verdad del servidor),
+    nunca de un dato que venga del cliente -- asi que no se puede escalar
+    privilegios manipulando el token ni la app."""
+    if usuario.rol != "admin":
+        raise HTTPException(status_code=403, detail="Tu cuenta no tiene permiso para realizar esta acción (rol de solo lectura)")
+    return usuario
+
 @app.get("/auth/me")
 def auth_me(usuario: Usuario = Depends(usuario_actual)):
     """Permite al frontend validar si el token guardado localmente sigue
     siendo valido (p.ej. al recargar la pagina) sin pedir login de nuevo
     si no hace falta."""
-    return {"email": usuario.email, "nombre": usuario.nombre}
+    return {"email": usuario.email, "nombre": usuario.nombre, "rol": usuario.rol}
 
 @app.get("/resources")
 def resources(usuario: Usuario = Depends(usuario_actual)):
@@ -205,7 +216,7 @@ def route(origen_lat: float, origen_lng: float, destino_lat: float, destino_lng:
 
 
 @app.post("/assignment/recommend")
-def recommend(emergency: Emergency):
+def recommend(emergency: Emergency, usuario: Usuario = Depends(requiere_admin)):
     # MVP: asignación multicriterio. En la versión final, pesos/configuración pueden vivir en BD.
     candidates = [
         {"id":"B-01","type":"Bomberos","available":True,"eta":5,"distance":2.1,"compatible":True,"capacity":True},

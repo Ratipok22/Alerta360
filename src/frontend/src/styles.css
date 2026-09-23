@@ -16,6 +16,27 @@
   --azul-operativo:#2C9AF6;
   --amarillo-precaucion:#FFCC00;
   --verde-disponible:#34C759;
+  /* Texto SIEMPRE blanco sobre insignias/botones de color solido (avatar,
+     ASIGNAR, login), sin importar el tema -- a diferencia de --blanco, que
+     se invierte en tema claro (ver mas abajo) porque ahi se usa para texto
+     de alto contraste sobre fondos de panel, no sobre color solido. */
+  --on-accent:#FFFFFF;
+  /* Acento de marca para resaltados (item de menu activo, iconos de KPI,
+     enlaces, foco de formularios): en oscuro es el mismo azul operativo de
+     siempre; en tema claro (ver mas abajo) se vuelve el rojo institucional,
+     que es el color que bomberos.cl usa para todo lo destacado/CTA. Los
+     estados operativos (prioridad, radioState) siguen usando
+     --azul-operativo directo, no este, para no confundir semantica. */
+  --acento:var(--azul-operativo);
+  /* Barra lateral: variables propias (no las genericas de panel/texto) para
+     que en tema claro pueda tener su propio color institucional sin
+     afectar el resto de las tarjetas/superficies del sistema. En oscuro
+     son iguales a como se veia siempre. */
+  --sidebar-bg:var(--negro-panel);
+  --sidebar-borde:var(--borde-sutil);
+  --sidebar-texto:var(--gris-texto);
+  --sidebar-texto-fuerte:var(--blanco);
+  --sidebar-hover-bg:var(--negro-tarjeta);
 
   font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
   color:var(--gris-texto);
@@ -23,41 +44,161 @@
   font-synthesis:none;
   text-rendering:optimizeLegibility;
 }
+
+/* ============ TEMA CLARO (paleta institucional Bomberos de Chile) ============
+   Se activa con [data-theme="light"] en .app (ver toggle en el header). Solo
+   redefine las mismas variables que ya usa todo el sistema oscuro -- ningun
+   componente necesita saber en que tema esta. */
+html[data-theme="light"]{
+  /* Notoriamente mas gris que las tarjetas (blancas) para que se les
+     distinga del fondo -- si quedan casi del mismo tono, los contenedores
+     "desaparecen" y todo se ve como una sola superficie blanca. */
+  --fondo-pagina:#E7ECEF;
+  --negro-panel:#FFFFFF;
+  --negro-tarjeta:#FFFFFF;
+  --borde-sutil:#E2E5E8;
+  --blanco:#1C2833;
+  --gris-texto:#3B4652;
+  --gris-tenue:#67727D;
+  --rojo-alerta:#C8102E;
+  --rojo-hover:#A50D26;
+  --azul-operativo:#1C2833;
+  --amarillo-precaucion:#B8860B;
+  --verde-disponible:#1E8449;
+  --acento:#C8102E;
+  /* Barra lateral blanca (igual que el resto de superficies) con acentos
+     rojos -- se probo navy solido primero, pero se prefirio blanca. */
+  --sidebar-bg:#FFFFFF;
+  --sidebar-borde:#E2E5E8;
+  --sidebar-texto:#3B4652;
+  --sidebar-texto-fuerte:#1C2833;
+  --sidebar-hover-bg:#F4F6F7;
+}
+/* En tema claro el mapa usa las tiles normales de OpenStreetMap (sin el
+   filtro oscuro de mas abajo). */
+html[data-theme="light"] #map .leaflet-tile-pane{filter:none}
+/* Botones tipo pildora en tema claro, como los CTA de bomberos.cl (rojo
+   institucional, esquinas muy redondeadas). En oscuro se mantiene el
+   estilo mas cuadrado de siempre. */
+html[data-theme="light"] .loginSubmit,html[data-theme="light"] .actions button{border-radius:999px}
+/* Los campos de login se notan mas: fondo gris (en vez del mismo blanco de
+   la tarjeta) y borde mas marcado, para que se vea claramente donde hay
+   que escribir. Al enfocar, se ponen blancos con borde rojo (ya definido
+   en .loginInput:focus). */
+html[data-theme="light"] .loginInput{background:var(--fondo-pagina);border-color:#C7D0D8}
+html[data-theme="light"] .loginInput:focus{background:var(--negro-panel);border-color:var(--acento)}
+/* Todo contenedor "cuadrado" (tarjetas, KPIs, mapa, emergencia activa,
+   recomendacion) lleva un marco COMPLETO en color institucional y una
+   sombra suave, para que se distingan del fondo de pagina en vez de
+   perderse en blanco sobre blanco. overflow:hidden para que la barra de
+   titulo (.cardHead, ver mas abajo) quede recortada a las esquinas
+   redondeadas del contenedor en vez de sobresalir en punta. */
+html[data-theme="light"] .card,
+html[data-theme="light"] .mapCard,
+html[data-theme="light"] .emergencyCard,
+html[data-theme="light"] .recommend{
+  border:2px solid var(--acento);
+  overflow:hidden;
+  box-shadow:0 1px 3px rgba(28,40,51,.09), 0 1px 2px rgba(28,40,51,.06);
+}
+/* El titulo de cada tarjeta (".cardHead": "Mapa operacional", "Alertas
+   predictivas", "Recursos disponibles", etc.) es una barra solida en rojo
+   institucional con texto blanco, para separar visualmente titulo de
+   cuerpo -- el cuerpo de la tarjeta se mantiene blanco/legible. */
+html[data-theme="light"] .cardHead{background:var(--acento)}
+html[data-theme="light"] .cardHead b{color:var(--on-accent)}
+html[data-theme="light"] .cardHead span{color:rgba(255,255,255,.82)}
+html[data-theme="light"] .cardHead .linkBtn{color:var(--on-accent);text-decoration:underline}
+html[data-theme="light"] .cardHead .mlBadge{background:rgba(255,255,255,.25);color:var(--on-accent)!important}
+html[data-theme="light"] .cardHead .liveText{color:var(--on-accent)!important}
+/* La pagina "Mapa" (vista de pantalla completa, .mapaFull) NO lleva el
+   marco/barra de color -- ese lenguaje visual es solo para las tarjetas
+   del Dashboard. Aca se revierte todo de vuelta al diseño neutro normal. */
+html[data-theme="light"] .mapaFull{border:1px solid var(--borde-sutil);overflow:visible;box-shadow:none}
+html[data-theme="light"] .mapaFull .cardHead{background:transparent}
+html[data-theme="light"] .mapaFull .cardHead b{color:var(--blanco)}
+html[data-theme="light"] .mapaFull .cardHead span{color:var(--gris-tenue)}
 *{box-sizing:border-box}
 body{margin:0;background:var(--fondo-pagina)}
 
 .app{min-height:100vh;display:flex;background:var(--negro-panel)}
 
 /* ============ SIDEBAR ============ */
-.sidebar{width:240px;background:var(--negro-panel);border-right:1px solid var(--borde-sutil);padding:20px 14px;display:flex;flex-direction:column;position:fixed;inset:0 auto 0 0;z-index:40;transition:transform .25s}
+.sidebar{width:240px;background:var(--sidebar-bg);border-right:1px solid var(--sidebar-borde);padding:20px 14px;display:flex;flex-direction:column;position:fixed;inset:0 auto 0 0;z-index:40;transition:transform .25s}
 .brand{display:flex;gap:10px;align-items:center;padding:4px 8px 24px}
-.brandIcon{width:35px;height:35px;border-radius:8px;background:var(--azul-operativo);display:grid;place-items:center;box-shadow:0 0 20px #2c9af655}
-.brand b{display:block;font-size:13px;font-weight:700;color:var(--blanco);letter-spacing:1.3px}
-.brand span{display:block;font-size:9px;color:var(--gris-tenue);letter-spacing:1.5px;margin-top:3px;text-transform:uppercase}
+.brandIcon{width:35px;height:35px;border-radius:8px;background:var(--azul-operativo);color:var(--on-accent);display:grid;place-items:center;box-shadow:0 0 20px color-mix(in srgb, var(--acento) 35%, transparent)}
+/* .brand aparece en dos contextos con fondos distintos -- el sidebar
+   (fondo navy propio) y la tarjeta de login (fondo de tarjeta normal) --
+   por eso el color del texto se define por separado para cada uno, en vez
+   de una regla generica .brand que asumiria un solo fondo. */
+.sidebar .brand b{display:block;font-size:13px;font-weight:700;color:var(--sidebar-texto-fuerte);letter-spacing:1.3px}
+.sidebar .brand span{display:block;font-size:9px;color:var(--sidebar-texto);letter-spacing:1.5px;margin-top:3px;text-transform:uppercase}
+.loginCard .brand b{display:block;font-size:13px;font-weight:700;color:var(--blanco);letter-spacing:1.3px}
+.loginCard .brand span{display:block;font-size:9px;color:var(--gris-tenue);letter-spacing:1.5px;margin-top:3px;text-transform:uppercase}
 nav{display:flex;flex-direction:column;gap:4px}
-nav button{border:0;background:transparent;color:var(--gris-texto);padding:11px 13px;border-radius:6px;display:flex;gap:12px;align-items:center;font-size:13px;font-weight:500;cursor:pointer;text-align:left;transition:background .15s}
-nav button:hover{background:var(--negro-tarjeta);color:var(--blanco)}
-nav button.active{background:rgba(44,154,246,.14);color:var(--azul-operativo);font-weight:600;box-shadow:inset 3px 0 var(--azul-operativo)}
-.sidebarBottom{margin-top:auto;border-top:1px solid var(--borde-sutil);padding:16px 8px;color:var(--gris-tenue);font-size:11px}
+nav button{border:0;background:transparent;color:var(--sidebar-texto);padding:11px 13px;border-radius:6px;display:flex;gap:12px;align-items:center;font-size:13px;font-weight:500;cursor:pointer;text-align:left;transition:background .15s}
+nav button:hover{background:var(--sidebar-hover-bg);color:var(--sidebar-texto-fuerte)}
+nav button.active{background:color-mix(in srgb, var(--acento) 16%, transparent);color:var(--acento);font-weight:600;box-shadow:inset 3px 0 var(--acento)}
+.sidebarBottom{margin-top:auto;border-top:1px solid var(--sidebar-borde);padding:16px 8px;color:var(--sidebar-texto);font-size:11px}
 .online{color:var(--verde-disponible);margin-bottom:10px;font-weight:600}
 .online span,.live span,.liveText span{display:inline-block;width:7px;height:7px;background:var(--verde-disponible);border-radius:50%;margin-right:7px;box-shadow:0 0 8px #34c75988}
 
+/* En tema claro el logo se ve en rojo institucional (no navy) para que
+   resalte sobre el fondo azul marino de la barra lateral -- rojo + navy
+   juntos, el mismo par de colores que usa bomberos.cl. */
+html[data-theme="light"] .brandIcon{background:var(--acento)}
+
+/* Menu lateral colapsable: en modo colapsado se angosta a solo iconos.
+   El boton para expandir/colapsar es un icono tipo "hamburguesa" solo,
+   sin texto, arriba a la izquierda del sidebar (encima del logo). */
+.sidebarToggleBtn{width:36px;height:36px;display:grid;place-items:center;border:1px solid var(--sidebar-borde);background:transparent;color:var(--sidebar-texto);border-radius:6px;cursor:pointer;margin:0 0 14px;flex-shrink:0}
+.sidebarToggleBtn:hover{color:var(--sidebar-texto-fuerte);border-color:var(--acento)}
+.sidebar.collapsed{width:72px}
+.sidebar.collapsed .sidebarToggleBtn{margin-left:auto;margin-right:auto}
+.sidebar.collapsed .brand{justify-content:center;padding:4px 0 24px}
+.sidebar.collapsed nav button{justify-content:center;padding:11px}
+
 /* ============ HEADER / LAYOUT ============ */
-.main{margin-left:240px;width:calc(100% - 240px);padding:24px 26px 40px}
+.main{margin-left:240px;width:calc(100% - 240px);padding:24px 26px 40px;transition:margin-left .2s,width .2s}
+.main.sidebarCollapsed{margin-left:72px;width:calc(100% - 72px)}
 header{height:55px;display:flex;align-items:center;margin-bottom:20px}
 h1{font-size:22px;font-weight:700;margin:0;color:var(--blanco)}
 header p{font-size:12px;color:var(--gris-tenue);margin:5px 0 0}
 .headerActions{display:flex;align-items:center;gap:9px;margin-left:auto}
 .headerActions button{border:1px solid var(--borde-sutil);background:var(--negro-tarjeta);color:var(--gris-texto);width:34px;height:34px;border-radius:6px;display:grid;place-items:center;cursor:pointer}
-.headerActions button:hover{border-color:var(--azul-operativo);color:var(--azul-operativo)}
+.headerActions button:hover{border-color:var(--acento);color:var(--acento)}
 .live{font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--verde-disponible);background:rgba(52,199,89,.12);border:1px solid var(--verde-disponible);border-radius:20px;padding:8px 11px}
-.avatar{width:34px;height:34px;border-radius:50%;background:var(--azul-operativo);color:var(--blanco);display:grid;place-items:center;font-size:11px;font-weight:700;border:0;cursor:pointer;font-family:inherit;transition:filter .15s}
+.avatar{width:34px;height:34px;border-radius:50%;background:var(--azul-operativo);color:var(--on-accent);display:grid;place-items:center;font-size:11px;font-weight:700;border:0;cursor:pointer;font-family:inherit;transition:filter .15s}
 .avatar:hover{filter:brightness(1.15)}
+
+/* ============ FILTRO GLOBAL POR CUARTEL (Dashboard) ============ */
+.cuartelFilterRow{display:flex;align-items:center;gap:14px;margin-bottom:16px;background:var(--negro-tarjeta);border:1px solid var(--borde-sutil);border-radius:10px;padding:13px 18px}
+.cuartelFilterRow label{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--gris-texto);font-weight:700}
+.cuartelFilterRow select{background:var(--negro-panel);color:var(--gris-texto);border:1px solid var(--borde-sutil);border-radius:6px;padding:9px 12px;font-size:13px;font-weight:600;font-family:inherit;min-width:260px}
+/* En tema claro esta caja lleva el mismo lenguaje visual que el resto de
+   contenedores destacados (borde institucional + sombra), y la etiqueta
+   se pinta de rojo -- si no, en fondo blanco quedaba casi invisible. */
+html[data-theme="light"] .cuartelFilterRow{border:2px solid var(--acento);box-shadow:0 1px 3px rgba(28,40,51,.09), 0 1px 2px rgba(28,40,51,.06)}
+html[data-theme="light"] .cuartelFilterRow label{color:var(--acento)}
+/* "Ver en el mapa" con contorno rojo bien marcado, en vez del borde gris
+   casi invisible de siempre. */
+html[data-theme="light"] .locateBtn{border-color:var(--acento)}
+
+/* ============ RBAC (rol de solo lectura) ============ */
+.readOnlyBadge{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--amarillo-precaucion);background:rgba(255,204,0,.12);border:1px solid var(--amarillo-precaucion);border-radius:20px;padding:8px 11px}
+.readOnlyNote{display:flex;align-items:center;gap:6px;color:var(--gris-tenue)}
+
+/* ============ TIMEOUT OPERACIONAL ============ */
+.timeoutBadge{display:inline-flex;align-items:center;gap:4px;margin-left:8px;font-size:10px;font-weight:700;color:var(--amarillo-precaucion);background:rgba(255,204,0,.12);border:1px solid var(--amarillo-precaucion);border-radius:20px;padding:3px 7px;white-space:nowrap}
 
 /* ============ KPIs (ficha informativa) ============ */
 .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
 .kpi{background:var(--negro-panel);border:1px solid var(--borde-sutil);border-radius:8px;padding:16px;display:flex;gap:13px;align-items:center}
-.kpiIcon{width:37px;height:37px;border-radius:8px;background:rgba(44,154,246,.15);color:var(--azul-operativo);display:grid;place-items:center;flex-shrink:0}
+.kpiIcon{width:37px;height:37px;border-radius:8px;background:color-mix(in srgb, var(--acento) 15%, transparent);color:var(--acento);display:grid;place-items:center;flex-shrink:0}
+/* En tema claro los cuadrados de icono son solidos (rojo institucional
+   con icono blanco), como los bloques de bomberos.cl -- en oscuro se
+   mantiene el estilo de insignia suave de siempre. */
+html[data-theme="light"] .kpiIcon,html[data-theme="light"] .activityIcon{background:var(--acento);color:var(--on-accent)}
 .kpiIcon svg{width:19px}
 .kpi span{display:block;color:var(--gris-tenue);font-size:11px;text-transform:uppercase;letter-spacing:.5px;font-weight:600}
 .kpi strong{display:block;font-size:23px;font-weight:700;color:var(--blanco);margin:3px 0}
@@ -74,7 +215,7 @@ header p{font-size:12px;color:var(--gris-tenue);margin:5px 0 0}
 .mapCard .cardHead{flex-shrink:0}
 .mapControls{display:flex;gap:6px}
 .mapControls button{background:var(--negro-tarjeta);color:var(--gris-texto);border:1px solid var(--borde-sutil);border-radius:6px;width:31px;height:29px;display:grid;place-items:center;cursor:pointer}
-.mapControls button:hover{border-color:var(--azul-operativo);color:var(--azul-operativo)}
+.mapControls button:hover{border-color:var(--acento);color:var(--acento)}
 .mapCard #map{flex:1;min-height:300px}
 /* OSM estandar no tiene una variante oscura gratuita sin API key (se
    probo CARTO Dark Matter, ahora la exige). El filtro se aplica SOLO al
@@ -102,7 +243,7 @@ header p{font-size:12px;color:var(--gris-tenue);margin:5px 0 0}
 .details p{font-size:12px;color:var(--gris-texto);display:flex;gap:7px;align-items:center;margin:8px 0;line-height:1.5}
 .details b{color:var(--blanco);font-weight:600}
 .recHead{display:flex;justify-content:space-between;align-items:start}
-.recHead span{display:block;color:var(--azul-operativo);font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase}
+.recHead span{display:block;color:var(--acento);font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase}
 .recHead small{display:block;color:var(--gris-tenue);font-size:11px;margin-top:3px}
 .score{font-size:20px;font-weight:700}
 .score small{display:inline;color:var(--gris-tenue);font-weight:400}
@@ -118,13 +259,13 @@ header p{font-size:12px;color:var(--gris-tenue);margin:5px 0 0}
 /* ============ BOTONES ============ */
 .actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .actions button{border-radius:6px;padding:11px;border:0;font-size:12px;font-weight:700;letter-spacing:.3px;cursor:pointer;transition:background .15s}
-.assign{background:var(--rojo-alerta);color:var(--blanco)}
+.assign{background:var(--rojo-alerta);color:var(--on-accent)}
 .assign:hover{background:var(--rojo-hover)}
 .reject{background:var(--negro-panel);color:var(--gris-texto);border:1px solid var(--borde-sutil)!important}
 .reject:hover{background:#0f1013}
-.linkBtn{border:0;background:none;color:var(--azul-operativo);font-size:11px;font-weight:600;cursor:pointer}
-.locateBtn{margin:12px 0 10px;display:flex;align-items:center;gap:6px;border:1px solid var(--borde-sutil);background:var(--negro-panel);color:var(--azul-operativo);border-radius:6px;padding:8px 10px;font-size:11px;font-weight:700;cursor:pointer}
-.locateBtn:hover{border-color:var(--azul-operativo);background:rgba(44,154,246,.08)}
+.linkBtn{border:0;background:none;color:var(--acento);font-size:11px;font-weight:600;cursor:pointer}
+.locateBtn{margin:12px 0 10px;display:flex;align-items:center;gap:6px;border:1px solid var(--borde-sutil);background:var(--negro-panel);color:var(--acento);border-radius:6px;padding:8px 10px;font-size:11px;font-weight:700;cursor:pointer}
+.locateBtn:hover{border-color:var(--acento);background:color-mix(in srgb, var(--acento) 8%, transparent)}
 
 /* ============ RECURSOS ============ */
 .resourcesCard,.activity{padding-bottom:14px}
@@ -142,7 +283,7 @@ header p{font-size:12px;color:var(--gris-tenue);margin:5px 0 0}
 .mlBadge{background:rgba(44,154,246,.15);color:var(--azul-operativo)!important;padding:5px 8px;border-radius:4px;font-weight:700;font-size:11px}
 #heatmap{flex:1;min-height:300px;filter:brightness(.6) contrast(1.05)}
 .alertsCard{height:465px;display:flex;flex-direction:column}
-.alertsCard .alertsList{flex:1;overflow-y:auto}
+.alertsBody{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column}
 .singleRow{margin-top:16px}
 .alertsList{padding:10px 14px 2px;display:flex;flex-direction:column;gap:8px}
 .alertRow{display:flex;gap:7px;align-items:flex-start;font-size:11px;color:var(--gris-texto);line-height:1.5;border-radius:6px;padding:5px}
@@ -173,7 +314,7 @@ header p{font-size:12px;color:var(--gris-tenue);margin:5px 0 0}
 .liveText{color:var(--verde-disponible)!important;font-size:11px}
 .activityRows{padding:0 20px}
 .activityRow{display:flex;align-items:center;gap:11px;padding:12px 2px;border-top:1px solid var(--borde-sutil)}
-.activityIcon{width:29px;height:29px;border-radius:6px;background:rgba(44,154,246,.12);color:var(--azul-operativo);display:grid;place-items:center;flex-shrink:0}
+.activityIcon{width:29px;height:29px;border-radius:6px;background:color-mix(in srgb, var(--acento) 12%, transparent);color:var(--acento);display:grid;place-items:center;flex-shrink:0}
 .activityIcon svg{width:15px}
 .activityRow b{display:block;font-size:12px;color:var(--blanco);font-weight:600}
 .activityRow span{display:block;color:var(--gris-tenue);font-size:11px;margin-top:3px}
@@ -190,13 +331,17 @@ header p{font-size:12px;color:var(--gris-tenue);margin:5px 0 0}
 .sectionCard{margin-bottom:16px}
 .sectionGrid{display:flex;flex-direction:column;gap:16px}
 .emptyState{padding:16px 4px;color:var(--gris-tenue);font-size:12px}
+.filterRow{display:flex;flex-wrap:wrap;gap:8px;padding:0 20px 14px}
+.filterRow input,.filterRow select{background:var(--negro-panel);color:var(--gris-texto);border:1px solid var(--borde-sutil);border-radius:6px;padding:7px 10px;font-size:12px;font-family:inherit}
+.filterRow input{flex:1;min-width:160px}
 .tableWrap{overflow-x:auto;padding:0 20px 16px}
 .dataTable{width:100%;border-collapse:collapse;font-size:12px}
 .dataTable th{text-align:left;color:var(--gris-tenue);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:1px;padding:9px 10px;border-bottom:1px solid var(--borde-sutil);white-space:nowrap}
 .dataTable td{padding:10px;border-bottom:1px solid var(--borde-sutil);color:var(--gris-texto);white-space:nowrap}
+.dataTable td.wrap{white-space:normal;max-width:260px}
 .dataTable tr:last-child td{border-bottom:none}
 .dataTable tr:hover td{background:var(--negro-panel)}
-.resIconCell{color:var(--azul-operativo)}
+.resIconCell{color:var(--acento)}
 
 /* Pastillas: clave radial (10-0, 10-4...) y estado 6-X */
 .prio,.estado{padding:4px 8px;border-radius:6px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;background:var(--negro-panel);border:1px solid}
@@ -211,13 +356,22 @@ header p{font-size:12px;color:var(--gris-tenue);margin:5px 0 0}
 .estado-9{color:var(--rojo-alerta);border-color:var(--rojo-alerta)}
 
 .mapaFull .mapaFullWrap #map,.mapaFull .mapaFullWrap #heatmap{height:420px;border-radius:0 0 12px 12px}
+/* Leaflet trae sus propios z-index internos (200-800 para tiles, marcadores,
+   controles, popups) que por defecto quedan MAS ALTOS que el menu movil
+   (.sidebar z-index:40) y su fondo oscuro (.navBackdrop z-index:35) -- sin
+   esto, al abrir el menu en una pantalla chica, el mapa se dibuja encima
+   del menu en vez de quedar debajo. Al ponerle su propio z-index bajo al
+   contenedor, todos esos valores internos de Leaflet quedan "atrapados"
+   dentro de este contexto de apilamiento, sin poder pasar por encima de
+   nada que este afuera con un z-index mayor. */
+#map,#heatmap{position:relative;z-index:1}
 
 /* ============ CONFIGURACION ============ */
 .configBody{padding:0 20px 20px;display:flex;flex-direction:column;gap:16px}
 .configRow{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--gris-texto)}
 .configRow select,.configRow input:not([type="checkbox"]){background:var(--negro-panel);color:var(--gris-texto);border:1px solid var(--borde-sutil);border-radius:6px;padding:7px 9px;font-size:12px;font-family:inherit}
 .configRow input:not([type="checkbox"]){flex:1;min-width:0}
-.configRow input[type="checkbox"]{accent-color:var(--azul-operativo)}
+.configRow input[type="checkbox"]{accent-color:var(--acento)}
 .configNote{font-size:12px;color:var(--gris-tenue)}
 .logoutBtn{color:var(--rojo-alerta);border-color:#ff3b3055}
 .logoutBtn:hover{background:#ff3b3015}
@@ -232,15 +386,15 @@ header p{font-size:12px;color:var(--gris-tenue);margin:5px 0 0}
 .loginSubtitle{color:var(--blanco);font-size:15px;font-weight:700;margin:0 0 20px}
 .loginLabel{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gris-tenue);font-weight:600;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.4px}
 .loginInput{width:100%;box-sizing:border-box;background:var(--negro-panel);border:1px solid var(--borde-sutil);border-radius:7px;padding:10px 12px;color:var(--blanco);font-size:13px;font-family:inherit}
-.loginInput:focus{outline:none;border-color:var(--azul-operativo)}
+.loginInput:focus{outline:none;border-color:var(--acento)}
 .loginError{color:var(--rojo-alerta);font-size:12px;margin:12px 0 0;line-height:1.4}
-.loginSubmit{width:100%;margin-top:20px;padding:11px;border:0;border-radius:7px;background:var(--azul-operativo);color:var(--blanco);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit}
+.loginSubmit{width:100%;margin-top:20px;padding:11px;border:0;border-radius:7px;background:var(--acento);color:var(--on-accent);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit}
 .loginSubmit:disabled{opacity:.6;cursor:default}
 .loginSubmit:not(:disabled):hover{filter:brightness(1.1)}
 .loginFooter{margin:20px 0 0;font-size:11px;color:var(--gris-tenue);line-height:1.5;text-align:center}
 
 /* ============ MARCADORES DE MAPA ============ */
-.emergency-marker div{width:40px;height:40px;border-radius:50%;background:var(--rojo-alerta);color:var(--blanco);display:grid;place-items:center;font-size:23px;font-weight:800;border:3px solid #ff9995;box-shadow:0 0 0 12px #ff3b3025,0 0 0 25px #ff3b3012;animation:pulso-alerta 1.8s ease-in-out infinite}
+.emergency-marker div{width:40px;height:40px;border-radius:50%;background:var(--rojo-alerta);color:var(--on-accent);display:grid;place-items:center;font-size:23px;font-weight:800;border:3px solid #ff9995;box-shadow:0 0 0 12px #ff3b3025,0 0 0 25px #ff3b3012;animation:pulso-alerta 1.8s ease-in-out infinite}
 .emergency-marker-asignada div{width:34px;height:34px;font-size:17px;background:var(--azul-operativo);border-color:#8fc7fb;box-shadow:0 0 0 10px #2c9af625,0 0 0 20px #2c9af612;animation:none}
 @keyframes pulso-alerta{0%,100%{box-shadow:0 0 0 12px #ff3b3025,0 0 0 25px #ff3b3012}50%{box-shadow:0 0 0 16px #ff3b3038,0 0 0 32px #ff3b3018}}
 /* Vehiculo: el icono en si (SVG + insignia) ya dibuja su propia forma y
@@ -265,7 +419,9 @@ header p{font-size:12px;color:var(--gris-tenue);margin:5px 0 0}
 @media(max-width:720px){
   .sidebar{display:flex;transform:translateX(-100%);box-shadow:8px 0 30px #0008}
   .sidebar.open{transform:translateX(0)}
-  .main{margin-left:0;width:100%;padding:16px}
+  .main,.main.sidebarCollapsed{margin-left:0;width:100%;padding:16px}
+  .cuartelFilterRow{flex-wrap:wrap}
+  .cuartelFilterRow select{min-width:0;flex:1}
   .mobileMenu{display:grid;place-items:center;margin-right:10px;width:32px;height:32px;flex-shrink:0}
   .navBackdrop{display:block;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:35}
   .headerActions .live{display:none}
