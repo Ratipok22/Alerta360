@@ -1,10 +1,11 @@
 import os
-from datetime import datetime
-from typing import Literal
+import threading
+from datetime import datetime, timezone
+from typing import Any, Literal
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -214,6 +215,46 @@ def route(origen_lat: float, origen_lng: float, destino_lat: float, destino_lng:
     except (httpx.HTTPError, KeyError, ValueError, IndexError):
         return fallback
 
+
+# Estado compartido de la simulacion en curso (recursos, cola de
+# emergencias, historial, metricas), publicado por el navegador del
+# operador admin que esta manejando el despacho y consultado por las
+# demas cuentas (rol visualizador) para ver lo mismo en vivo, en vez de
+# simular cada una por su cuenta con datos que irian divergiendo.
+#
+# Guardado 100% en memoria (no en base de datos): un reinicio del backend
+# lo borra por completo, tal como se pidio -- cada sesion vuelve a
+# arrancar desde el estado inicial simulado.
+_estado_compartido: dict[str, Any] | None = None
+_estado_lock = threading.Lock()
+
+@app.post("/state")
+def publicar_estado(payload: dict[str, Any] = Body(...), usuario: Usuario = Depends(requiere_admin)):
+    """El operador admin que esta manejando el despacho publica aca su
+    estado actual (recursos, cola, historial, metricas) cada pocos
+    segundos. No se valida el contenido a detalle (es un espejo de lo que
+    ya calculo y valido el propio frontend del admin) -- este endpoint
+    solo lo guarda y le agrega quien y cuando lo publico."""
+    global _estado_compartido
+    with _estado_lock:
+        _estado_compartido = {
+            **payload,
+            "publicadoPor": usuario.nombre,
+            "publicadoEn": datetime.now(timezone.utc).isoformat(),
+        }
+    return {"ok": True}
+
+@app.get("/state")
+def obtener_estado(usuario: Usuario = Depends(usuario_actual)):
+    """Cualquier cuenta autenticada (admin o visualizador) puede leer el
+    ultimo estado publicado. Si nadie ha publicado aun (recien reiniciado
+    el backend, o el admin todavia no abre su sesion), devuelve
+    publicado=False para que el frontend sepa que no hay datos en vivo
+    todavia y no lo confunda con una cola de emergencias vacia real."""
+    with _estado_lock:
+        if _estado_compartido is None:
+            return {"publicado": False}
+        return {"publicado": True, **_estado_compartido}
 
 @app.post("/assignment/recommend")
 def recommend(emergency: Emergency, usuario: Usuario = Depends(requiere_admin)):
