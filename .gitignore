@@ -1,0 +1,11 @@
+**/.venv/
+**/__pycache__/
+*.pyc
+**/node_modules/
+**/dist/
+**/routing/data/*.osm
+**/routing/data/*.osrm*
+
+# Secretos locales -- nunca se suben (ver docker/.env.example para la plantilla)
+.env
+**/.env
