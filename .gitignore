@@ -13,4 +13,4 @@
 # Secretos locales -- nunca se suben (ver docker/.env.example para la plantilla)
 .env
 **/.env
-src/backend/ml/artifacts/*.joblib
+src/backend/ml/artifacts/demand_model.joblib
