@@ -80,7 +80,7 @@ html[data-theme="light"] #map .leaflet-tile-pane{filter:none}
 /* Botones tipo pildora en tema claro, como los CTA de bomberos.cl (rojo
    institucional, esquinas muy redondeadas). En oscuro se mantiene el
    estilo mas cuadrado de siempre. */
-html[data-theme="light"] .actions button{border-radius:999px}
+html[data-theme="light"] .actions button{border-radius:6px}
 /* Los campos de login se notan mas: fondo gris (en vez del mismo blanco de
    la tarjeta) y borde mas marcado, para que se vea claramente donde hay
    que escribir. Al enfocar, se ponen blancos con borde rojo (ya definido
@@ -304,11 +304,27 @@ html[data-theme="light"] .kpiIcon-azul{
 
 /* ============ BOTONES ============ */
 .actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.actions button{border-radius:6px;padding:13px;border:0;font-size:14px;font-weight:700;letter-spacing:.3px;cursor:pointer;transition:background .15s}
-.assign{background:var(--rojo-alerta);color:var(--on-accent)}
+.actions button{border-radius:6px;padding:13px;border:0;font-size:14px;font-weight:700;letter-spacing:.3px;cursor:pointer;transition:background .15s,border-color .15s,color .15s,transform .15s}
+
+.assign{background:var(--rojo-alerta);color:#FFFFFF}
 .assign:hover{background:var(--rojo-hover)}
+
+html[data-theme="dark"] .assign{background:var(--azul-operativo);color:#FFFFFF}
+html[data-theme="dark"] .assign:hover{background:#1B7FCF}
+
 .reject{background:var(--negro-panel);color:var(--gris-texto);border:1px solid var(--borde-sutil)!important}
-.reject:hover{background:#0f1013}
+
+/* ============ RECHAZAR · MODO CLARO ============ */
+html[data-theme="light"] .reject{background:#FFFFFF;color:#3B4652;border-color:#D5DDE4!important}
+html[data-theme="light"] .reject:hover{background:color-mix(in srgb, var(--acento) 8%, transparent);border-color:var(--acento)!important;color:var(--acento)}
+
+/* ============ RECHAZAR · MODO OSCURO ============ */
+html[data-theme="dark"] .reject{background:#111214;color:#D5DCE3;border-color:#30343A!important}
+html[data-theme="dark"] .reject:hover{background:color-mix(in srgb, var(--rojo-alerta) 8%, transparent);border-color:var(--rojo-alerta)!important;color:var(--rojo-alerta)}
+
+/* ============ ESTADO ACTIVO ============ */
+.reject:active,.assign:active{transform:translateY(1px)}
+
 .linkBtn{border:0;background:none;color:var(--acento);font-size:13px;font-weight:600;cursor:pointer}
 .locateBtn{margin:12px 0 10px;display:flex;align-items:center;gap:7px;border:1px solid var(--borde-sutil);background:var(--negro-panel);color:var(--acento);border-radius:6px;padding:10px 12px;font-size:13px;font-weight:700;cursor:pointer}
 .locateBtn:hover{border-color:var(--acento);background:color-mix(in srgb, var(--acento) 8%, transparent)}
@@ -630,4 +646,659 @@ html[data-theme="light"] .kpiIcon-azul{
 
 .predictiveMapButton:active{
   transform:translateY(0);
+}
+
+
+
+/* =========================================================
+   SOPORTE - ESTILO GENERAL DEL SISTEMA
+   ========================================================= */
+
+.supportSection{
+  display:flex;
+  flex-direction:column;
+  gap:22px;
+}
+
+
+/* =========================================================
+   CASILLAS PRINCIPALES
+   ========================================================= */
+
+.supportPanel{
+  padding:0 !important;
+  overflow:hidden;
+
+  border:2px solid var(--acento);
+  border-radius:14px;
+
+  background:var(--negro-panel);
+}
+
+
+/* =========================================================
+   ENCABEZADO
+   ========================================================= */
+
+.supportPanelHead{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+
+  min-height:60px;
+  padding:14px 24px;
+
+  background:var(--acento);
+  color:var(--on-accent);
+}
+
+.supportPanelHead h2{
+  margin:0 0 4px;
+
+  color:var(--on-accent);
+  font-size:17px;
+  font-weight:700;
+}
+
+.supportPanelHead p{
+  margin:0;
+
+  color:var(--on-accent);
+  font-size:13px;
+  opacity:.9;
+}
+
+.supportPanelHead svg{
+  color:var(--on-accent);
+  flex-shrink:0;
+}
+
+
+/* =========================================================
+   CONTENIDO
+   ========================================================= */
+
+.supportPanelBody{
+  padding:22px 24px 24px;
+  background:var(--negro-panel);
+}
+
+
+/* =========================================================
+   CONTACTO
+   ========================================================= */
+
+.supportContactGrid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:16px;
+}
+
+.supportContactCard{
+  display:flex;
+  align-items:center;
+  gap:14px;
+
+  padding:12px 4px;
+
+  background:transparent;
+  border:0;
+}
+
+.supportContactIcon{
+  width:40px;
+  height:40px;
+
+  display:grid;
+  place-items:center;
+
+  flex-shrink:0;
+
+  border-radius:7px;
+
+  background:var(--acento);
+  color:var(--on-accent);
+}
+
+.supportContactCard div:last-child{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+
+.supportContactCard span{
+  color:var(--gris-tenue);
+  font-size:13px;
+}
+
+.supportContactCard strong{
+  color:var(--blanco);
+  font-size:14px;
+}
+
+
+/* =========================================================
+   FORMULARIO
+   ========================================================= */
+
+.supportForm{
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+}
+
+
+/* =========================================================
+   CAMPOS DEL FORMULARIO
+   ========================================================= */
+
+.supportForm label{
+  display:flex;
+  flex-direction:column;
+  gap:9px;
+
+  padding:13px;
+
+  border:1px solid var(--borde-sutil);
+  border-radius:8px;
+
+  background:var(--negro-panel);
+
+  color:var(--gris-texto);
+
+  font-size:14px;
+  font-weight:600;
+}
+
+
+/* =========================================================
+   FILAS DE DOS COLUMNAS
+   ========================================================= */
+
+.supportForm .formGrid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:14px;
+
+  width:100%;
+}
+
+
+/* =========================================================
+   INPUTS / SELECTS / TEXTAREA
+   ========================================================= */
+
+.supportForm input,
+.supportForm select,
+.supportForm textarea{
+  width:100%;
+  box-sizing:border-box;
+
+  border:1px solid #c7d0d9;
+  border-radius:7px;
+
+  background:#e9eef2;
+  color:#24364d;
+
+  font-family:inherit;
+  font-size:15px;
+
+  outline:none;
+
+  transition:
+    border-color .15s,
+    box-shadow .15s,
+    background .15s;
+}
+
+
+/* =========================================================
+   INPUTS Y SELECTS
+   ========================================================= */
+
+.supportForm input:not([type="file"]),
+.supportForm select{
+  min-height:44px;
+  padding:10px 12px;
+}
+
+.supportForm select{
+  cursor:pointer;
+}
+
+
+/* =========================================================
+   ÁREA DE DESCRIPCIÓN
+   ========================================================= */
+
+.supportForm textarea{
+  min-height:125px;
+  padding:11px 12px;
+
+  line-height:1.5;
+  resize:vertical;
+}
+
+
+/* =========================================================
+   PLACEHOLDERS
+   ========================================================= */
+
+.supportForm input::placeholder,
+.supportForm textarea::placeholder{
+  color:#64748b;
+  font-size:14px;
+}
+
+
+/* =========================================================
+   FOCO
+   ========================================================= */
+
+.supportForm input:focus,
+.supportForm select:focus,
+.supportForm textarea:focus{
+  border-color:var(--acento);
+
+  box-shadow:
+    0 0 0 2px color-mix(
+      in srgb,
+      var(--acento) 15%,
+      transparent
+    );
+}
+
+
+/* =========================================================
+   ARCHIVO ADJUNTO
+   ========================================================= */
+
+.supportForm input[type="file"]{
+  min-height:44px;
+  padding:7px 9px;
+
+  cursor:pointer;
+
+  font-size:14px;
+
+  border:1px solid #c7d0d9;
+  background:#e9eef2;
+}
+
+.supportForm input[type="file"]::file-selector-button{
+  margin-right:10px;
+
+  padding:8px 13px;
+
+  border:1px solid #c0cad4;
+  border-radius:6px;
+
+  background:#f7f9fb;
+  color:#24364d;
+
+  font-family:inherit;
+  font-size:14px;
+
+  cursor:pointer;
+}
+
+.supportForm input[type="file"]::file-selector-button:hover{
+  border-color:var(--acento);
+}
+
+
+/* =========================================================
+   ARCHIVO SELECCIONADO
+   ========================================================= */
+
+.supportFile{
+  display:flex;
+  align-items:center;
+  gap:8px;
+
+  padding:9px 11px;
+
+  border:1px dashed #b8c3ce;
+  border-radius:7px;
+
+  background:#f1f4f7;
+
+  color:#526579;
+  font-size:14px;
+}
+
+.supportFile svg{
+  color:var(--acento);
+}
+
+
+/* =========================================================
+   BOTÓN GENERAR TICKET
+   ========================================================= */
+
+.supportActions{
+  display:flex;
+  justify-content:flex-end;
+
+  margin-top:2px;
+}
+
+.supportSubmit{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+
+  min-width:175px;
+
+  padding:11px 20px;
+
+  border:0;
+  border-radius:7px;
+
+  background:var(--acento);
+  color:var(--on-accent);
+
+  font-family:inherit;
+  font-size:14px;
+  font-weight:700;
+
+  cursor:pointer;
+
+  transition:
+    opacity .2s,
+    transform .15s;
+}
+
+.supportSubmit:hover{
+  opacity:.9;
+}
+
+.supportSubmit:active{
+  transform:translateY(1px);
+}
+
+
+/* =========================================================
+   SIN TICKETS
+   ========================================================= */
+
+.emptyState{
+  min-height:130px;
+
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+
+  gap:8px;
+
+  border:1px dashed var(--borde-sutil);
+  border-radius:7px;
+
+  text-align:center;
+
+  color:var(--gris-tenue);
+}
+
+.emptyState svg{
+  color:var(--acento);
+}
+
+.emptyState strong{
+  color:var(--blanco);
+  font-size:15px;
+}
+
+.emptyState span{
+  font-size:13px;
+}
+
+
+/* =========================================================
+   TICKETS GENERADOS
+   ========================================================= */
+
+.ticketList{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+
+.ticketCard{
+  padding:15px 16px;
+
+  border:1px solid var(--borde-sutil);
+  border-radius:7px;
+
+  background:var(--negro-tarjeta);
+}
+
+.ticketTop{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+
+  gap:10px;
+
+  margin-bottom:9px;
+}
+
+.ticketTop strong{
+  color:var(--acento);
+  font-size:14px;
+}
+
+.ticketTop span{
+  padding:5px 9px;
+
+  border:1px solid var(--borde-sutil);
+  border-radius:999px;
+
+  color:var(--gris-tenue);
+
+  font-size:11px;
+  font-weight:700;
+  text-transform:uppercase;
+}
+
+.ticketCard h3{
+  margin:0 0 7px;
+
+  color:var(--blanco);
+  font-size:15px;
+}
+
+.ticketCard p{
+  margin:0 0 11px;
+
+  color:var(--gris-tenue);
+  font-size:13px;
+  line-height:1.5;
+}
+
+.ticketMeta{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+
+  margin-bottom:8px;
+}
+
+.ticketMeta span{
+  padding:5px 8px;
+
+  border:1px solid var(--borde-sutil);
+  border-radius:5px;
+
+  color:var(--gris-tenue);
+  font-size:11px;
+}
+
+.ticketAttachment{
+  display:flex;
+  align-items:center;
+  gap:5px;
+
+  margin-bottom:7px;
+
+  color:var(--gris-tenue);
+  font-size:12px;
+}
+
+.ticketAttachment svg{
+  color:var(--acento);
+}
+
+.ticketCard small{
+  color:var(--gris-tenue);
+  font-size:11px;
+}
+
+
+/* =========================================================
+   MODO CLARO
+   ========================================================= */
+
+html[data-theme="light"] .supportPanel{
+  background:#fff;
+  border-color:var(--acento);
+}
+
+html[data-theme="light"] .supportPanelBody{
+  background:#fff;
+}
+
+html[data-theme="light"] .supportForm label{
+  background:#fff;
+}
+
+html[data-theme="light"] .supportForm input,
+html[data-theme="light"] .supportForm select,
+html[data-theme="light"] .supportForm textarea{
+  background:#e9eef2;
+  color:#24364d;
+  border-color:#c7d0d9;
+}
+
+html[data-theme="light"] .supportForm input[type="file"]{
+  background:#e9eef2;
+  border-color:#c7d0d9;
+}
+
+html[data-theme="light"] .supportForm input[type="file"]::file-selector-button{
+  background:#f7f9fb;
+  color:#24364d;
+  border-color:#c0cad4;
+}
+
+html[data-theme="light"] .supportFile{
+  background:#f1f4f7;
+  border-color:#b8c3ce;
+  color:#526579;
+}
+
+
+/* =========================================================
+   MODO OSCURO
+   ESTILO ALINEADO CON EL DASHBOARD
+   ========================================================= */
+
+html[data-theme="dark"] .supportPanel{
+  background:#18191c;
+  border-color:var(--borde-sutil);
+}
+
+html[data-theme="dark"] .supportPanelBody{
+  background:#18191c;
+}
+
+html[data-theme="dark"] .supportForm label{
+  background:#18191c;
+  border-color:#2b2f34;
+}
+
+html[data-theme="dark"] .supportForm input,
+html[data-theme="dark"] .supportForm select,
+html[data-theme="dark"] .supportForm textarea{
+  background:#111214;
+  color:#f1f5f9;
+
+  border-color:#30343a;
+}
+
+html[data-theme="dark"] .supportForm input:hover,
+html[data-theme="dark"] .supportForm select:hover,
+html[data-theme="dark"] .supportForm textarea:hover{
+  border-color:#424850;
+}
+
+html[data-theme="dark"] .supportForm input::placeholder,
+html[data-theme="dark"] .supportForm textarea::placeholder{
+  color:#8b949e;
+}
+
+html[data-theme="dark"] .supportForm input[type="file"]{
+  background:#111214;
+  border-color:#30343a;
+  color:#f1f5f9;
+}
+
+html[data-theme="dark"] .supportForm input[type="file"]::file-selector-button{
+  background:#1d2024;
+  color:#f1f5f9;
+  border-color:#383e45;
+}
+
+html[data-theme="dark"] .supportForm input[type="file"]::file-selector-button:hover{
+  border-color:var(--acento);
+}
+
+html[data-theme="dark"] .supportFile{
+  background:#1d2024;
+  border-color:#383e45;
+  color:#aeb8c3;
+}
+
+html[data-theme="dark"] .ticketCard{
+  background:#18191c;
+  border-color:#2b2f34;
+}
+
+html[data-theme="dark"] .emptyState{
+  border-color:#383e45;
+}
+
+
+/* =========================================================
+   RESPONSIVE
+   ========================================================= */
+
+@media(max-width:900px){
+
+  .supportContactGrid,
+  .supportForm .formGrid{
+    grid-template-columns:1fr;
+  }
+
+}
+
+@media(max-width:600px){
+
+  .supportPanelHead{
+    padding:14px 18px;
+  }
+
+  .supportPanelBody{
+    padding:18px;
+  }
+
+  .supportActions{
+    justify-content:stretch;
+  }
+
+  .supportSubmit{
+    width:100%;
+  }
+
 }

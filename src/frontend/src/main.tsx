@@ -3,8 +3,7 @@ import {createRoot} from 'react-dom/client';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
-import {AlertTriangle, BarChart3, Bell, Building2, CheckCircle2, Clock3, Crosshair, Droplet, Eye, Flame, HardHat, History, Info, Layers3, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Radio, RefreshCw, Settings, ShieldCheck, Sun, Truck, TreePine, Users, XCircle, Zap} from 'lucide-react';
-import logoDark from "./assets/logo-alerta360-dark.png";
+import {AlertTriangle, BarChart3, Bell, Building2, CheckCircle2, Clock3, Crosshair, Droplet, Eye, Flame, HardHat, History, Info, Layers3, LifeBuoy, Lightbulb, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Paperclip, Phone, Radio, RefreshCw, Send, Settings, ShieldCheck, Sun, Ticket, Truck, TreePine, Users, XCircle, Zap, Bug} from 'lucide-react';import logoDark from "./assets/logo-alerta360-dark.png";
 import logoLight from "./assets/logo-alerta360-light.png";
 
 // En localhost apunta al backend local de siempre. Si la app se abre a
@@ -1031,6 +1030,306 @@ function ReportesView({historial}:{historial:HistorialEntry[]}){
   </div>;
 }
 
+function SoporteView(){
+  type Ticket = {
+    id:string;
+    tipo:string;
+    apartado:string;
+    titulo:string;
+    descripcion:string;
+    estado:string;
+    fecha:string;
+    archivo:string;
+  };
+
+  const [tickets,setTickets] = useState<Ticket[]>([]);
+  const [tipo,setTipo] = useState('Bug');
+  const [apartado,setApartado] = useState('Dashboard');
+  const [titulo,setTitulo] = useState('');
+  const [descripcion,setDescripcion] = useState('');
+  const [archivo,setArchivo] = useState<File|null>(null);
+
+  const crearTicket = () => {
+    if(!titulo.trim() || !descripcion.trim()){
+      alert('Completa el título y la descripción del problema.');
+      return;
+    }
+
+    const nuevoTicket:Ticket = {
+      id:`SOP-${String(tickets.length + 1).padStart(4,'0')}`,
+      tipo,
+      apartado,
+      titulo,
+      descripcion,
+      estado:'Pendiente',
+      fecha:new Date().toLocaleString('es-CL'),
+      archivo:archivo ? archivo.name : ''
+    };
+
+    setTickets(prev => [...prev,nuevoTicket]);
+
+    setTitulo('');
+    setDescripcion('');
+    setArchivo(null);
+
+    alert(`Ticket ${nuevoTicket.id} creado correctamente.`);
+  };
+
+  return (
+    <div className="sectionGrid supportSection">
+
+      {/* =========================
+          CONTACTO DE SOPORTE
+          ========================= */}
+
+      <section className="panel supportPanel">
+
+        <div className="supportPanelHead">
+          <div>
+            <h2>Contacto de soporte</h2>
+            <p>Asistencia técnica y atención rápida</p>
+          </div>
+
+          <LifeBuoy size={20}/>
+        </div>
+
+        <div className="supportPanelBody">
+
+          <div className="supportContactGrid">
+
+            <div className="supportContactCard">
+              <div className="supportContactIcon">
+                <Mail size={20}/>
+              </div>
+
+              <div>
+                <span>Correo de asistencia</span>
+                <strong>soporte@alerta360.cl</strong>
+              </div>
+            </div>
+
+            <div className="supportContactCard">
+              <div className="supportContactIcon">
+                <Phone size={20}/>
+              </div>
+
+              <div>
+                <span>Anexo de asistencia rápida</span>
+                <strong>Anexo 1234</strong>
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+
+      </section>
+
+
+      {/* =========================
+          REPORTAR INCIDENCIA
+          ========================= */}
+
+      <section className="panel supportPanel">
+
+        <div className="supportPanelHead">
+          <div>
+            <h2>Reportar incidencia</h2>
+            <p>Errores, bugs y propuestas de mejora</p>
+          </div>
+
+          <Bug size={20}/>
+        </div>
+
+        <div className="supportPanelBody">
+
+          <div className="supportForm">
+
+            <div className="formGrid">
+
+              <label>
+                Tipo de solicitud
+
+                <select
+                  value={tipo}
+                  onChange={e=>setTipo(e.target.value)}
+                >
+                  <option>Bug</option>
+                  <option>Problema técnico</option>
+                  <option>Sugerencia</option>
+                  <option>Solicitud de mejora</option>
+                </select>
+              </label>
+
+
+              <label>
+                Apartado afectado
+
+                <select
+                  value={apartado}
+                  onChange={e=>setApartado(e.target.value)}
+                >
+                  <option>Dashboard</option>
+                  <option>Emergencias</option>
+                  <option>Recursos</option>
+                  <option>Historial</option>
+                  <option>Reportes</option>
+                  <option>Soporte</option>
+                  <option>Configuración</option>
+                  <option>Otro</option>
+                </select>
+              </label>
+
+            </div>
+
+
+            <label>
+              Título del reporte
+
+              <input
+                type="text"
+                value={titulo}
+                onChange={e=>setTitulo(e.target.value)}
+                placeholder="Ej: No se muestran las unidades disponibles"
+              />
+            </label>
+
+
+            <label>
+              Descripción
+
+              <textarea
+                value={descripcion}
+                onChange={e=>setDescripcion(e.target.value)}
+                placeholder="Describe detalladamente el problema o propuesta..."
+                rows={5}
+              />
+            </label>
+
+
+              <label>
+                Captura o archivo
+
+                <input
+                  type="file"
+                  accept="image/*,.pdf"
+                  onChange={e=>setArchivo(e.target.files?.[0] || null)}
+                />
+              </label>
+
+
+            {archivo && (
+              <div className="supportFile">
+                <Paperclip size={16}/>
+                <span>{archivo.name}</span>
+              </div>
+            )}
+
+
+            <div className="supportActions">
+
+              <button
+                className="supportSubmit"
+                onClick={crearTicket}
+              >
+                <Ticket size={17}/>
+                Generar ticket
+              </button>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      </section>
+
+
+      {/* =========================
+          TICKETS GENERADOS
+          ========================= */}
+
+      <section className="panel supportPanel">
+
+        <div className="supportPanelHead">
+          <div>
+            <h2>Tickets generados</h2>
+            <p>Seguimiento de solicitudes de soporte y mantenimiento</p>
+          </div>
+
+          <Ticket size={20}/>
+        </div>
+
+
+        <div className="supportPanelBody">
+
+          {tickets.length === 0 ? (
+
+            <div className="emptyState">
+              <LifeBuoy size={30}/>
+              <strong>No hay tickets registrados</strong>
+              <span>
+                Los tickets generados desde el formulario aparecerán aquí.
+              </span>
+            </div>
+
+          ) : (
+
+            <div className="ticketList">
+
+              {tickets.map(ticket => (
+
+                <div className="ticketCard" key={ticket.id}>
+
+                  <div className="ticketTop">
+
+                    <strong>{ticket.id}</strong>
+
+                    <span>{ticket.estado}</span>
+
+                  </div>
+
+
+                  <h3>{ticket.titulo}</h3>
+
+                  <p>{ticket.descripcion}</p>
+
+
+                  <div className="ticketMeta">
+
+                    <span>{ticket.tipo}</span>
+
+                    <span>{ticket.apartado}</span>
+
+                  </div>
+
+
+                  {ticket.archivo && (
+                    <div className="ticketAttachment">
+                      <Paperclip size={13}/>
+                      {ticket.archivo}
+                    </div>
+                  )}
+
+
+                  <small>{ticket.fecha}</small>
+
+                </div>
+
+              ))}
+
+            </div>
+
+          )}
+
+        </div>
+
+      </section>
+
+    </div>
+  );
+}
+
 function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRefresh,onNotify,auth,onLogout,isAdmin,timeoutMinutos,onChangeTimeout}:{soundOn:boolean;onToggleSound:(v:boolean)=>void;autoRefreshSec:number;onChangeAutoRefresh:(v:number)=>void;onNotify:(s:string)=>void;auth:{nombre:string;email:string;rol:'admin'|'visualizador'};onLogout:()=>void;isAdmin:boolean;timeoutMinutos:number;onChangeTimeout:(v:number)=>void}){
   return <div className="sectionGrid">
     <div className="card sectionCard">
@@ -1661,8 +1960,7 @@ function App(){
    <aside className={`sidebar${mobileNavOpen?' open':''}${sidebarCollapsed?' collapsed':''}`}>
     <button className="sidebarToggleBtn" onClick={()=>setSidebarCollapsed(c=>!c)} title={sidebarCollapsed?'Expandir menú':'Colapsar menú'}><Menu size={20}/></button>
     <div className="brand"><div className="brandIcon"><img src={logoDark} className="logoDark" alt="ALERTA360"/><img src={logoLight} className="logoLight" alt="ALERTA360"/></div>{!sidebarCollapsed && <div><b>ALERTA360</b><span>BOMBEROS · VALPARAÍSO</span></div>}</div>
-    <nav>{[['Dashboard',BarChart3],['Emergencias',AlertTriangle],['Recursos',Truck],['Historial',History],['Reportes',Layers3],['Configuración',Settings]].map(([label,Icon]:any)=><button key={label} className={section===label?'active':''} onClick={()=>{setSection(label);setMobileNavOpen(false);}} title={label}><Icon size={18}/>{!sidebarCollapsed && <span>{label}</span>}</button>)}</nav>
-    {!sidebarCollapsed && <div className="sidebarBottom"><div className="online"><span></span>Sistema operativo</div><small>Última sincronización<br/><b>hace 18 segundos</b></small></div>}
+    <nav>{[['Dashboard',BarChart3],['Emergencias',AlertTriangle],['Recursos',Truck],['Historial',History],['Reportes',Layers3],['Soporte',LifeBuoy],['Configuración',Settings]].map(([label,Icon]:any)=><button key={label} className={section===label?'active':''} onClick={()=>{setSection(label);setMobileNavOpen(false);}} title={label}><Icon size={18}/>{!sidebarCollapsed && <span>{label}</span>}</button>)}</nav>    {!sidebarCollapsed && <div className="sidebarBottom"><div className="online"><span></span>Sistema operativo</div><small>Última sincronización<br/><b>hace 18 segundos</b></small></div>}
    </aside>
    <main className={`main${sidebarCollapsed?' sidebarCollapsed':''}`}><header><button className="mobileMenu" onClick={()=>setMobileNavOpen(o=>!o)}><Menu/></button><div><h1>{section}</h1><p>Central de coordinación · Valparaíso{!isAdmin?' · Acceso de solo lectura':''}{!isAdmin && esperandoEstadoRemoto?' · Esperando datos en vivo del operador…':''}{!isAdmin && estadoRemoto?` · En vivo (operador: ${estadoRemoto.publicadoPor})`:''}</p></div><div className="headerActions">{!isAdmin && <div className="readOnlyBadge" title="Tu cuenta solo puede visualizar, no asignar recursos"><Eye size={13}/> Solo lectura</div>}<button onClick={()=>setTheme(t=>t==='dark'?'light':'dark')} title={theme==='dark'?'Cambiar a tema claro':'Cambiar a tema oscuro'}>{theme==='dark'?<Sun size={17}/>:<Moon size={17}/>}</button><div className="live"><span/> EN VIVO</div><button onClick={()=>{setRefresh(x=>x+1);notify('Datos actualizados')}}><RefreshCw size={17}/></button><button onClick={()=>notify(`${queue.length} emergencias en cola`)}><Bell size={18}/></button><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
     {section==='Emergencias' && <EmergenciasView queue={queue} claves={claves} now={now} onAtender={atenderEmergencia}/>}
@@ -1670,6 +1968,7 @@ function App(){
     {section==='Historial' && <HistorialView historial={historial} now={now}/>}
     {section==='Reportes' && <ReportesView historial={historial}/>}
     {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} onNotify={notify} auth={auth} onLogout={handleLogout} isAdmin={isAdmin} timeoutMinutos={timeoutMinutos} onChangeTimeout={setTimeoutMinutos}/>}
+    {section==='Soporte' && <SoporteView/>}
     {section==='Dashboard' && <>
     <div className="cuartelFilterRow">
       <label><Building2 size={16}/> Filtrar por cuartel<select value={filtroCuartel} onChange={e=>setFiltroCuartel(e.target.value)}>
