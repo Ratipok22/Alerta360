@@ -1302,3 +1302,202 @@ html[data-theme="dark"] .emptyState{
   }
 
 }
+
+/* =========================================================
+   ADMINISTRACION DE TICKETS
+   ========================================================= */
+
+.adminTicketsPage{
+  display:flex;
+  flex-direction:column;
+  gap:16px;
+}
+
+.adminTicketsStats{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:12px;
+}
+
+.adminTicketStat{
+  background:var(--negro-tarjeta);
+  border:1px solid var(--borde-sutil);
+  border-radius:10px;
+  padding:18px;
+}
+
+.adminTicketStat span{
+  display:block;
+  color:var(--gris-tenue);
+  font-size:11px;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.5px;
+}
+
+.adminTicketStat strong{
+  display:block;
+  margin-top:6px;
+  color:var(--blanco);
+  font-size:26px;
+  font-weight:700;
+}
+
+.adminTicketsPanel{
+  overflow:hidden;
+}
+
+.adminTicketsToolbar{
+  display:flex;
+  gap:10px;
+  padding:0 20px 16px;
+}
+
+.adminTicketsToolbar input,
+.adminTicketsToolbar select{
+  background:var(--negro-panel);
+  color:var(--gris-texto);
+  border:1px solid var(--borde-sutil);
+  border-radius:6px;
+  padding:10px 12px;
+  font-family:inherit;
+  font-size:13px;
+}
+
+.adminTicketsToolbar input{
+  flex:1;
+}
+
+.adminTicketsToolbar select{
+  min-width:190px;
+}
+
+.adminTicketsToolbar input:focus,
+.adminTicketsToolbar select:focus{
+  outline:none;
+  border-color:var(--acento);
+}
+
+.adminTicketsList{
+  display:flex;
+  flex-direction:column;
+}
+
+.adminTicketRow{
+  display:grid;
+  grid-template-columns:120px minmax(0,1fr) 120px;
+  gap:18px;
+  align-items:center;
+  padding:15px 20px;
+  border-top:1px solid var(--borde-sutil);
+  transition:background .15s;
+}
+
+.adminTicketRow:hover{
+  background:color-mix(in srgb,var(--acento) 5%,transparent);
+}
+
+.adminTicketId strong{
+  display:block;
+  color:var(--blanco);
+  font-size:13px;
+}
+
+.adminTicketId span{
+  display:block;
+  margin-top:4px;
+  color:var(--gris-tenue);
+  font-size:10px;
+}
+
+.adminTicketInfo{
+  min-width:0;
+}
+
+.adminTicketInfo strong{
+  display:block;
+  color:var(--blanco);
+  font-size:13px;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.adminTicketInfo span{
+  display:block;
+  margin-top:4px;
+  color:var(--gris-tenue);
+  font-size:11px;
+}
+
+.adminTicketStatus{
+  justify-self:end;
+  padding:6px 9px;
+  border-radius:20px;
+  border:1px solid currentColor;
+  font-size:10px;
+  font-weight:700;
+  white-space:nowrap;
+}
+
+.status-pendiente{
+  color:var(--rojo-alerta);
+  background:color-mix(in srgb,var(--rojo-alerta) 10%,transparent);
+}
+
+.status-en-proceso{
+  color:var(--azul-operativo);
+  background:color-mix(in srgb,var(--azul-operativo) 10%,transparent);
+}
+
+.status-resuelto{
+  color:var(--verde-disponible);
+  background:color-mix(in srgb,var(--verde-disponible) 10%,transparent);
+}
+
+html[data-theme="light"] .adminTicketStat{
+  border:2px solid var(--acento);
+  box-shadow:0 1px 3px rgba(28,40,51,.09),0 1px 2px rgba(28,40,51,.06);
+}
+
+html[data-theme="light"] .adminTicketsPanel{
+  border:2px solid var(--acento);
+  box-shadow:0 1px 3px rgba(28,40,51,.09),0 1px 2px rgba(28,40,51,.06);
+}
+
+html[data-theme="light"] .adminTicketsToolbar input,
+html[data-theme="light"] .adminTicketsToolbar select{
+  background:var(--fondo-pagina);
+  border-color:#C7D0D8;
+}
+
+html[data-theme="light"] .adminTicketsToolbar input:focus,
+html[data-theme="light"] .adminTicketsToolbar select:focus{
+  background:var(--negro-panel);
+  border-color:var(--acento);
+}
+
+@media(max-width:800px){
+
+  .adminTicketsStats{
+    grid-template-columns:1fr;
+  }
+
+  .adminTicketsToolbar{
+    flex-direction:column;
+  }
+
+  .adminTicketsToolbar select{
+    width:100%;
+  }
+
+  .adminTicketRow{
+    grid-template-columns:1fr;
+    gap:8px;
+  }
+
+  .adminTicketStatus{
+    justify-self:start;
+  }
+
+}

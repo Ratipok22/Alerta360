@@ -20,7 +20,7 @@ SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "clave-de-desarrollo-cambiar-en-pr
 ALGORITHM = "HS256"
 EXPIRACION_HORAS = 12
 
-Rol = Literal["admin", "visualizador"]
+Rol = Literal["admin", "visualizador", "soporte"]
 
 
 @dataclass(frozen=True)
@@ -53,6 +53,7 @@ USUARIOS: dict[str, Usuario] = {
         Usuario("ben.saavedrab@bomberos.cl", "Benjamin Saavedra", _HASH_DEMO, "admin"),
         Usuario("alex.aravena@bomberos.cl", "Alexsander Aravena", _HASH_DEMO, "admin"),
         Usuario("bru.molina@bomberos.cl", "Bruno Molina", _HASH_DEMO, "visualizador"),
+        Usuario("amolina@admin.alerta360.cl", "Alexis Molina", _HASH_DEMO, "soporte"),
     ]
 }
 

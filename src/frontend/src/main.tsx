@@ -76,6 +76,22 @@ type Clave={codigo:string; nombre:string; prioridad:string; prioridad_nivel:numb
 type HistorialTipo='asignacion'|'rechazo'|'en_emergencia'|'liberacion'|'nueva_emergencia';
 type HistorialEntry={id:number; ts:number; tipo:HistorialTipo; texto:string;};
 
+// CONFIGURACION PARA SOPORTE TICKET //
+type UserRole = 'admin' | 'visualizador' | 'soporte';
+
+type SupportTicket = {
+  id:string;
+  tipo:string;
+  apartado:string;
+  titulo:string;
+  descripcion:string;
+  estado:'Pendiente'|'En proceso'|'Resuelto';
+  fecha:string;
+  archivo:string;
+  respuesta?:string;
+};
+
+
 const RADIO_LABELS:Record<RadioState,string>={'6-0':'Disponible en cuartel','6-3':'En trayecto','6-7':'En la emergencia','6-8':'Regresando','6-9':'Fuera de servicio'};
 const RADIO_COLORS:Record<RadioState,string>={'6-0':'#34C759','6-3':'#2C9AF6','6-7':'#FFCC00','6-8':'#2C9AF6','6-9':'#FF3B30'};
 function scoreColor(v:number){return v>=70?'#34C759':v>=40?'#FFCC00':'#FF3B30';}
@@ -967,7 +983,7 @@ function HistorialView({historial,now}:{historial:HistorialEntry[];now:number}){
 // backend (core/auth.py) pueden entrar. Mismo estandar visual "Tech
 // Corporativo Nocturno" del resto de la app (misma marca, mismos colores),
 // sin elementos de mas -- correo, contraseña, listo.
-function LoginView({onLogin,theme,onToggleTheme}:{onLogin:(token:string, nombre:string, email:string, rol:'admin'|'visualizador')=>void; theme:'dark'|'light'; onToggleTheme:()=>void}){
+function LoginView({onLogin,theme,onToggleTheme}:{onLogin:(token:string, nombre:string, email:string, rol:UserRole)=>void; theme:'dark'|'light'; onToggleTheme:()=>void}){
   const [email,setEmail]=useState('');
   const [password,setPassword]=useState('');
   const [error,setError]=useState('');
@@ -990,7 +1006,8 @@ function LoginView({onLogin,theme,onToggleTheme}:{onLogin:(token:string, nombre:
         setError(data.detail || 'Correo o contraseña incorrectos.');
         return;
       }
-      onLogin(data.token, data.nombre, data.email, data.rol==='admin'?'admin':'visualizador');
+      const rol:UserRole = data.rol==='soporte' ? 'soporte' : data.rol==='admin' ? 'admin' : 'visualizador';
+      onLogin(data.token,data.nombre,data.email,rol);
     }catch{
       setError(`No se pudo conectar con el servidor (${API_BASE}). ¿Está corriendo el backend?`);
     }finally{
@@ -1028,6 +1045,115 @@ function ReportesView({historial}:{historial:HistorialEntry[]}){
     </div>
     <div className="card sectionCard"><div className="cardHead"><div><b>Nota</b></div></div><p className="emptyState">Estos indicadores se calculan en vivo a partir de las acciones tomadas en esta sesión (asignar/rechazar recomendaciones). Al recargar la página el historial se reinicia, ya que aún no hay persistencia en base de datos.</p></div>
   </div>;
+}
+
+function AdminTicketsView(){
+  const [filtro,setFiltro]=useState('Todos');
+
+  const tickets:SupportTicket[] = [];
+
+  const ticketsFiltrados = filtro==='Todos'
+    ? tickets
+    : tickets.filter(ticket=>ticket.estado===filtro);
+
+  const pendientes=tickets.filter(ticket=>ticket.estado==='Pendiente').length;
+  const enProceso=tickets.filter(ticket=>ticket.estado==='En proceso').length;
+  const resueltos=tickets.filter(ticket=>ticket.estado==='Resuelto').length;
+
+  return (
+    <div className="adminTicketsPage">
+
+      <section className="adminTicketsStats">
+
+        <div className="adminTicketStat">
+          <span>Pendientes</span>
+          <strong>{pendientes}</strong>
+        </div>
+
+        <div className="adminTicketStat">
+          <span>En proceso</span>
+          <strong>{enProceso}</strong>
+        </div>
+
+        <div className="adminTicketStat">
+          <span>Resueltos</span>
+          <strong>{resueltos}</strong>
+        </div>
+
+      </section>
+
+      <section className="card adminTicketsPanel">
+
+        <div className="cardHead">
+          <div>
+            <b>Tickets recibidos</b>
+            <span>Solicitudes generadas desde el apartado de soporte</span>
+          </div>
+
+          <Ticket size={20}/>
+        </div>
+
+        <div className="adminTicketsToolbar">
+
+          <input
+            type="text"
+            placeholder="Buscar ticket..."
+          />
+
+          <select
+            value={filtro}
+            onChange={e=>setFiltro(e.target.value)}
+          >
+            <option value="Todos">Todos los estados</option>
+            <option value="Pendiente">Pendientes</option>
+            <option value="En proceso">En proceso</option>
+            <option value="Resuelto">Resueltos</option>
+          </select>
+
+        </div>
+
+        <div className="adminTicketsList">
+
+          {ticketsFiltrados.length===0 ? (
+
+            <div className="emptyState">
+              <Ticket size={30}/>
+              <strong>No hay tickets registrados</strong>
+              <span>
+                Los tickets generados por los usuarios aparecerán aquí.
+              </span>
+            </div>
+
+          ) : (
+
+            ticketsFiltrados.map(ticket=>(
+              <div className="adminTicketRow" key={ticket.id}>
+
+                <div className="adminTicketId">
+                  <strong>{ticket.id}</strong>
+                  <span>{ticket.fecha}</span>
+                </div>
+
+                <div className="adminTicketInfo">
+                  <strong>{ticket.titulo}</strong>
+                  <span>{ticket.tipo} · {ticket.apartado}</span>
+                </div>
+
+                <span className={`adminTicketStatus status-${ticket.estado.toLowerCase().replace(' ','-')}`}>
+                  {ticket.estado}
+                </span>
+
+              </div>
+            ))
+
+          )}
+
+        </div>
+
+      </section>
+
+    </div>
+  );
 }
 
 function SoporteView(){
@@ -1330,7 +1456,7 @@ function SoporteView(){
   );
 }
 
-function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRefresh,onNotify,auth,onLogout,isAdmin,timeoutMinutos,onChangeTimeout}:{soundOn:boolean;onToggleSound:(v:boolean)=>void;autoRefreshSec:number;onChangeAutoRefresh:(v:number)=>void;onNotify:(s:string)=>void;auth:{nombre:string;email:string;rol:'admin'|'visualizador'};onLogout:()=>void;isAdmin:boolean;timeoutMinutos:number;onChangeTimeout:(v:number)=>void}){
+function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRefresh,onNotify,auth,onLogout,isAdmin,timeoutMinutos,onChangeTimeout}:{soundOn:boolean;onToggleSound:(v:boolean)=>void;autoRefreshSec:number;onChangeAutoRefresh:(v:number)=>void;onNotify:(s:string)=>void;auth:{nombre:string;email:string;rol:UserRole};onLogout:()=>void;isAdmin:boolean;timeoutMinutos:number;onChangeTimeout:(v:number)=>void}){
   return <div className="sectionGrid">
     <div className="card sectionCard">
       <div className="cardHead"><div><b>Cuenta</b><span>Sesión iniciada</span></div></div>
@@ -1380,15 +1506,22 @@ function App(){
  // se pide login de nuevo. De paso, esto elimina la validacion asincrona
  // de un token guardado al montar la app -- que era la causa de una
  // carrera con el patrullaje (401 sueltos en /route justo al reiniciar).
- const [auth,setAuth]=useState<{token:string; nombre:string; email:string; rol:'admin'|'visualizador'}|null>(null);
+ const [auth,setAuth]=useState<{token:string; nombre:string; email:string; rol:UserRole}|null>(null);
 
  // currentToken (variable de modulo) es lo que leen las funciones sueltas
  // fuera de React (obtenerRutaReal) para mandar el header Authorization.
  useEffect(()=>{ currentToken=auth?.token ?? null; },[auth]);
 
- const handleLogin=(token:string, nombre:string, email:string, rol:'admin'|'visualizador')=>{
-   setAuth({token,nombre,email,rol});
- };
+const handleLogin=(
+  token:string,
+  nombre:string,
+  email:string,
+  rol:UserRole
+)=>{
+  setAuth({token,nombre,email,rol});
+  setSection(rol==='soporte'?'Tickets':'Dashboard');
+};
+
  const handleLogout=()=>{
    setAuth(null);
  };
@@ -1398,6 +1531,8 @@ function App(){
  // backend vuelve a exigir esto por su cuenta en /assignment/recommend
  // (ver requiere_admin en main.py); esto de aca es solo para la UI.
  const isAdmin=auth?.rol==='admin';
+
+const isAdminSoporte=auth?.rol==='soporte';
 
  const [section,setSection]=useState('Dashboard');
  const [toast,setToast]=useState('');
@@ -1960,16 +2095,57 @@ function App(){
    <aside className={`sidebar${mobileNavOpen?' open':''}${sidebarCollapsed?' collapsed':''}`}>
     <button className="sidebarToggleBtn" onClick={()=>setSidebarCollapsed(c=>!c)} title={sidebarCollapsed?'Expandir menú':'Colapsar menú'}><Menu size={20}/></button>
     <div className="brand"><div className="brandIcon"><img src={logoDark} className="logoDark" alt="ALERTA360"/><img src={logoLight} className="logoLight" alt="ALERTA360"/></div>{!sidebarCollapsed && <div><b>ALERTA360</b><span>BOMBEROS · VALPARAÍSO</span></div>}</div>
-    <nav>{[['Dashboard',BarChart3],['Emergencias',AlertTriangle],['Recursos',Truck],['Historial',History],['Reportes',Layers3],['Soporte',LifeBuoy],['Configuración',Settings]].map(([label,Icon]:any)=><button key={label} className={section===label?'active':''} onClick={()=>{setSection(label);setMobileNavOpen(false);}} title={label}><Icon size={18}/>{!sidebarCollapsed && <span>{label}</span>}</button>)}</nav>    {!sidebarCollapsed && <div className="sidebarBottom"><div className="online"><span></span>Sistema operativo</div><small>Última sincronización<br/><b>hace 18 segundos</b></small></div>}
+  <nav>
+  {isAdminSoporte ? (
+    <>
+      <button
+        className={section==='Tickets'?'active':''}
+        onClick={()=>{setSection('Tickets');setMobileNavOpen(false);}}
+        title="Tickets"
+      >
+        <Ticket size={18}/>
+        {!sidebarCollapsed && <span>Tickets</span>}
+      </button>
+    </>
+  ) : (
+    <>
+      {[
+        ['Dashboard',BarChart3],
+        ['Emergencias',AlertTriangle],
+        ['Recursos',Truck],
+        ['Historial',History],
+        ['Reportes',Layers3],
+        ['Soporte',LifeBuoy],
+        ['Configuración',Settings]
+      ].map(([label,Icon]:any)=>(
+        <button
+          key={label}
+          className={section===label?'active':''}
+          onClick={()=>{setSection(label);setMobileNavOpen(false);}}
+          title={label}
+        >
+          <Icon size={18}/>
+          {!sidebarCollapsed && <span>{label}</span>}
+        </button>
+      ))}
+    </>
+  )}
+</nav>    {!sidebarCollapsed && <div className="sidebarBottom"><div className="online"><span></span>Sistema operativo</div><small>Última sincronización<br/><b>hace 18 segundos</b></small></div>}
    </aside>
-   <main className={`main${sidebarCollapsed?' sidebarCollapsed':''}`}><header><button className="mobileMenu" onClick={()=>setMobileNavOpen(o=>!o)}><Menu/></button><div><h1>{section}</h1><p>Central de coordinación · Valparaíso{!isAdmin?' · Acceso de solo lectura':''}{!isAdmin && esperandoEstadoRemoto?' · Esperando datos en vivo del operador…':''}{!isAdmin && estadoRemoto?` · En vivo (operador: ${estadoRemoto.publicadoPor})`:''}</p></div><div className="headerActions">{!isAdmin && <div className="readOnlyBadge" title="Tu cuenta solo puede visualizar, no asignar recursos"><Eye size={13}/> Solo lectura</div>}<button onClick={()=>setTheme(t=>t==='dark'?'light':'dark')} title={theme==='dark'?'Cambiar a tema claro':'Cambiar a tema oscuro'}>{theme==='dark'?<Sun size={17}/>:<Moon size={17}/>}</button><div className="live"><span/> EN VIVO</div><button onClick={()=>{setRefresh(x=>x+1);notify('Datos actualizados')}}><RefreshCw size={17}/></button><button onClick={()=>notify(`${queue.length} emergencias en cola`)}><Bell size={18}/></button><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
-    {section==='Emergencias' && <EmergenciasView queue={queue} claves={claves} now={now} onAtender={atenderEmergencia}/>}
-    {section==='Recursos' && <RecursosView resources={resources} alertaTimeoutIds={unidadesConAlertaTimeout}/>}
-    {section==='Historial' && <HistorialView historial={historial} now={now}/>}
-    {section==='Reportes' && <ReportesView historial={historial}/>}
+   <main className={`main${sidebarCollapsed?' sidebarCollapsed':''}`}><header><button className="mobileMenu" onClick={()=>setMobileNavOpen(o=>!o)}><Menu/></button><div><h1>{section}</h1><p>
+  {isAdminSoporte
+    ? 'Gestión de tickets de soporte'
+    : <>Central de coordinación · Valparaíso{!isAdmin?' · Acceso de solo lectura':''}{!isAdmin && esperandoEstadoRemoto?' · Esperando datos en vivo del operador…':''}{!isAdmin && estadoRemoto?` · En vivo (operador: ${estadoRemoto.publicadoPor})`:''}</>
+  }
+</p></div><div className="headerActions">{!isAdmin && !isAdminSoporte && <div className="readOnlyBadge" title="Tu cuenta solo puede visualizar, no asignar recursos"><Eye size={13}/> Solo lectura</div>}<button onClick={()=>setTheme(t=>t==='dark'?'light':'dark')} title={theme==='dark'?'Cambiar a tema claro':'Cambiar a tema oscuro'}>{theme==='dark'?<Sun size={17}/>:<Moon size={17}/>}</button><div className="live"><span/> EN VIVO</div><button onClick={()=>{setRefresh(x=>x+1);notify('Datos actualizados')}}><RefreshCw size={17}/></button><button onClick={()=>notify(`${queue.length} emergencias en cola`)}><Bell size={18}/></button><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
+    {section==='Emergencias' && !isAdminSoporte && <EmergenciasView queue={queue} claves={claves} now={now} onAtender={atenderEmergencia}/>}
+    {section==='Recursos' && !isAdminSoporte && <RecursosView resources={resources} alertaTimeoutIds={unidadesConAlertaTimeout}/>}
+    {section==='Historial' && !isAdminSoporte && <HistorialView historial={historial} now={now}/>}
+    {section==='Reportes' && !isAdminSoporte && <ReportesView historial={historial}/>}
     {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} onNotify={notify} auth={auth} onLogout={handleLogout} isAdmin={isAdmin} timeoutMinutos={timeoutMinutos} onChangeTimeout={setTimeoutMinutos}/>}
     {section==='Soporte' && <SoporteView/>}
-    {section==='Dashboard' && <>
+    {section==='Tickets' && isAdminSoporte && <AdminTicketsView/>}
+    {section==='Dashboard' && !isAdminSoporte && <>
     <div className="cuartelFilterRow">
       <label><Building2 size={16}/> Filtrar por cuartel<select value={filtroCuartel} onChange={e=>setFiltroCuartel(e.target.value)}>
         <option value="todos">Todos los cuarteles</option>
