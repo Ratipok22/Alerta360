@@ -1,0 +1,27 @@
+{
+  "baseline": {
+    "estrategia": "Baseline (mas cercano)",
+    "emergencias_totales": 1500,
+    "sin_unidad_disponible_pct": 0.0,
+    "tiempo_respuesta_prom_min": 1.37,
+    "tiempo_respuesta_mediana_min": 1.4,
+    "distancia_prom_km": 0.82,
+    "cobertura_tipo_adecuado_pct": 46.07,
+    "unidades_distintas_usadas": 22,
+    "concentracion_top5_pct": 46.93
+  },
+  "propuesto": {
+    "estrategia": "Multicriterio (propuesto)",
+    "emergencias_totales": 1500,
+    "sin_unidad_disponible_pct": 0.0,
+    "tiempo_respuesta_prom_min": 3.36,
+    "tiempo_respuesta_mediana_min": 2.4,
+    "distancia_prom_km": 2.02,
+    "cobertura_tipo_adecuado_pct": 95.0,
+    "unidades_distintas_usadas": 23,
+    "concentracion_top5_pct": 59.53
+  },
+  "n_escenarios": 1500,
+  "dias_simulados": 90,
+  "seed": 42
+}
