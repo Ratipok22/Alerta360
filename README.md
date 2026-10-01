@@ -1,140 +1,128 @@
 # Alerta360
 
-Sistema de apoyo a la decisión para el despacho de recursos de **Bomberos** en la Región de Valparaíso — Proyecto de Título (APT) de Ingeniería en Informática. Prototipo académico: no está integrado con instituciones reales (Bomberos, SAMU, SINAPRED); usa datos simulados y públicos.
+Sistema de apoyo a la decisión para el despacho de recursos de Bomberos en la Región de Valparaíso. Proyecto de Título (APT) de Ingeniería en Informática, Duoc UC. Prototipo académico: no está integrado con instituciones reales (Bomberos, SAMU, SENAPRED); usa datos simulados y públicos.
 
-## Alcance
+## Descripción
 
-El sistema está ambientado exclusivamente a Bomberos y sus ramas — incendio estructural, incendio forestal, rescate vehicular y materiales peligrosos (HazMat). No cubre atención médica ni ambulancias.
+Alerta360 centraliza información operacional de emergencias y recursos, visualiza su ubicación geográfica, genera recomendaciones de asignación mediante un algoritmo multicriterio, y predice la demanda horaria de emergencias mediante Machine Learning en 19 zonas reales de la Región de Valparaíso. El sistema está ambientado exclusivamente a Bomberos y sus ramas: incendio estructural, incendio forestal, rescate vehicular y materiales peligrosos (HazMat). No cubre atención médica ni ambulancias.
 
-## Equipo y roles (Scrum)
+## Equipo y roles
 
 | Integrante | Rol |
 |---|---|
+| Alexsander Aravena | Backend y Arquitectura — API, autenticación, lógica de negocio |
 | Benjamin Saavedra | Frontend — dashboard, mapas, gestión de emergencias, integración con la API |
-| Bruno Molina | Datos y algoritmos — preparación de datos, modelo predictivo de ML, algoritmo de asignación, evaluación de métricas |
-| Alexsander Aravena | Coordinación y Backend — diseño de la API, lógica de negocio, integración con base de datos |
+| Bruno Molina | Datos y Machine Learning — preparación de datos, modelos predictivos, evaluación de métricas |
 
-Metodología: Scrum/Agile (sprints, backlog, daily, burndown, review/retrospectiva). Duración: 18 semanas en 3 fases (ver `docs/`).
+## Metodología
+
+Scrum/ágil, con sprints organizados en un Product Backlog gestionado en Trello, entregas incrementales y revisión continua. Duración planificada: 18 semanas en 3 fases (ver `docs/`).
+
+## Arquitectura
+
+```
+Frontend (React + TypeScript + Vite)
+        |
+Backend / API (FastAPI, autenticacion JWT + Bcrypt, control de acceso por roles)
+        |
+Logica de negocio
+  - Emergencias
+  - Recursos (unidades y companias)
+  - Asignacion multicriterio
+  - Prediccion de demanda (Machine Learning)
+        |
+Estado compartido en memoria (/state)
+```
+
+La comunicación entre frontend y backend es vía API REST, documentada automáticamente con Swagger UI (`/docs`). El cálculo de rutas reales entre unidades y emergencias se realiza mediante OSRM (Open Source Routing Machine), ejecutado localmente en Docker sobre datos reales de calles de la Región de Valparaíso.
 
 ## Estructura del repositorio
 
 ```
 Alerta360/
 ├── src/
-│   ├── backend/     # FastAPI + modelo de Machine Learning (ver detalle abajo)
+│   ├── backend/     # FastAPI, autenticacion, logica de negocio, modelos de Machine Learning
 │   └── frontend/    # React + TypeScript + Vite + Leaflet
-├── docs/            # Documentación por fase (FASE 1, FASE 2, FASE 3)
-├── docker/          # docker-compose.yml
-└── run.sh           # Script para levantar backend + frontend en local
+├── docker/          # docker-compose.yml y configuracion de contenedores
+├── docs/            # Documentacion por fase (FASE 1, FASE 2, FASE 3)
+├── database/        # Esquema de persistencia (en definicion)
+└── tests/           # Pruebas automatizadas (en construccion)
 ```
 
-`database/` y `tests/` se removieron por ahora (no se estaban usando en esta fase); se vuelven a crear cuando corresponda según el checklist de abajo (modelo de datos real y pruebas automatizadas).
+## Stack tecnológico
 
-## Stack
-
-- **Frontend:** React + TypeScript + Vite, mapas con Leaflet + OpenStreetMap.
-- **Backend:** FastAPI (Python).
-- **Machine Learning:** scikit-learn (RandomForestRegressor) para predicción de demanda.
-- **Persistencia preparada:** PostgreSQL vía Docker Compose (`docker/docker-compose.yml`).
-- Todo se ejecuta 100% local — sin servicios externos ni de pago.
+- **Frontend:** React 18, TypeScript, Vite
+- **Backend / API:** Python, FastAPI, Pydantic, PyJWT, Bcrypt
+- **Mapas y ruteo:** Leaflet, OpenStreetMap, OSRM (Open Source Routing Machine)
+- **Machine Learning:** scikit-learn (RandomForest, ExtraTrees, GradientBoosting, con Ridge como referencia/baseline), Pandas, NumPy
+- **Persistencia:** estado operacional compartido en memoria (`/state`); migración a PostgreSQL 16 planificada para la etapa final
+- **Contenerización:** Docker, Docker Compose
+- Todo se ejecuta de forma local, sin servicios externos de pago.
 
 ## Cómo ejecutar
 
 ### Backend / API
+
 ```bash
 cd src/backend
 python -m venv .venv
 # Windows: .venv\Scripts\activate
 # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
-python -m ml.train_model   # genera el dataset simulado (si no existe) y entrena el modelo de demanda
+python -m ml.train_model
 uvicorn main:app --reload
 ```
+
 API disponible en http://localhost:8000/docs
 
 ### Frontend
+
 ```bash
 cd src/frontend
 npm install
 npm run dev
 ```
+
 Abrir la URL que indique Vite (normalmente http://localhost:5173).
 
-También existe `run.sh` en la raíz para levantar ambos servicios juntos en un entorno Git Bash/Unix.
+### Motor de ruteo (OSRM)
+
+```bash
+docker run -d --name osrm-valparaiso -p 5001:5000 fruna/osrm-valparaiso
+```
 
 ## Marco normativo (Bomberos de Chile)
 
 `src/backend/core/` centraliza el estándar operativo real usado por todo el sistema:
-- `radio_codes.py`: claves radiales 10-0 a 10-12 (incendio estructural, incendio de vehículo, incendio forestal/pastizales, salvamento, rescate vehicular, HazMat, apoyo/preposicionamiento), con prioridad y unidades mínimas requeridas.
+
+- `radio_codes.py`: claves radiales 10-0 a 10-12, con prioridad y unidades mínimas requeridas por tipo de emergencia.
 - `vehicle_types.py`: nomenclatura real de material mayor (B/BX/B-U, BF/BR, R/RX, Q/M, Z, H).
 - `radio_states.py`: máquina de estados de transmisión radial (6-0 a 6-9) con transiciones válidas.
-- `eta.py`: distancia Haversine y ETA ajustado por velocidad urbano (35 km/h) / forestal (50 km/h).
-- `companies.py`: **26 compañías reales** — las 16 del Cuerpo de Bomberos de Valparaíso (fundado 1851) y 10 del Cuerpo de Bomberos de Viña del Mar, verificadas cruzando Wikipedia con OpenStreetMap/Overpass (`amenity=fire_station`). Preparado para extender a otras comunas de la región y, a futuro, a todo Chile.
+- `eta.py`: distancia Haversine y tiempo estimado de llegada ajustado por velocidad urbano (35 km/h) o forestal (50 km/h).
+- `companies.py`: compañías reales de Cuerpos de Bomberos de Valparaíso y Viña del Mar, verificadas cruzando fuentes oficiales con OpenStreetMap/Overpass.
 
 ## Predicción de demanda (Machine Learning)
 
-Un modelo `RandomForestRegressor` (scikit-learn) predice la demanda esperada por zona, bloque de 3 horas y clave radial, usando fecha, hora, día de la semana, mes, zona geográfica, clave radial e historial reciente como variables de entrada.
+El entrenamiento compara distintas familias de modelo (RandomForest, ExtraTrees, Gradient Boosting y una regresión Ridge como referencia lineal) y selecciona el de mejor desempeño para predecir la demanda esperada por zona y clave radial. La evaluación se realiza con un conjunto de datos de validación independiente, separado del de entrenamiento.
 
-Las zonas (`src/backend/ml/zones.py`) son sectores reales de Valparaíso/Viña del Mar/Concón con nombre propio (no una grilla ciega de coordenadas), cada uno con un perfil de riesgo por clave basado en su geografía real (p. ej. Reñaca Alto concentra el riesgo de incendio forestal por sus cerros; Concón concentra el riesgo de materiales peligrosos por la refinería ENAP). La tasa base de incendio forestal (10-2) está calibrada para que el total simulado anual se acerque a la cifra real reportada por CONAF: **575 incendios forestales en la Región de Valparaíso, temporada 2025-2026**. El resto de la distribución (hora, día, zona) es un supuesto razonado, no datos reales de despacho (no existe un dataset público de incidentes de Bomberos de Chile).
-
-El propio modelo expone qué variables pesan realmente en sus predicciones (`feature_importances_` de scikit-learn, agregadas por variable de entrada) — se calcula en cada entrenamiento y se sirve vía API, no es un texto redactado a mano.
-
-Endpoints principales:
-- `GET /catalog/claves`: catálogo de claves radiales (nombre, prioridad, terreno).
-- `GET /zones`: zonas geográficas reales usadas por el modelo.
-- `GET /resources`: flota de unidades real, con ETA/distancia calculados en vivo.
-- `GET /prediction/demand?horizon=4`: demanda esperada por zona para los próximos `horizon` bloques de 3 horas, incluyendo `importancia_variables`.
-
-## Dashboard
-
-El dashboard muestra dos mapas: el **mapa operacional** (emergencias y recursos en tiempo real, con estados según la máquina de estados 6-0 a 6-9) y un **mapa de calor tipo choropleth** (cada zona pintada con su propio color sólido verde/amarillo/rojo según su demanda esperada), acompañado de alertas de texto y el detalle del razonamiento del modelo.
-
-El algoritmo de recomendación de recurso es multicriterio: considera tipo de emergencia, tipo/capacidad de la unidad, coincidencia de terreno (urbano/forestal), dotación (ponderada según la criticidad de la clave) y ETA/distancia — y respeta que una compañía ya comprometida con una emergencia no sea recomendada para otra hasta liberarse. Cada recomendación y cada emergencia activa muestra una breve justificación calculada a partir de estos mismos factores.
+Las zonas (`src/backend/ml/zones.py`) corresponden a sectores reales de Valparaíso, Viña del Mar y Concón, cada uno con un perfil de riesgo propio basado en su geografía real. La tasa base de incendio forestal está calibrada contra la cifra oficial reportada por CONAF para la temporada 2025-2026 en la Región de Valparaíso.
 
 ## Estado actual del avance
 
-- [x] Dashboard operacional funcional (mapa, recursos, emergencias, historial).
-- [x] Algoritmo de asignación multicriterio con justificación explicable.
-- [x] Modelo de ML de predicción de demanda entrenado y expuesto vía API.
-- [x] Marco normativo de Bomberos de Chile (claves, vehículos, estados, ETA) y flota de compañías reales.
-- [ ] Persistencia en PostgreSQL (actualmente todo corre en memoria).
-- [ ] Autenticación/roles.
-- [ ] Pruebas automatizadas (`tests/`).
-- [ ] Benchmark del algoritmo de asignación contra un baseline simple (recurso disponible más cercano), con métricas de tiempo de respuesta, distancia recorrida, cobertura territorial y utilización de recursos.
+- [x] Dashboard operacional funcional (mapa, recursos, emergencias, historial)
+- [x] Algoritmo de asignación multicriterio con justificación explicable
+- [x] Modelo de Machine Learning de predicción de demanda, entrenado y expuesto vía API
+- [x] Marco normativo de Bomberos de Chile y flota de compañías reales
+- [x] Autenticación JWT y control de acceso por roles (RBAC)
+- [x] Motor de ruteo real (OSRM) sobre calles de la Región de Valparaíso
+- [x] Sincronización de estado operacional compartido en tiempo real (`/state`)
+- [ ] Persistencia en PostgreSQL (actualmente en memoria)
+- [ ] Suite de pruebas automatizadas
+- [ ] Documentación final del benchmark del algoritmo de asignación frente al baseline
 
-## Seguridad y manejo de credenciales
+## Próxima etapa
 
-Hoy el proyecto corre 100% local (sin usuarios reales, sin datos personales,
-sin acceso a internet salvo llamadas explícitas y documentadas como
-Overpass/OSM para verificar direcciones reales). Aun así, se sigue la
-misma disciplina que se usaría en un despliegue real, para que la base ya
-esté lista si este proyecto se termina levantando en un servidor:
-
-- **Ninguna credencial se escribe directo en el código ni en `docker-compose.yml`.**
-  Cada servicio que necesita una (hoy solo la base de datos Postgres) la lee
-  desde un archivo `.env`, que **nunca se sube al repositorio** (ver
-  `.gitignore`). En su lugar se versiona `docker/.env.example`, una
-  plantilla sin datos reales que cada persona copia a `.env` y completa con
-  sus propios valores locales.
-- **Si una credencial llega a subirse por error a un repo público**, la
-  respuesta correcta no es solo borrarla del código: hay que asumirla como
-  comprometida y **rotarla** (cambiarla por una nueva), porque el valor
-  viejo puede seguir visible en el historial de commits. Eso es justamente
-  lo que se hizo la primera vez que esto pasó en este proyecto (una clave
-  de desarrollo de Postgres quedó en un commit): se reemplazó por una nueva
-  generada al azar, guardada solo en el `.env` local de cada quien.
-- **Pendiente para cuando esto se despliegue de verdad** (no implementado
-  aún, pero la estructura ya está pensada para esto): las credenciales de
-  producción no irían en un `.env` a mano en el servidor, sino en el
-  gestor de secretos que ofrezca la plataforma de hosting elegida (variables
-  de entorno del proveedor, Docker/Kubernetes secrets, etc.), y recién ahí
-  correspondería agregar autenticación/roles reales (ver checklist más
-  abajo) y HTTPS en vez de HTTP plano.
-
-## Próxima etapa para el APT
-
-1. Conectar `src/frontend` con `src/backend` reemplazando los datos simulados en memoria por la API real.
-2. Definir el modelo de datos en `database/` y migrar a PostgreSQL.
-3. Construir el dataset histórico de emergencias que use el modelo de ML.
-4. Incorporar pruebas (`tests/`) y las métricas de evaluación comparativa exigidas.
-5. Documentar cada fase en `docs/` (Fase 1, Fase 2, Fase 3).
+1. Migrar la persistencia del estado operacional a PostgreSQL.
+2. Incorporar la suite de pruebas automatizadas.
+3. Documentar los resultados finales de la evaluación experimental y de Machine Learning.
+4. Consolidar en esta rama principal el trabajo desarrollado en las ramas de cada integrante.
