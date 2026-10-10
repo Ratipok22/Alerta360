@@ -14,3 +14,4 @@
 .env
 **/.env
 src/backend/ml/artifacts/demand_model.joblib
+src/backend/ml/artifacts/*.joblib
