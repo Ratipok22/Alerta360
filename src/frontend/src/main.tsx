@@ -3,7 +3,9 @@ import {createRoot} from 'react-dom/client';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
-import {AlertTriangle, BarChart3, Bell, Building2, CheckCircle2, Clock3, Crosshair, Droplet, Eye, Flame, HardHat, History, Info, Layers3, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Radio, RefreshCw, Settings, ShieldCheck, Sun, Truck, TreePine, Users, XCircle, Zap} from 'lucide-react';
+import {AlertTriangle, BarChart3, Bell, Building2, CheckCircle2, Clock3, Crosshair, Droplet, Eye, Flame, HardHat, History, Info, Layers3, LifeBuoy, Lightbulb, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Paperclip, Phone, Radio, RefreshCw, Send, Settings, ShieldCheck, Sun, Ticket, Truck, TreePine, Users, XCircle, Zap, Bug} from 'lucide-react';
+import logoDark from "./assets/logo-alerta360-dark.png";
+import logoLight from "./assets/logo-alerta360-light.png";
 
 // En localhost apunta al backend local de siempre. Si la app se abre a
 // traves de un dev tunnel (ej. VS Code Ports / *.devtunnels.ms), reconstruye
@@ -74,6 +76,23 @@ type VariableImportancia={nombre:string; peso_pct:number};
 type Clave={codigo:string; nombre:string; prioridad:string; prioridad_nivel:number; terreno:string;};
 type HistorialTipo='asignacion'|'rechazo'|'en_emergencia'|'liberacion'|'nueva_emergencia';
 type HistorialEntry={id:number; ts:number; tipo:HistorialTipo; texto:string;};
+
+// CONFIGURACION PARA SOPORTE TICKET //
+type UserRole = 'admin' | 'visualizador' | 'soporte';
+
+type SupportTicket = {
+  id:string;
+  tipo:string;
+  apartado:string;
+  titulo:string;
+  descripcion:string;
+  estado:'Pendiente'|'En proceso'|'Resuelto';
+  fecha:string;
+  archivo:string;
+  respuesta?:string;
+  respuestaUsuario?:string;
+};
+
 
 const RADIO_LABELS:Record<RadioState,string>={'6-0':'Disponible en cuartel','6-3':'En trayecto','6-7':'En la emergencia','6-8':'Regresando','6-9':'Fuera de servicio'};
 const RADIO_COLORS:Record<RadioState,string>={'6-0':'#34C759','6-3':'#2C9AF6','6-7':'#FFCC00','6-8':'#2C9AF6','6-9':'#FF3B30'};
@@ -965,7 +984,7 @@ function HistorialView({historial,now}:{historial:HistorialEntry[];now:number}){
 // backend (core/auth.py) pueden entrar. Mismo estandar visual "Tech
 // Corporativo Nocturno" del resto de la app (misma marca, mismos colores),
 // sin elementos de mas -- correo, contraseña, listo.
-function LoginView({onLogin,theme,onToggleTheme}:{onLogin:(token:string, nombre:string, email:string, rol:'admin'|'visualizador')=>void; theme:'dark'|'light'; onToggleTheme:()=>void}){
+function LoginView({onLogin,theme,onToggleTheme}:{onLogin:(token:string, nombre:string, email:string, rol:UserRole)=>void; theme:'dark'|'light'; onToggleTheme:()=>void}){
   const [email,setEmail]=useState('');
   const [password,setPassword]=useState('');
   const [error,setError]=useState('');
@@ -988,7 +1007,8 @@ function LoginView({onLogin,theme,onToggleTheme}:{onLogin:(token:string, nombre:
         setError(data.detail || 'Correo o contraseña incorrectos.');
         return;
       }
-      onLogin(data.token, data.nombre, data.email, data.rol==='admin'?'admin':'visualizador');
+      const rol:UserRole = data.rol==='soporte' ? 'soporte' : data.rol==='admin' ? 'admin' : 'visualizador';
+      onLogin(data.token,data.nombre,data.email,rol);
     }catch{
       setError(`No se pudo conectar con el servidor (${API_BASE}). ¿Está corriendo el backend?`);
     }finally{
@@ -999,7 +1019,7 @@ function LoginView({onLogin,theme,onToggleTheme}:{onLogin:(token:string, nombre:
   return <div className="loginPage">
     <div className="loginCard">
       <button className="themeToggleLogin" onClick={onToggleTheme} title={theme==='dark'?'Cambiar a tema claro':'Cambiar a tema oscuro'}>{theme==='dark'?<Sun size={18}/>:<Moon size={18}/>}</button>
-      <div className="brand"><div className="brandIcon"><Zap size={20}/></div><div><b>ALERTA360</b><span>BOMBEROS · VALPARAÍSO</span></div></div>
+      <div className="brand"><div className="brandIcon"><img src={logoDark} className="logoDark" alt="ALERTA360"/><img src={logoLight} className="logoLight" alt="ALERTA360"/></div><div><b>ALERTA360</b><span>BOMBEROS · VALPARAÍSO</span></div></div>
       <p className="loginSubtitle">Acceso de operadores</p>
       <form onSubmit={submit}>
         <label className="loginLabel"><Mail size={13}/> Correo</label>
@@ -1028,7 +1048,657 @@ function ReportesView({historial}:{historial:HistorialEntry[]}){
   </div>;
 }
 
-function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRefresh,onNotify,auth,onLogout,isAdmin,timeoutMinutos,onChangeTimeout}:{soundOn:boolean;onToggleSound:(v:boolean)=>void;autoRefreshSec:number;onChangeAutoRefresh:(v:number)=>void;onNotify:(s:string)=>void;auth:{nombre:string;email:string;rol:'admin'|'visualizador'};onLogout:()=>void;isAdmin:boolean;timeoutMinutos:number;onChangeTimeout:(v:number)=>void}){
+function AdminTicketsView({
+  tickets,
+  setTickets
+}:{
+  tickets:SupportTicket[];
+  setTickets:React.Dispatch<React.SetStateAction<SupportTicket[]>>;
+}){
+  const [filtro,setFiltro]=useState('Todos');
+  const [busqueda,setBusqueda]=useState('');
+  const [ticketSeleccionadoId,setTicketSeleccionadoId]=useState<string|null>(null);
+  const [respuesta,setRespuesta]=useState('');
+
+  const ticketsFiltrados=tickets.filter(ticket=>{
+    const coincideEstado=filtro==='Todos' || ticket.estado===filtro;
+
+    const textoBusqueda=busqueda.trim().toLowerCase();
+
+    const coincideBusqueda=
+      !textoBusqueda ||
+      ticket.id.toLowerCase().includes(textoBusqueda) ||
+      ticket.titulo.toLowerCase().includes(textoBusqueda) ||
+      ticket.tipo.toLowerCase().includes(textoBusqueda) ||
+      ticket.apartado.toLowerCase().includes(textoBusqueda);
+
+    return coincideEstado && coincideBusqueda;
+  });
+
+  const pendientes=tickets.filter(ticket=>ticket.estado==='Pendiente').length;
+  const enProceso=tickets.filter(ticket=>ticket.estado==='En proceso').length;
+  const resueltos=tickets.filter(ticket=>ticket.estado==='Resuelto').length;
+
+  const ticketSeleccionado=tickets.find(
+    ticket=>ticket.id===ticketSeleccionadoId
+  );
+
+  const abrirTicket=(ticket:SupportTicket)=>{
+    setTicketSeleccionadoId(ticket.id);
+    setRespuesta(ticket.respuesta || '');
+  };
+
+  const guardarRespuesta=()=>{
+    if(!ticketSeleccionado){
+      return;
+    }
+
+    if(!respuesta.trim()){
+      alert('Escribe una respuesta antes de enviarla.');
+      return;
+    }
+
+    setTickets(prev=>
+      prev.map(ticket=>
+        ticket.id===ticketSeleccionado.id
+          ? {
+              ...ticket,
+              respuesta:respuesta.trim(),
+              estado:ticket.estado==='Pendiente'
+                ? 'En proceso'
+                : ticket.estado
+            }
+          : ticket
+      )
+    );
+
+    alert(`Respuesta enviada al ticket ${ticketSeleccionado.id}.`);
+  };
+
+  const cambiarEstado=(nuevoEstado:'Pendiente'|'En proceso'|'Resuelto')=>{
+    if(!ticketSeleccionado){
+      return;
+    }
+
+    setTickets(prev=>
+      prev.map(ticket=>
+        ticket.id===ticketSeleccionado.id
+          ? {...ticket,estado:nuevoEstado}
+          : ticket
+      )
+    );
+  };
+
+  return (
+    <div className="adminTicketsPage">
+
+      <section className="adminTicketsStats">
+
+        <div className="adminTicketStat">
+          <span>Pendientes</span>
+          <strong>{pendientes}</strong>
+        </div>
+
+        <div className="adminTicketStat">
+          <span>En proceso</span>
+          <strong>{enProceso}</strong>
+        </div>
+
+        <div className="adminTicketStat">
+          <span>Resueltos</span>
+          <strong>{resueltos}</strong>
+        </div>
+
+      </section>
+
+      <section className="card adminTicketsPanel">
+
+        <div className="cardHead">
+          <div>
+            <b>Tickets recibidos</b>
+            <span>Solicitudes generadas desde el apartado de soporte</span>
+          </div>
+
+          <Ticket size={20}/>
+        </div>
+
+        <div className="adminTicketsToolbar">
+
+          <input
+            type="text"
+            value={busqueda}
+            onChange={e=>setBusqueda(e.target.value)}
+            placeholder="Buscar ticket..."
+          />
+
+          <select
+            value={filtro}
+            onChange={e=>setFiltro(e.target.value)}
+          >
+            <option value="Todos">Todos los estados</option>
+            <option value="Pendiente">Pendientes</option>
+            <option value="En proceso">En proceso</option>
+            <option value="Resuelto">Resueltos</option>
+          </select>
+
+        </div>
+
+        <div className="adminTicketsList">
+
+          {ticketsFiltrados.length===0 ? (
+
+            <div className="emptyState">
+              <Ticket size={30}/>
+              <strong>No hay tickets registrados</strong>
+              <span>
+                Los tickets generados por los usuarios aparecerán aquí.
+              </span>
+            </div>
+
+          ) : (
+
+            ticketsFiltrados.map(ticket=>(
+
+              <button
+                key={ticket.id}
+                type="button"
+                className="adminTicketRow"
+                onClick={()=>abrirTicket(ticket)}
+              >
+
+                <div className="adminTicketId">
+                  <strong>{ticket.id}</strong>
+                  <span>{ticket.fecha}</span>
+                </div>
+
+                <div className="adminTicketInfo">
+                  <strong>{ticket.titulo}</strong>
+                  <span>{ticket.tipo} · {ticket.apartado}</span>
+                </div>
+
+                <span className={`adminTicketStatus status-${ticket.estado.toLowerCase().replace(' ','-')}`}>
+                  {ticket.estado}
+                </span>
+
+              </button>
+
+            ))
+
+          )}
+
+        </div>
+
+      </section>
+
+      {ticketSeleccionado && (
+
+        <section className="card adminTicketsPanel adminTicketDetail">
+
+          <div className="cardHead">
+
+            <div>
+              <b>{ticketSeleccionado.id} · {ticketSeleccionado.titulo}</b>
+              <span>
+                {ticketSeleccionado.tipo} · {ticketSeleccionado.apartado}
+              </span>
+            </div>
+
+            <button
+              type="button"
+              className="linkBtn"
+              onClick={()=>{
+                setTicketSeleccionadoId(null);
+                setRespuesta('');
+              }}
+            >
+              Cerrar
+            </button>
+
+          </div>
+
+          <div className="adminTicketDetailBody">
+
+            <div className="adminTicketMeta">
+
+              <span>
+                <b>Fecha:</b> {ticketSeleccionado.fecha}
+              </span>
+
+              <span>
+                <b>Estado:</b> {ticketSeleccionado.estado}
+              </span>
+
+              {ticketSeleccionado.archivo && (
+                <span>
+                  <Paperclip size={13}/>
+                  <b>Archivo:</b> {ticketSeleccionado.archivo}
+                </span>
+              )}
+
+            </div>
+
+            <div className="adminTicketDescription">
+              <span>Descripción</span>
+              <p>{ticketSeleccionado.descripcion}</p>
+            </div>
+
+            {ticketSeleccionado.respuesta && (
+              <div className="adminTicketExistingResponse">
+                <span>Respuesta actual</span>
+                <p>{ticketSeleccionado.respuesta}</p>
+              </div>
+            )}
+
+            {ticketSeleccionado.respuestaUsuario && (
+              <div className="adminTicketUserResponse">
+                <span>Respuesta del usuario</span>
+                <p>{ticketSeleccionado.respuestaUsuario}</p>
+              </div>
+            )}
+
+            <label className="adminTicketResponse">
+              Responder ticket
+
+              <textarea
+                value={respuesta}
+                onChange={e=>setRespuesta(e.target.value)}
+                placeholder="Escribe la respuesta para el usuario..."
+                rows={5}
+              />
+            </label>
+
+            <div className="adminTicketActions">
+
+              <button
+                type="button"
+                className="adminTicketBtn"
+                onClick={()=>cambiarEstado('En proceso')}
+              >
+                En proceso
+              </button>
+
+              <button
+                type="button"
+                className="adminTicketBtn"
+                onClick={()=>cambiarEstado('Resuelto')}
+              >
+                Resuelto
+              </button>
+
+              <button
+                type="button"
+                className="adminTicketBtn primary"
+                onClick={guardarRespuesta}
+              >
+                <Send size={15}/>
+                Enviar respuesta
+              </button>
+
+            </div>
+
+          </div>
+
+        </section>
+
+      )}
+
+    </div>
+  );
+}
+
+function SoporteView({
+  tickets,
+  setTickets
+}:{
+  tickets:SupportTicket[];
+  setTickets:React.Dispatch<React.SetStateAction<SupportTicket[]>>;
+}){
+
+  const [tipo,setTipo] = useState('Bug');
+  const [apartado,setApartado] = useState('Dashboard');
+  const [titulo,setTitulo] = useState('');
+  const [descripcion,setDescripcion] = useState('');
+  const [archivo,setArchivo] = useState<File|null>(null);
+
+  const crearTicket = () => {
+    if(!titulo.trim() || !descripcion.trim()){
+      alert('Completa el título y la descripción del problema.');
+      return;
+    }
+
+    const nuevoTicket:SupportTicket = {
+      id:`SOP-${String(tickets.length + 1).padStart(4,'0')}`,
+      tipo,
+      apartado,
+      titulo,
+      descripcion,
+      estado:'Pendiente',
+      fecha:new Date().toLocaleString('es-CL'),
+      archivo:archivo ? archivo.name : ''
+    };
+
+    setTickets(prev => [...prev,nuevoTicket]);
+
+    setTitulo('');
+    setDescripcion('');
+    setArchivo(null);
+
+    alert(`Ticket ${nuevoTicket.id} creado correctamente.`);
+  };
+
+  return (
+    <div className="sectionGrid supportSection">
+
+      {/* =========================
+          CONTACTO DE SOPORTE
+          ========================= */}
+
+      <section className="panel supportPanel">
+
+        <div className="supportPanelHead">
+          <div>
+            <h2>Contacto de soporte</h2>
+            <p>Asistencia técnica y atención rápida</p>
+          </div>
+
+          <LifeBuoy size={20}/>
+        </div>
+
+        <div className="supportPanelBody">
+
+          <div className="supportContactGrid">
+
+            <div className="supportContactCard">
+              <div className="supportContactIcon">
+                <Mail size={20}/>
+              </div>
+
+              <div>
+                <span>Correo de asistencia</span>
+                <strong>soporte@alerta360.cl</strong>
+              </div>
+            </div>
+
+            <div className="supportContactCard">
+              <div className="supportContactIcon">
+                <Phone size={20}/>
+              </div>
+
+              <div>
+                <span>Anexo de asistencia rápida</span>
+                <strong>Anexo 1234</strong>
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+
+      </section>
+
+
+      {/* =========================
+          REPORTAR INCIDENCIA
+          ========================= */}
+
+      <section className="panel supportPanel">
+
+        <div className="supportPanelHead">
+          <div>
+            <h2>Reportar incidencia</h2>
+            <p>Errores, bugs y propuestas de mejora</p>
+          </div>
+
+          <Bug size={20}/>
+        </div>
+
+        <div className="supportPanelBody">
+
+          <div className="supportForm">
+
+            <div className="formGrid">
+
+              <label>
+                Tipo de solicitud
+
+                <select
+                  value={tipo}
+                  onChange={e=>setTipo(e.target.value)}
+                >
+                  <option>Bug</option>
+                  <option>Problema técnico</option>
+                  <option>Sugerencia</option>
+                  <option>Solicitud de mejora</option>
+                </select>
+              </label>
+
+
+              <label>
+                Apartado afectado
+
+                <select
+                  value={apartado}
+                  onChange={e=>setApartado(e.target.value)}
+                >
+                  <option>Dashboard</option>
+                  <option>Emergencias</option>
+                  <option>Recursos</option>
+                  <option>Historial</option>
+                  <option>Reportes</option>
+                  <option>Soporte</option>
+                  <option>Configuración</option>
+                  <option>Otro</option>
+                </select>
+              </label>
+
+            </div>
+
+
+            <label>
+              Título del reporte
+
+              <input
+                type="text"
+                value={titulo}
+                onChange={e=>setTitulo(e.target.value)}
+                placeholder="Ej: No se muestran las unidades disponibles"
+              />
+            </label>
+
+
+            <label>
+              Descripción
+
+              <textarea
+                value={descripcion}
+                onChange={e=>setDescripcion(e.target.value)}
+                placeholder="Describe detalladamente el problema o propuesta..."
+                rows={5}
+              />
+            </label>
+
+
+              <label>
+                Captura o archivo
+
+                <input
+                  type="file"
+                  accept="image/*,.pdf"
+                  onChange={e=>setArchivo(e.target.files?.[0] || null)}
+                />
+              </label>
+
+
+            {archivo && (
+              <div className="supportFile">
+                <Paperclip size={16}/>
+                <span>{archivo.name}</span>
+              </div>
+            )}
+
+
+            <div className="supportActions">
+
+              <button
+                className="supportSubmit"
+                onClick={crearTicket}
+              >
+                <Ticket size={17}/>
+                Generar ticket
+              </button>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      </section>
+
+
+      {/* =========================
+          TICKETS GENERADOS
+          ========================= */}
+
+      <section className="panel supportPanel">
+
+        <div className="supportPanelHead">
+          <div>
+            <h2>Tickets generados</h2>
+            <p>Seguimiento de solicitudes de soporte y mantenimiento</p>
+          </div>
+
+          <Ticket size={20}/>
+        </div>
+
+
+        <div className="supportPanelBody">
+
+          {tickets.length === 0 ? (
+
+            <div className="emptyState">
+              <LifeBuoy size={30}/>
+              <strong>No hay tickets registrados</strong>
+              <span>
+                Los tickets generados desde el formulario aparecerán aquí.
+              </span>
+            </div>
+
+          ) : (
+
+            <div className="ticketList">
+
+              {tickets.map(ticket => (
+
+                <div className="ticketCard" key={ticket.id}>
+
+                  <div className="ticketTop">
+
+                    <strong>{ticket.id}</strong>
+
+                    <span>{ticket.estado}</span>
+
+                  </div>
+
+
+                  <h3>{ticket.titulo}</h3>
+
+                  <p>{ticket.descripcion}</p>
+
+
+                  <div className="ticketMeta">
+
+                    <span>{ticket.tipo}</span>
+
+                    <span>{ticket.apartado}</span>
+
+                  </div>
+
+
+                  {ticket.archivo && (
+                    <div className="ticketAttachment">
+                      <Paperclip size={13}/>
+                      {ticket.archivo}
+                    </div>
+                  )}
+
+                  {ticket.respuesta && (
+                    <div className="ticketSupportResponse">
+                      <strong>Respuesta del soporte</strong>
+                      <p>{ticket.respuesta}</p>
+                    </div>
+                  )}
+
+                  {ticket.estado==='En proceso' && (
+                    <div className="ticketUserReply">
+
+                      <strong>Responder al soporte</strong>
+
+                      <textarea
+                        value={ticket.respuestaUsuario || ''}
+                        onChange={e=>{
+                          const texto=e.target.value;
+
+                          setTickets(prev=>
+                            prev.map(t=>
+                              t.id===ticket.id
+                                ? {...t,respuestaUsuario:texto}
+                                : t
+                            )
+                          );
+                        }}
+                        placeholder="Escribe una respuesta para el equipo de soporte..."
+                        rows={4}
+                      />
+
+                      <button
+                        type="button"
+                        onClick={()=>{
+                          if(!ticket.respuestaUsuario?.trim()){
+                            alert('Escribe una respuesta antes de enviarla.');
+                            return;
+                          }
+
+                          setTickets(prev=>
+                            prev.map(t=>
+                              t.id===ticket.id
+                                ? {
+                                    ...t,
+                                    respuestaUsuario:t.respuestaUsuario!.trim()
+                                  }
+                                : t
+                            )
+                          );
+
+                          alert(`Respuesta enviada al soporte para ${ticket.id}.`);
+                        }}
+                      >
+                        <Send size={14}/>
+                        Enviar respuesta
+                      </button>
+
+                    </div>
+                  )}
+
+                  <small>{ticket.fecha}</small>
+
+                </div>
+
+              ))}
+
+            </div>
+
+          )}
+
+        </div>
+
+      </section>
+
+    </div>
+  );
+}
+
+function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRefresh,onNotify,auth,onLogout,isAdmin,timeoutMinutos,onChangeTimeout}:{soundOn:boolean;onToggleSound:(v:boolean)=>void;autoRefreshSec:number;onChangeAutoRefresh:(v:number)=>void;onNotify:(s:string)=>void;auth:{nombre:string;email:string;rol:UserRole};onLogout:()=>void;isAdmin:boolean;timeoutMinutos:number;onChangeTimeout:(v:number)=>void}){
   return <div className="sectionGrid">
     <div className="card sectionCard">
       <div className="cardHead"><div><b>Cuenta</b><span>Sesión iniciada</span></div></div>
@@ -1078,15 +1748,22 @@ function App(){
  // se pide login de nuevo. De paso, esto elimina la validacion asincrona
  // de un token guardado al montar la app -- que era la causa de una
  // carrera con el patrullaje (401 sueltos en /route justo al reiniciar).
- const [auth,setAuth]=useState<{token:string; nombre:string; email:string; rol:'admin'|'visualizador'}|null>(null);
+ const [auth,setAuth]=useState<{token:string; nombre:string; email:string; rol:UserRole}|null>(null);
 
  // currentToken (variable de modulo) es lo que leen las funciones sueltas
  // fuera de React (obtenerRutaReal) para mandar el header Authorization.
  useEffect(()=>{ currentToken=auth?.token ?? null; },[auth]);
 
- const handleLogin=(token:string, nombre:string, email:string, rol:'admin'|'visualizador')=>{
-   setAuth({token,nombre,email,rol});
- };
+const handleLogin=(
+  token:string,
+  nombre:string,
+  email:string,
+  rol:UserRole
+)=>{
+  setAuth({token,nombre,email,rol});
+  setSection(rol==='soporte'?'Tickets':'Dashboard');
+};
+
  const handleLogout=()=>{
    setAuth(null);
  };
@@ -1096,6 +1773,8 @@ function App(){
  // backend vuelve a exigir esto por su cuenta en /assignment/recommend
  // (ver requiere_admin en main.py); esto de aca es solo para la UI.
  const isAdmin=auth?.rol==='admin';
+
+const isAdminSoporte=auth?.rol==='soporte';
 
  const [section,setSection]=useState('Dashboard');
  const [toast,setToast]=useState('');
@@ -1114,6 +1793,7 @@ function App(){
  const [queue,setQueue]=useState<Emergency[]>(()=>POOL_EMERGENCIAS.slice(0,4).map((e,i)=>({...e,id:1258+i,status:'Activa',creadaEn:Date.now()})));
  const [rechazadosPorEmergencia,setRechazadosPorEmergencia]=useState<Record<number,Set<string>>>({});
  const [historial,setHistorial]=useState<HistorialEntry[]>([]);
+ const [tickets,setTickets]=useState<SupportTicket[]>([]);
  // ETA real e idoneidad de tipo de cada asignacion hecha esta sesion —
  // base para "Tiempo promedio" y "Cobertura estimada" del dashboard,
  // calculados de verdad en vez de numeros fijos.
@@ -1657,17 +2337,69 @@ function App(){
    {mobileNavOpen && <div className="navBackdrop" onClick={()=>setMobileNavOpen(false)}/>}
    <aside className={`sidebar${mobileNavOpen?' open':''}${sidebarCollapsed?' collapsed':''}`}>
     <button className="sidebarToggleBtn" onClick={()=>setSidebarCollapsed(c=>!c)} title={sidebarCollapsed?'Expandir menú':'Colapsar menú'}><Menu size={20}/></button>
-    <div className="brand"><div className="brandIcon"><Zap size={20}/></div>{!sidebarCollapsed && <div><b>ALERTA360</b><span>BOMBEROS · VALPARAÍSO</span></div>}</div>
-    <nav>{[['Dashboard',BarChart3],['Emergencias',AlertTriangle],['Recursos',Truck],['Historial',History],['Reportes',Layers3],['Configuración',Settings]].map(([label,Icon]:any)=><button key={label} className={section===label?'active':''} onClick={()=>{setSection(label);setMobileNavOpen(false);}} title={label}><Icon size={18}/>{!sidebarCollapsed && <span>{label}</span>}</button>)}</nav>
-    {!sidebarCollapsed && <div className="sidebarBottom"><div className="online"><span></span>Sistema operativo</div><small>Última sincronización<br/><b>hace 18 segundos</b></small></div>}
+    <div className="brand"><div className="brandIcon"><img src={logoDark} className="logoDark" alt="ALERTA360"/><img src={logoLight} className="logoLight" alt="ALERTA360"/></div>{!sidebarCollapsed && <div><b>ALERTA360</b><span>BOMBEROS · VALPARAÍSO</span></div>}</div>
+  <nav>
+  {isAdminSoporte ? (
+    <>
+      <button
+        className={section==='Tickets'?'active':''}
+        onClick={()=>{setSection('Tickets');setMobileNavOpen(false);}}
+        title="Tickets"
+      >
+        <Ticket size={18}/>
+        {!sidebarCollapsed && <span>Tickets</span>}
+      </button>
+    </>
+  ) : (
+    <>
+      {[
+        ['Dashboard',BarChart3],
+        ['Emergencias',AlertTriangle],
+        ['Recursos',Truck],
+        ['Historial',History],
+        ['Reportes',Layers3],
+        ['Soporte',LifeBuoy],
+        ['Configuración',Settings]
+      ].map(([label,Icon]:any)=>(
+        <button
+          key={label}
+          className={section===label?'active':''}
+          onClick={()=>{setSection(label);setMobileNavOpen(false);}}
+          title={label}
+        >
+          <Icon size={18}/>
+          {!sidebarCollapsed && <span>{label}</span>}
+        </button>
+      ))}
+    </>
+  )}
+</nav>    {!sidebarCollapsed && <div className="sidebarBottom"><div className="online"><span></span>Sistema operativo</div><small>Última sincronización<br/><b>hace 18 segundos</b></small></div>}
    </aside>
-   <main className={`main${sidebarCollapsed?' sidebarCollapsed':''}`}><header><button className="mobileMenu" onClick={()=>setMobileNavOpen(o=>!o)}><Menu/></button><div><h1>{section}</h1><p>Central de coordinación · Valparaíso{!isAdmin?' · Acceso de solo lectura':''}{!isAdmin && esperandoEstadoRemoto?' · Esperando datos en vivo del operador…':''}{!isAdmin && estadoRemoto?` · En vivo (operador: ${estadoRemoto.publicadoPor})`:''}</p></div><div className="headerActions">{!isAdmin && <div className="readOnlyBadge" title="Tu cuenta solo puede visualizar, no asignar recursos"><Eye size={13}/> Solo lectura</div>}<button onClick={()=>setTheme(t=>t==='dark'?'light':'dark')} title={theme==='dark'?'Cambiar a tema claro':'Cambiar a tema oscuro'}>{theme==='dark'?<Sun size={17}/>:<Moon size={17}/>}</button><div className="live"><span/> EN VIVO</div><button onClick={()=>{setRefresh(x=>x+1);notify('Datos actualizados')}}><RefreshCw size={17}/></button><button onClick={()=>notify(`${queue.length} emergencias en cola`)}><Bell size={18}/></button><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
-    {section==='Emergencias' && <EmergenciasView queue={queue} claves={claves} now={now} onAtender={atenderEmergencia}/>}
-    {section==='Recursos' && <RecursosView resources={resources} alertaTimeoutIds={unidadesConAlertaTimeout}/>}
-    {section==='Historial' && <HistorialView historial={historial} now={now}/>}
-    {section==='Reportes' && <ReportesView historial={historial}/>}
+   <main className={`main${sidebarCollapsed?' sidebarCollapsed':''}`}><header><button className="mobileMenu" onClick={()=>setMobileNavOpen(o=>!o)}><Menu/></button><div><h1>{section}</h1><p>
+  {isAdminSoporte
+    ? 'Gestión de tickets de soporte'
+    : <>Central de coordinación · Valparaíso{!isAdmin?' · Acceso de solo lectura':''}{!isAdmin && esperandoEstadoRemoto?' · Esperando datos en vivo del operador…':''}{!isAdmin && estadoRemoto?` · En vivo (operador: ${estadoRemoto.publicadoPor})`:''}</>
+  }
+</p></div><div className="headerActions">{!isAdmin && !isAdminSoporte && <div className="readOnlyBadge" title="Tu cuenta solo puede visualizar, no asignar recursos"><Eye size={13}/> Solo lectura</div>}<button onClick={()=>setTheme(t=>t==='dark'?'light':'dark')} title={theme==='dark'?'Cambiar a tema claro':'Cambiar a tema oscuro'}>{theme==='dark'?<Sun size={17}/>:<Moon size={17}/>}</button><div className="live"><span/> EN VIVO</div><button onClick={()=>{setRefresh(x=>x+1);notify('Datos actualizados')}}><RefreshCw size={17}/></button><button onClick={()=>notify(`${queue.length} emergencias en cola`)}><Bell size={18}/></button><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
+    {section==='Emergencias' && !isAdminSoporte && <EmergenciasView queue={queue} claves={claves} now={now} onAtender={atenderEmergencia}/>}
+    {section==='Recursos' && !isAdminSoporte && <RecursosView resources={resources} alertaTimeoutIds={unidadesConAlertaTimeout}/>}
+    {section==='Historial' && !isAdminSoporte && <HistorialView historial={historial} now={now}/>}
+    {section==='Reportes' && !isAdminSoporte && <ReportesView historial={historial}/>}
     {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} onNotify={notify} auth={auth} onLogout={handleLogout} isAdmin={isAdmin} timeoutMinutos={timeoutMinutos} onChangeTimeout={setTimeoutMinutos}/>}
-    {section==='Dashboard' && <>
+    {section==='Soporte' && (
+      <SoporteView
+        tickets={tickets}
+        setTickets={setTickets}
+      />
+    )}
+
+    {section==='Tickets' && isAdminSoporte && (
+      <AdminTicketsView
+        tickets={tickets}
+        setTickets={setTickets}
+      />
+    )}
+    {section==='Dashboard' && !isAdminSoporte && <>
     <div className="cuartelFilterRow">
       <label><Building2 size={16}/> Filtrar por cuartel<select value={filtroCuartel} onChange={e=>setFiltroCuartel(e.target.value)}>
         <option value="todos">Todos los cuarteles</option>
