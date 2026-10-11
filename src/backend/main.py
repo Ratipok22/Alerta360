@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 # Carga variables desde .env (JWT_SECRET_KEY, etc.) cuando se corre
 # directo con uvicorn; docker-compose ya las inyecta por su cuenta, pero
@@ -17,7 +18,9 @@ load_dotenv()
 
 from core.auth import Usuario, crear_token, verificar_credenciales, verificar_token
 from core.companies import todas_las_unidades
+from core.db import get_db
 from core.eta import calcular_eta
+from core.models import Asignacion, Emergencia
 from core.radio_codes import CLAVES_RADIALES
 from core.vehicle_types import TIPOS_CARRO
 from ml.predict import predict_demand
@@ -269,3 +272,113 @@ def recommend(emergency: Emergency, usuario: Usuario = Depends(requiere_admin)):
         return round(35 + 25 + 15 + (20 if r["capacity"] else 0) - min(r["eta"]*2,25) - min(r["distance"]*2,18), 2)
     best=max(candidates,key=score)
     return {"recommended_resource":best["id"],"score":score(best),"criteria":["priority","type","compatibility","availability","distance","eta","capacity"]}
+
+
+# ---------------------------------------------------------------------------
+# Persistencia real en Postgres (core/db.py, core/models.py) del modulo
+# Emergencia y Operacion. A diferencia de /state (arriba), que es un espejo
+# en memoria del estado simulado del frontend, estos endpoints son CRUD
+# real: lo que se crea aca sobrevive a un reinicio del backend.
+# ---------------------------------------------------------------------------
+
+class EmergenciaCreate(BaseModel):
+    codigo: str
+    direccion: str | None = None
+    latitud: float
+    longitud: float
+    prioridad: str
+
+class EmergenciaOut(BaseModel):
+    id_emergencia: int
+    codigo: str
+    direccion: str | None
+    latitud: float
+    longitud: float
+    prioridad: str
+    estado: str
+    fecha_creacion: datetime
+    fecha_cierre: datetime | None
+
+    class Config:
+        from_attributes = True
+
+class EstadoUpdate(BaseModel):
+    estado: str
+    fecha_cierre: datetime | None = None
+
+class AsignacionCreate(BaseModel):
+    id_emergencia: int
+    id_recurso: str
+    score: float | None = None
+    distancia_km: float | None = None
+    eta_min: int | None = None
+
+class AsignacionOut(BaseModel):
+    id_asignacion: int
+    id_emergencia: int
+    id_recurso: str
+    usuario_email: str
+    score: float | None
+    distancia_km: float | None
+    eta_min: int | None
+    fecha_asignacion: datetime
+    estado: str
+
+    class Config:
+        from_attributes = True
+
+
+@app.post("/emergencias", response_model=EmergenciaOut)
+def crear_emergencia(datos: EmergenciaCreate, db: Session = Depends(get_db), usuario: Usuario = Depends(requiere_admin)):
+    """Crea una emergencia real en Postgres (antes solo existia el modelo
+    Pydantic `Emergency` de /assignment/recommend, sin persistir nada)."""
+    nueva = Emergencia(**datos.model_dump())
+    db.add(nueva)
+    db.commit()
+    db.refresh(nueva)
+    return nueva
+
+@app.get("/emergencias", response_model=list[EmergenciaOut])
+def listar_emergencias(estado: str | None = None, db: Session = Depends(get_db), usuario: Usuario = Depends(usuario_actual)):
+    query = db.query(Emergencia)
+    if estado:
+        query = query.filter(Emergencia.estado == estado)
+    return query.order_by(Emergencia.fecha_creacion.desc()).all()
+
+@app.get("/emergencias/{id_emergencia}", response_model=EmergenciaOut)
+def obtener_emergencia(id_emergencia: int, db: Session = Depends(get_db), usuario: Usuario = Depends(usuario_actual)):
+    emergencia = db.get(Emergencia, id_emergencia)
+    if not emergencia:
+        raise HTTPException(status_code=404, detail="Emergencia no encontrada")
+    return emergencia
+
+@app.patch("/emergencias/{id_emergencia}/estado", response_model=EmergenciaOut)
+def actualizar_estado_emergencia(id_emergencia: int, datos: EstadoUpdate, db: Session = Depends(get_db), usuario: Usuario = Depends(requiere_admin)):
+    emergencia = db.get(Emergencia, id_emergencia)
+    if not emergencia:
+        raise HTTPException(status_code=404, detail="Emergencia no encontrada")
+    emergencia.estado = datos.estado
+    if datos.fecha_cierre:
+        emergencia.fecha_cierre = datos.fecha_cierre
+    db.commit()
+    db.refresh(emergencia)
+    return emergencia
+
+@app.post("/asignaciones", response_model=AsignacionOut)
+def crear_asignacion(datos: AsignacionCreate, db: Session = Depends(get_db), usuario: Usuario = Depends(requiere_admin)):
+    """usuario_email se toma del JWT autenticado, nunca de lo que mande el
+    cliente -- mismo criterio que ya usa /state con "publicadoPor"."""
+    if not db.get(Emergencia, datos.id_emergencia):
+        raise HTTPException(status_code=404, detail="Emergencia no encontrada")
+    nueva = Asignacion(**datos.model_dump(), usuario_email=usuario.email)
+    db.add(nueva)
+    db.commit()
+    db.refresh(nueva)
+    return nueva
+
+@app.get("/asignaciones", response_model=list[AsignacionOut])
+def listar_asignaciones(id_emergencia: int | None = None, db: Session = Depends(get_db), usuario: Usuario = Depends(usuario_actual)):
+    query = db.query(Asignacion)
+    if id_emergencia is not None:
+        query = query.filter(Asignacion.id_emergencia == id_emergencia)
+    return query.order_by(Asignacion.fecha_asignacion.desc()).all()
