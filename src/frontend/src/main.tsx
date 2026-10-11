@@ -89,6 +89,7 @@ type SupportTicket = {
   fecha:string;
   archivo:string;
   respuesta?:string;
+  respuestaUsuario?:string;
 };
 
 
@@ -1047,18 +1048,86 @@ function ReportesView({historial}:{historial:HistorialEntry[]}){
   </div>;
 }
 
-function AdminTicketsView(){
+function AdminTicketsView({
+  tickets,
+  setTickets
+}:{
+  tickets:SupportTicket[];
+  setTickets:React.Dispatch<React.SetStateAction<SupportTicket[]>>;
+}){
   const [filtro,setFiltro]=useState('Todos');
+  const [busqueda,setBusqueda]=useState('');
+  const [ticketSeleccionadoId,setTicketSeleccionadoId]=useState<string|null>(null);
+  const [respuesta,setRespuesta]=useState('');
 
-  const tickets:SupportTicket[] = [];
+  const ticketsFiltrados=tickets.filter(ticket=>{
+    const coincideEstado=filtro==='Todos' || ticket.estado===filtro;
 
-  const ticketsFiltrados = filtro==='Todos'
-    ? tickets
-    : tickets.filter(ticket=>ticket.estado===filtro);
+    const textoBusqueda=busqueda.trim().toLowerCase();
+
+    const coincideBusqueda=
+      !textoBusqueda ||
+      ticket.id.toLowerCase().includes(textoBusqueda) ||
+      ticket.titulo.toLowerCase().includes(textoBusqueda) ||
+      ticket.tipo.toLowerCase().includes(textoBusqueda) ||
+      ticket.apartado.toLowerCase().includes(textoBusqueda);
+
+    return coincideEstado && coincideBusqueda;
+  });
 
   const pendientes=tickets.filter(ticket=>ticket.estado==='Pendiente').length;
   const enProceso=tickets.filter(ticket=>ticket.estado==='En proceso').length;
   const resueltos=tickets.filter(ticket=>ticket.estado==='Resuelto').length;
+
+  const ticketSeleccionado=tickets.find(
+    ticket=>ticket.id===ticketSeleccionadoId
+  );
+
+  const abrirTicket=(ticket:SupportTicket)=>{
+    setTicketSeleccionadoId(ticket.id);
+    setRespuesta(ticket.respuesta || '');
+  };
+
+  const guardarRespuesta=()=>{
+    if(!ticketSeleccionado){
+      return;
+    }
+
+    if(!respuesta.trim()){
+      alert('Escribe una respuesta antes de enviarla.');
+      return;
+    }
+
+    setTickets(prev=>
+      prev.map(ticket=>
+        ticket.id===ticketSeleccionado.id
+          ? {
+              ...ticket,
+              respuesta:respuesta.trim(),
+              estado:ticket.estado==='Pendiente'
+                ? 'En proceso'
+                : ticket.estado
+            }
+          : ticket
+      )
+    );
+
+    alert(`Respuesta enviada al ticket ${ticketSeleccionado.id}.`);
+  };
+
+  const cambiarEstado=(nuevoEstado:'Pendiente'|'En proceso'|'Resuelto')=>{
+    if(!ticketSeleccionado){
+      return;
+    }
+
+    setTickets(prev=>
+      prev.map(ticket=>
+        ticket.id===ticketSeleccionado.id
+          ? {...ticket,estado:nuevoEstado}
+          : ticket
+      )
+    );
+  };
 
   return (
     <div className="adminTicketsPage">
@@ -1097,6 +1166,8 @@ function AdminTicketsView(){
 
           <input
             type="text"
+            value={busqueda}
+            onChange={e=>setBusqueda(e.target.value)}
             placeholder="Buscar ticket..."
           />
 
@@ -1127,7 +1198,13 @@ function AdminTicketsView(){
           ) : (
 
             ticketsFiltrados.map(ticket=>(
-              <div className="adminTicketRow" key={ticket.id}>
+
+              <button
+                key={ticket.id}
+                type="button"
+                className="adminTicketRow"
+                onClick={()=>abrirTicket(ticket)}
+              >
 
                 <div className="adminTicketId">
                   <strong>{ticket.id}</strong>
@@ -1143,7 +1220,8 @@ function AdminTicketsView(){
                   {ticket.estado}
                 </span>
 
-              </div>
+              </button>
+
             ))
 
           )}
@@ -1152,23 +1230,130 @@ function AdminTicketsView(){
 
       </section>
 
+      {ticketSeleccionado && (
+
+        <section className="card adminTicketsPanel adminTicketDetail">
+
+          <div className="cardHead">
+
+            <div>
+              <b>{ticketSeleccionado.id} · {ticketSeleccionado.titulo}</b>
+              <span>
+                {ticketSeleccionado.tipo} · {ticketSeleccionado.apartado}
+              </span>
+            </div>
+
+            <button
+              type="button"
+              className="linkBtn"
+              onClick={()=>{
+                setTicketSeleccionadoId(null);
+                setRespuesta('');
+              }}
+            >
+              Cerrar
+            </button>
+
+          </div>
+
+          <div className="adminTicketDetailBody">
+
+            <div className="adminTicketMeta">
+
+              <span>
+                <b>Fecha:</b> {ticketSeleccionado.fecha}
+              </span>
+
+              <span>
+                <b>Estado:</b> {ticketSeleccionado.estado}
+              </span>
+
+              {ticketSeleccionado.archivo && (
+                <span>
+                  <Paperclip size={13}/>
+                  <b>Archivo:</b> {ticketSeleccionado.archivo}
+                </span>
+              )}
+
+            </div>
+
+            <div className="adminTicketDescription">
+              <span>Descripción</span>
+              <p>{ticketSeleccionado.descripcion}</p>
+            </div>
+
+            {ticketSeleccionado.respuesta && (
+              <div className="adminTicketExistingResponse">
+                <span>Respuesta actual</span>
+                <p>{ticketSeleccionado.respuesta}</p>
+              </div>
+            )}
+
+            {ticketSeleccionado.respuestaUsuario && (
+              <div className="adminTicketUserResponse">
+                <span>Respuesta del usuario</span>
+                <p>{ticketSeleccionado.respuestaUsuario}</p>
+              </div>
+            )}
+
+            <label className="adminTicketResponse">
+              Responder ticket
+
+              <textarea
+                value={respuesta}
+                onChange={e=>setRespuesta(e.target.value)}
+                placeholder="Escribe la respuesta para el usuario..."
+                rows={5}
+              />
+            </label>
+
+            <div className="adminTicketActions">
+
+              <button
+                type="button"
+                className="adminTicketBtn"
+                onClick={()=>cambiarEstado('En proceso')}
+              >
+                En proceso
+              </button>
+
+              <button
+                type="button"
+                className="adminTicketBtn"
+                onClick={()=>cambiarEstado('Resuelto')}
+              >
+                Resuelto
+              </button>
+
+              <button
+                type="button"
+                className="adminTicketBtn primary"
+                onClick={guardarRespuesta}
+              >
+                <Send size={15}/>
+                Enviar respuesta
+              </button>
+
+            </div>
+
+          </div>
+
+        </section>
+
+      )}
+
     </div>
   );
 }
 
-function SoporteView(){
-  type Ticket = {
-    id:string;
-    tipo:string;
-    apartado:string;
-    titulo:string;
-    descripcion:string;
-    estado:string;
-    fecha:string;
-    archivo:string;
-  };
+function SoporteView({
+  tickets,
+  setTickets
+}:{
+  tickets:SupportTicket[];
+  setTickets:React.Dispatch<React.SetStateAction<SupportTicket[]>>;
+}){
 
-  const [tickets,setTickets] = useState<Ticket[]>([]);
   const [tipo,setTipo] = useState('Bug');
   const [apartado,setApartado] = useState('Dashboard');
   const [titulo,setTitulo] = useState('');
@@ -1181,7 +1366,7 @@ function SoporteView(){
       return;
     }
 
-    const nuevoTicket:Ticket = {
+    const nuevoTicket:SupportTicket = {
       id:`SOP-${String(tickets.length + 1).padStart(4,'0')}`,
       tipo,
       apartado,
@@ -1437,6 +1622,63 @@ function SoporteView(){
                     </div>
                   )}
 
+                  {ticket.respuesta && (
+                    <div className="ticketSupportResponse">
+                      <strong>Respuesta del soporte</strong>
+                      <p>{ticket.respuesta}</p>
+                    </div>
+                  )}
+
+                  {ticket.estado==='En proceso' && (
+                    <div className="ticketUserReply">
+
+                      <strong>Responder al soporte</strong>
+
+                      <textarea
+                        value={ticket.respuestaUsuario || ''}
+                        onChange={e=>{
+                          const texto=e.target.value;
+
+                          setTickets(prev=>
+                            prev.map(t=>
+                              t.id===ticket.id
+                                ? {...t,respuestaUsuario:texto}
+                                : t
+                            )
+                          );
+                        }}
+                        placeholder="Escribe una respuesta para el equipo de soporte..."
+                        rows={4}
+                      />
+
+                      <button
+                        type="button"
+                        onClick={()=>{
+                          if(!ticket.respuestaUsuario?.trim()){
+                            alert('Escribe una respuesta antes de enviarla.');
+                            return;
+                          }
+
+                          setTickets(prev=>
+                            prev.map(t=>
+                              t.id===ticket.id
+                                ? {
+                                    ...t,
+                                    respuestaUsuario:t.respuestaUsuario!.trim()
+                                  }
+                                : t
+                            )
+                          );
+
+                          alert(`Respuesta enviada al soporte para ${ticket.id}.`);
+                        }}
+                      >
+                        <Send size={14}/>
+                        Enviar respuesta
+                      </button>
+
+                    </div>
+                  )}
 
                   <small>{ticket.fecha}</small>
 
@@ -1551,6 +1793,7 @@ const isAdminSoporte=auth?.rol==='soporte';
  const [queue,setQueue]=useState<Emergency[]>(()=>POOL_EMERGENCIAS.slice(0,4).map((e,i)=>({...e,id:1258+i,status:'Activa',creadaEn:Date.now()})));
  const [rechazadosPorEmergencia,setRechazadosPorEmergencia]=useState<Record<number,Set<string>>>({});
  const [historial,setHistorial]=useState<HistorialEntry[]>([]);
+ const [tickets,setTickets]=useState<SupportTicket[]>([]);
  // ETA real e idoneidad de tipo de cada asignacion hecha esta sesion —
  // base para "Tiempo promedio" y "Cobertura estimada" del dashboard,
  // calculados de verdad en vez de numeros fijos.
@@ -2143,8 +2386,19 @@ const isAdminSoporte=auth?.rol==='soporte';
     {section==='Historial' && !isAdminSoporte && <HistorialView historial={historial} now={now}/>}
     {section==='Reportes' && !isAdminSoporte && <ReportesView historial={historial}/>}
     {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} onNotify={notify} auth={auth} onLogout={handleLogout} isAdmin={isAdmin} timeoutMinutos={timeoutMinutos} onChangeTimeout={setTimeoutMinutos}/>}
-    {section==='Soporte' && <SoporteView/>}
-    {section==='Tickets' && isAdminSoporte && <AdminTicketsView/>}
+    {section==='Soporte' && (
+      <SoporteView
+        tickets={tickets}
+        setTickets={setTickets}
+      />
+    )}
+
+    {section==='Tickets' && isAdminSoporte && (
+      <AdminTicketsView
+        tickets={tickets}
+        setTickets={setTickets}
+      />
+    )}
     {section==='Dashboard' && !isAdminSoporte && <>
     <div className="cuartelFilterRow">
       <label><Building2 size={16}/> Filtrar por cuartel<select value={filtroCuartel} onChange={e=>setFiltroCuartel(e.target.value)}>

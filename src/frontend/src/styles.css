@@ -1501,3 +1501,254 @@ html[data-theme="light"] .adminTicketsToolbar select:focus{
   }
 
 }
+
+/* =========================================================
+   CONVERSACIÓN DE SOPORTE
+   ========================================================= */
+
+.ticketSupportResponse{
+  margin-top:14px;
+  padding:13px 14px;
+  border-left:3px solid var(--acento);
+  background:var(--negro-panel);
+  border-radius:7px;
+}
+
+.ticketSupportResponse strong{
+  display:block;
+  color:var(--acento);
+  font-size:11px;
+  font-weight:700;
+  text-transform:uppercase;
+  margin-bottom:6px;
+}
+
+.ticketSupportResponse p{
+  margin:0;
+  color:var(--gris-texto);
+  font-size:12px;
+  line-height:1.5;
+}
+
+.ticketUserReply{
+  margin-top:14px;
+  padding:14px;
+  border:1px solid var(--borde-sutil);
+  border-radius:8px;
+  background:var(--negro-panel);
+}
+
+.ticketUserReply strong{
+  display:block;
+  margin-bottom:8px;
+  color:var(--blanco);
+  font-size:12px;
+}
+
+.ticketUserReply textarea{
+  width:100%;
+  box-sizing:border-box;
+  min-height:100px;
+  resize:vertical;
+  padding:10px 12px;
+  background:var(--negro-tarjeta);
+  color:var(--gris-texto);
+  border:1px solid var(--borde-sutil);
+  border-radius:6px;
+  font-family:inherit;
+  font-size:12px;
+  line-height:1.5;
+}
+
+.ticketUserReply textarea:focus{
+  outline:none;
+  border-color:var(--acento);
+}
+
+.ticketUserReply button{
+  margin-top:9px;
+  display:flex;
+  align-items:center;
+  gap:6px;
+  border:1px solid var(--acento);
+  background:var(--acento);
+  color:var(--on-accent);
+  border-radius:6px;
+  padding:9px 12px;
+  font-family:inherit;
+  font-size:12px;
+  font-weight:700;
+  cursor:pointer;
+}
+
+.ticketUserReply button:hover{
+  filter:brightness(1.08);
+}
+
+.adminTicketUserResponse{
+  padding:14px;
+  border:1px solid var(--borde-sutil);
+  border-radius:8px;
+  background:var(--negro-panel);
+}
+
+.adminTicketUserResponse span{
+  display:block;
+  margin-bottom:7px;
+  color:var(--gris-tenue);
+  font-size:11px;
+  font-weight:700;
+  text-transform:uppercase;
+}
+
+.adminTicketUserResponse p{
+  margin:0;
+  color:var(--gris-texto);
+  font-size:13px;
+  line-height:1.6;
+}
+
+html[data-theme="light"] .ticketSupportResponse,
+html[data-theme="light"] .ticketUserReply,
+html[data-theme="light"] .adminTicketUserResponse{
+  background:var(--fondo-pagina);
+}
+
+html[data-theme="light"] .ticketUserReply textarea{
+  background:var(--negro-panel);
+}
+
+/* =========================================================
+   DETALLE Y RESPUESTA DE TICKETS
+   ========================================================= */
+
+.adminTicketDetail{
+  margin-top:16px;
+}
+
+.adminTicketDetailBody{
+  padding:20px;
+  display:flex;
+  flex-direction:column;
+  gap:18px;
+}
+
+.adminTicketMeta{
+  display:flex;
+  flex-wrap:wrap;
+  gap:12px;
+  color:var(--gris-tenue);
+  font-size:12px;
+}
+
+.adminTicketMeta span{
+  display:flex;
+  align-items:center;
+  gap:5px;
+}
+
+.adminTicketDescription,
+.adminTicketExistingResponse{
+  padding:14px;
+  border:1px solid var(--borde-sutil);
+  border-radius:8px;
+  background:var(--negro-panel);
+}
+
+.adminTicketDescription span,
+.adminTicketExistingResponse span{
+  display:block;
+  margin-bottom:7px;
+  color:var(--gris-tenue);
+  font-size:11px;
+  font-weight:700;
+  text-transform:uppercase;
+}
+
+.adminTicketDescription p,
+.adminTicketExistingResponse p{
+  margin:0;
+  color:var(--gris-texto);
+  font-size:13px;
+  line-height:1.6;
+}
+
+.adminTicketResponse{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  color:var(--gris-texto);
+  font-size:12px;
+  font-weight:600;
+}
+
+.adminTicketResponse textarea{
+  width:100%;
+  box-sizing:border-box;
+  resize:vertical;
+  min-height:120px;
+  padding:12px;
+  background:var(--negro-panel);
+  color:var(--gris-texto);
+  border:1px solid var(--borde-sutil);
+  border-radius:8px;
+  font-family:inherit;
+  font-size:13px;
+  line-height:1.5;
+}
+
+.adminTicketResponse textarea:focus{
+  outline:none;
+  border-color:var(--acento);
+}
+
+.adminTicketActions{
+  display:flex;
+  justify-content:flex-end;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.adminTicketBtn{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:9px 13px;
+  border:1px solid var(--borde-sutil);
+  border-radius:7px;
+  background:var(--negro-panel);
+  color:var(--gris-texto);
+  font-family:inherit;
+  font-size:12px;
+  font-weight:600;
+  cursor:pointer;
+}
+
+.adminTicketBtn:hover{
+  border-color:var(--acento);
+}
+
+.adminTicketBtn.primary{
+  background:var(--acento);
+  border-color:var(--acento);
+  color:#fff;
+}
+
+.adminTicketRow{
+  width:100%;
+  border-left:0;
+  border-right:0;
+  border-bottom:0;
+  text-align:left;
+  font-family:inherit;
+  cursor:pointer;
+}
+
+html[data-theme="light"] .adminTicketDescription,
+html[data-theme="light"] .adminTicketExistingResponse{
+  background:var(--fondo-pagina);
+}
+
+html[data-theme="light"] .adminTicketResponse textarea{
+  background:var(--fondo-pagina);
+}
