@@ -3,7 +3,7 @@ import {createRoot} from 'react-dom/client';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
-import {AlertTriangle, BarChart3, Bell, Building2, CheckCircle2, Clock3, Crosshair, Droplet, Eye, Flame, HardHat, History, Info, Layers3, LifeBuoy, Lightbulb, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Paperclip, Phone, Radio, RefreshCw, Send, Settings, ShieldCheck, Sun, Ticket, Truck, TreePine, Users, XCircle, Zap, Bug} from 'lucide-react';
+import {AlertTriangle, BarChart3, Building2, CheckCircle2, Clock3, Crosshair, Droplet, Eye, Flame, HardHat, History, Info, Layers3, LifeBuoy, Lightbulb, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Paperclip, Phone, Radio, Send, Settings, ShieldCheck, Sun, Ticket, Truck, TreePine, Users, XCircle, Zap, Bug} from 'lucide-react';
 import logoDark from "./assets/logo-alerta360-dark.png";
 import logoLight from "./assets/logo-alerta360-light.png";
 
@@ -68,13 +68,13 @@ type Resource={
   // marca con una alerta visual para que la central la verifique.
   ultimaActualizacion?:number;
 };
-type Emergency={id:number; codigo:string; address:string; lat:number; lng:number; status:'Activa'|'Asignada'; creadaEn:number;};
+type Emergency={id:number; codigo:string; address:string; lat:number; lng:number; status:'Activa'|'Asignada'|'Inactiva'; creadaEn:number;};
 type ClimaEsperado={temperatura_c:number; viento_kmh:number; precipitacion_mm:number;};
 type ZoneDemand={zona_id:string; nombre:string; bounds:{lat_min:number;lat_max:number;lng_min:number;lng_max:number}; centroid:{lat:number;lng:number}; demanda_total:number; desglose:Record<string,number>; clima_esperado?:ClimaEsperado;};
 type Periodo={periodo_inicio:string; periodo_fin:string; zonas:ZoneDemand[];};
 type VariableImportancia={nombre:string; peso_pct:number};
 type Clave={codigo:string; nombre:string; prioridad:string; prioridad_nivel:number; terreno:string;};
-type HistorialTipo='asignacion'|'rechazo'|'en_emergencia'|'liberacion'|'nueva_emergencia';
+type HistorialTipo='asignacion'|'rechazo'|'en_emergencia'|'liberacion'|'nueva_emergencia'|'fuera_servicio';
 type HistorialEntry={id:number; ts:number; tipo:HistorialTipo; texto:string;};
 
 // CONFIGURACION PARA SOPORTE TICKET //
@@ -490,7 +490,10 @@ function companiaOcupada(resources:Resource[], compania:string):boolean{
 }
 
 function pickRecommendation(resources:Resource[], emergencia:Emergency|null, rechazados:Set<string>, clave:Clave|undefined, nowMs:number):Resource|null{
-  if(!emergencia) return null;
+  // Una emergencia que ya tiene una unidad despachada (Asignada) o ya fue
+  // resuelta (Inactiva) no vuelve a recibir recomendaciones -- evita
+  // despachar una segunda unidad a algo que ya esta siendo atendido.
+  if(!emergencia || emergencia.status!=='Activa') return null;
   const candidatos=resources.filter(r=>esDisponible(r) && !rechazados.has(r.id) && !companiaOcupada(resources, r.compania));
   if(!candidatos.length) return null;
   return candidatos.slice().sort((a,b)=>{
@@ -515,6 +518,7 @@ function historialIcon(tipo:HistorialTipo){
   if(tipo==='rechazo') return <XCircle size={14}/>;
   if(tipo==='en_emergencia') return <Flame size={14}/>;
   if(tipo==='liberacion') return <Truck size={14}/>;
+  if(tipo==='fuera_servicio') return <XCircle size={14}/>;
   return <AlertTriangle size={14}/>;
 }
 function historialTitle(tipo:HistorialTipo){
@@ -522,6 +526,7 @@ function historialTitle(tipo:HistorialTipo){
   if(tipo==='rechazo') return 'Recomendación rechazada';
   if(tipo==='en_emergencia') return 'Unidad en la emergencia';
   if(tipo==='liberacion') return 'Unidad disponible';
+  if(tipo==='fuera_servicio') return 'Cambio manual de estado';
   return 'Nueva emergencia registrada';
 }
 
@@ -661,6 +666,12 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, isAdm
   // trazado de ruta -- se redibuja solo cuando cambian los datos (no en
   // cada tick), porque nada de esto se mueve cuadro a cuadro.
   const layerRef=useRef<L.LayerGroup|null>(null);
+  // Capa aparte para el anillo de resaltado temporal (ver "Recentrar" mas
+  // abajo): separada de layerRef para no interferir con su redibujado
+  // normal (cuarteles/emergencias/ruta), que se limpia y arma de cero cada
+  // vez que cambian los datos.
+  const highlightLayerRef=useRef<L.LayerGroup|null>(null);
+  const highlightTimeoutRef=useRef<number|null>(null);
   // Marcadores de unidades: PERSISTENTES (no se destruyen y recrean cada
   // tick). Se mueven con marker.setLatLng() -- que junto con la transicion
   // CSS de .resource-marker se ve como un vehiculo deslizandose de verdad,
@@ -690,8 +701,10 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, isAdm
     // revisar una captura de pantalla real y no solo el codigo de estado.
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors'}).addTo(map);
     const layer=L.layerGroup().addTo(map);
+    const highlightLayer=L.layerGroup().addTo(map);
     mapRef.current=map;
     layerRef.current=layer;
+    highlightLayerRef.current=highlightLayer;
     marcadoresRef.current={};
     estadoIconoRef.current={};
     // Los popups de Leaflet son HTML plano (no componentes de React), asi
@@ -710,7 +723,7 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, isAdm
       });
     });
     const cleanupResize=fixMapSize(map);
-    return()=>{cleanupResize(); map.remove(); mapRef.current=null; layerRef.current=null;};
+    return()=>{cleanupResize(); map.remove(); mapRef.current=null; layerRef.current=null; highlightLayerRef.current=null;};
   },[center]);
 
   // Capa estatica: emergencias, marcador "asignada" y trazado de ruta.
@@ -834,10 +847,27 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, isAdm
   },[resources, tick]);
 
   // Recentrar solo cuando el operador pide explicitamente ubicar algo
-  // ("Ver en el mapa"), no en cada actualizacion de datos.
+  // ("Ver en el mapa", "Atender", tocar una compañia en Recursos), no en
+  // cada actualizacion de datos. Zoom fijo (no "al menos X"): siempre
+  // acerca a nivel de calle para que se identifique con precision el punto
+  // exacto, sin importar en que nivel de zoom haya quedado el mapa antes.
+  // Ademas dibuja un anillo que pulsa sobre el punto exacto por unos
+  // segundos, para distinguirlo de otros marcadores cercanos (p.ej. varios
+  // cuarteles juntos) que el centrado solo no alcanza a diferenciar.
   useEffect(()=>{
     if(focus && mapRef.current){
-      mapRef.current.setView([focus.lat,focus.lng], Math.max(mapRef.current.getZoom(),13));
+      mapRef.current.setView([focus.lat,focus.lng], 17);
+      const hl=highlightLayerRef.current;
+      if(hl){
+        hl.clearLayers();
+        if(highlightTimeoutRef.current) window.clearTimeout(highlightTimeoutRef.current);
+        L.marker([focus.lat,focus.lng],{
+          icon:L.divIcon({className:'focus-ping', html:'<span></span><span></span>', iconSize:[1,1], iconAnchor:[0,0]}),
+          interactive:false,
+          zIndexOffset:1000,
+        }).addTo(hl);
+        highlightTimeoutRef.current=window.setTimeout(()=>{hl.clearLayers();}, 4000);
+      }
     }
   },[focus]);
 
@@ -904,11 +934,11 @@ function HeatMapPanel({zonas, seleccionadaId, onSelectZona, focus}:{zonas:ZoneDe
   return <div id="heatmap"/>
 }
 
-function EmergenciasView({queue,claves,now,onAtender}:{queue:Emergency[];claves:Record<string,Clave>;now:number;onAtender:(id:number)=>void}){
+function EmergenciasView({queue,claves,now,onAtender,isAdmin}:{queue:Emergency[];claves:Record<string,Clave>;now:number;onAtender:(id:number)=>void;isAdmin:boolean}){
   return <div className="card sectionCard">
     <div className="cardHead"><div><b>Emergencias activas</b><span>{queue.length} en cola de atención</span></div></div>
     <div className="tableWrap"><table className="dataTable">
-      <thead><tr><th>ID</th><th>Clave</th><th>Prioridad</th><th>Dirección</th><th>Tiempo</th><th>Estado</th><th></th></tr></thead>
+      <thead><tr><th>ID</th><th>Clave</th><th>Prioridad</th><th>Dirección</th><th>Tiempo</th><th>Estado</th>{isAdmin && <th></th>}</tr></thead>
       <tbody>{queue.map(e=>{const c=claves[e.codigo]; return <tr key={e.id}>
         <td>#{e.id}</td>
         <td>{e.codigo} · {c?.nombre??'—'}</td>
@@ -916,14 +946,14 @@ function EmergenciasView({queue,claves,now,onAtender}:{queue:Emergency[];claves:
         <td className="wrap">{e.address}</td>
         <td>{elapsedLabel(e.creadaEn,now)}</td>
         <td>{e.status}</td>
-        <td><button className="linkBtn" onClick={()=>onAtender(e.id)}>Atender</button></td>
+        {isAdmin && <td><button className="atenderBtn" onClick={()=>onAtender(e.id)}>Atender</button></td>}
       </tr>;})}</tbody>
     </table></div>
   </div>;
 }
 
 const TODOS='todos' as const;
-function RecursosView({resources,alertaTimeoutIds}:{resources:Resource[];alertaTimeoutIds:Set<string>}){
+function RecursosView({resources,alertaTimeoutIds,isAdmin,onToggleFueraDeServicio,onVerCuartelEnMapa}:{resources:Resource[];alertaTimeoutIds:Set<string>;isAdmin:boolean;onToggleFueraDeServicio:(resourceId:string)=>void;onVerCuartelEnMapa:(lat:number,lng:number)=>void}){
   const [busqueda,setBusqueda]=useState('');
   const [filtroTipo,setFiltroTipo]=useState<typeof TODOS|ResourceType>(TODOS);
   const [filtroEstado,setFiltroEstado]=useState<typeof TODOS|RadioState>(TODOS);
@@ -948,18 +978,21 @@ function RecursosView({resources,alertaTimeoutIds}:{resources:Resource[];alertaT
       </select>
     </div>
     <div className="tableWrap"><table className="dataTable">
-      <thead><tr><th></th><th>Unidad</th><th>Compañía</th><th>Sector</th><th>Tipo</th><th>Dotación</th><th>Distancia</th><th>ETA</th><th>Estado</th></tr></thead>
-      <tbody>{filtrados.length?filtrados.map(r=><tr key={r.id}>
+      <thead><tr><th></th><th>Unidad</th><th>Compañía</th><th>Sector</th><th>Tipo</th><th>Dotación</th><th>Distancia</th><th>ETA</th><th>Estado</th>{isAdmin && <th></th>}</tr></thead>
+      <tbody>{filtrados.length?filtrados.map(r=>{
+        const enMision=r.radioState==='6-3'||r.radioState==='6-7';
+        return <tr key={r.id}>
         <td className="resIconCell">{resourceIcon(r.type)}</td>
         <td>{r.name}</td>
-        <td>{r.compania}</td>
+        <td><button className="linkBtn" title="Ver cuartel en el mapa" onClick={()=>onVerCuartelEnMapa(r.lat,r.lng)}>{r.compania}</button></td>
         <td>{r.sector}</td>
         <td>{r.type}</td>
         <td>{r.crew}</td>
         <td>{r.distance} km</td>
         <td>{r.eta} min</td>
         <td><span className={`estado estado-${r.radioState.replace('6-','')}`}>{r.radioState} · {RADIO_LABELS[r.radioState]}</span>{alertaTimeoutIds.has(r.id)&&<span className="timeoutBadge" title="Sin transmisión de estado dentro del umbral configurado"><AlertTriangle size={11}/> sin transmisión</span>}</td>
-      </tr>):<tr><td colSpan={9}><p className="emptyState">Ninguna unidad coincide con el filtro.</p></td></tr>}</tbody>
+        {isAdmin && <td>{enMision?<span className="gris-tenue" style={{fontSize:'11px'}}>En misión</span>:<button className={r.radioState==='6-9'?'reactivarBtn':'fueraServicioBtn'} title={r.radioState==='6-9'?'Reactivar unidad':'Dejar fuera de servicio (carga de agua/bencina, mantención, etc.)'} onClick={()=>onToggleFueraDeServicio(r.id)}>{r.radioState==='6-9'?'Reactivar':'Fuera de servicio'}</button>}</td>}
+      </tr>;}):<tr><td colSpan={isAdmin?10:9}><p className="emptyState">Ninguna unidad coincide con el filtro.</p></td></tr>}</tbody>
     </table></div>
   </div>;
 }
@@ -2028,7 +2061,12 @@ const isAdminSoporte=auth?.rol==='soporte';
    [resources, filtroCuartel]
  );
 
- const currentEmergencia=queue[0]??null;
+ // La emergencia "actual" del Dashboard es la primera que todavia necesita
+ // una decision (Activa) -- las que ya quedaron en Asignada se mantienen en
+ // la cola (para no poder reasignarlas, ver despacharUnidad) pero no deben
+ // bloquear el panel: el operador tiene que poder seguir despachando las
+ // demas mientras esa unidad va en camino.
+ const currentEmergencia=queue.find(e=>e.status==='Activa')??null;
  const claveActual=currentEmergencia?claves[currentEmergencia.codigo]:undefined;
  // La recomendacion se calcula SOLO sobre las unidades del cuartel elegido
  // en el filtro (si hay uno activo) -- asi "RECURSO RECOMENDADO" refleja
@@ -2051,6 +2089,21 @@ const isAdminSoporte=auth?.rol==='soporte';
    setHistorial(h=>[{id:historialIdRef.current++, ts:Date.now(), tipo, texto}, ...h].slice(0,200));
  };
 
+ // Fuera de servicio manual (carga de agua/bencina, mantencion, etc.): solo
+ // disponible desde Recursos cuando la unidad no esta en mision (6-3/6-7),
+ // ver RecursosView. Alterna entre 6-9 y 6-0 -- no hay estado intermedio
+ // que registrar, a diferencia del ciclo automatico de una emergencia.
+ const toggleFueraDeServicio=(resourceId:string)=>{
+   clearResourceTimers(resourceId);
+   enPatrullajeRef.current.delete(resourceId);
+   setResources(rs=>rs.map(r=>{
+     if(r.id!==resourceId) return r;
+     const vuelveDisponible=r.radioState==='6-9';
+     pushHistorial('fuera_servicio', vuelveDisponible?`${r.id} vuelve a estar disponible en cuartel`:`${r.id} marcada manualmente fuera de servicio`);
+     return {...r, radioState:vuelveDisponible?'6-0':'6-9', destino:undefined, tramo:undefined, ultimaActualizacion:Date.now()};
+   }));
+ };
+
  const spawnEmergencia=():Emergency=>{
    const seed=POOL_EMERGENCIAS[poolIndexRef.current % POOL_EMERGENCIAS.length];
    poolIndexRef.current+=1;
@@ -2058,17 +2111,27 @@ const isAdminSoporte=auth?.rol==='soporte';
    return {...seed, id, status:'Activa', creadaEn:Date.now()};
  };
 
- const advanceQueue=(resolvedId:number)=>{
+ // Repone trabajo de inmediato al despachar una unidad (no al resolverse
+ // del todo, ver quitarDeLaCola mas abajo): asi el operador siempre tiene
+ // una emergencia Activa esperando y puede seguir despachando a ritmo
+ // rapido, sin tener que esperar minutos a que la anterior termine su
+ // ciclo completo (ida + atencion + vuelta) para recien ahi ver la
+ // siguiente -- eso era el bug real: "Asignada" se quedaba en la cola
+ // ocupando el lugar y nada la reemplazaba hasta que resolvia.
+ const reponerEmergencia=()=>{
    setQueue(q=>{
-     const rest=q.filter(e=>e.id!==resolvedId);
-     if(rest.length<4){
-       const nueva=spawnEmergencia();
-       pushHistorial('nueva_emergencia',`Emergencia #${nueva.id} · Clave ${nueva.codigo} en ${nueva.address}`);
-       if(soundOnRef.current) beep();
-       return [...rest, nueva];
-     }
-     return rest;
+     const nueva=spawnEmergencia();
+     pushHistorial('nueva_emergencia',`Emergencia #${nueva.id} · Clave ${nueva.codigo} en ${nueva.address}`);
+     if(soundOnRef.current) beep();
+     return [...q, nueva];
    });
+ };
+
+ // Saca definitivamente de la cola una emergencia ya resuelta (Inactiva) --
+ // sin reponer nada aca, porque el reemplazo ya se hizo al despacharla (ver
+ // reponerEmergencia).
+ const quitarDeLaCola=(resolvedId:number)=>{
+   setQueue(q=>q.filter(e=>e.id!==resolvedId));
    setRechazadosPorEmergencia(r=>{const c={...r}; delete c[resolvedId]; return c;});
  };
 
@@ -2094,6 +2157,11 @@ const isAdminSoporte=auth?.rol==='soporte';
        }:r));
        aplicarRutaCuandoLlegue(resourceId, inicioVuelta, origenVuelta, home);
        pushHistorial('liberacion',`${resourceId} finalizó la atención de la Emergencia #${emergenciaSnap.id}, regresando a cuartel`);
+       // Recien aca la emergencia queda realmente resuelta: se marca
+       // Inactiva y se saca de la cola activa (reemplazada por una nueva),
+       // no en el momento de despachar la unidad (ver despacharUnidad).
+       setQueue(q=>q.map(e=>e.id===emergenciaSnap.id?{...e,status:'Inactiva'}:e));
+       quitarDeLaCola(emergenciaSnap.id);
        const t3=window.setTimeout(()=>{
          setResources(rs=>rs.map(r=>r.id===resourceId?{...r,radioState:'6-0',destino:undefined,tramo:undefined,ultimaActualizacion:Date.now()}:r));
          pushHistorial('liberacion',`${resourceId} disponible nuevamente en cuartel`);
@@ -2145,8 +2213,14 @@ const isAdminSoporte=auth?.rol==='soporte';
    pushHistorial('asignacion',`${unidad.name} asignada${manual?' MANUALMENTE por el operador':''} a Emergencia #${emergenciaSnap.id} · Clave ${emergenciaSnap.codigo} (${nombreClave}) — score ${Math.round(score(unidad,claveActual,info.distanciaKm,info.etaMin))}/100${fueRedirigida?' (redirigida mientras regresaba a cuartel)':''}`);
    notify(`${unidad.name} asignada${manual?' manualmente':''} a la Emergencia #${emergenciaSnap.id}${fueRedirigida?' (redirigida en ruta)':''}`);
    setFocus({lat:emergenciaSnap.lat,lng:emergenciaSnap.lng});
+   // La emergencia pasa a "Asignada" pero sigue en la cola (no se saca
+   // todavia) -- asi pickRecommendation ya no vuelve a ofrecerla para una
+   // segunda unidad. Se repone trabajo nuevo de inmediato (no se espera a
+   // que esta se resuelva del todo) para que el operador pueda seguir
+   // despachando emergencias a ritmo rapido sin quedar bloqueado.
+   setQueue(q=>q.map(e=>e.id===emergenciaSnap.id?{...e,status:'Asignada'}:e));
+   reponerEmergencia();
    scheduleResourceLifecycle(resourceId, emergenciaSnap, {lat:unidad.lat,lng:unidad.lng}, duracionMs);
-   advanceQueue(emergenciaSnap.id);
  };
 
  const handleAsignar=()=>{
@@ -2190,6 +2264,13 @@ const isAdminSoporte=auth?.rol==='soporte';
    const target=queue.find(e=>e.id===id);
    setQueue(q=>{if(!target) return q; return [target, ...q.filter(e=>e.id!==id)];});
    if(target) setFocus({lat:target.lat,lng:target.lng});
+   setSection('Dashboard');
+ };
+
+ // Desde Recursos, tocar el nombre de una compañia lleva al Dashboard con
+ // el mapa centrado y acercado (zoom 16, ver MapPanel) en ese cuartel.
+ const verCuartelEnMapa=(lat:number, lng:number)=>{
+   setFocus({lat,lng});
    setSection('Dashboard');
  };
 
@@ -2349,6 +2430,14 @@ const isAdminSoporte=auth?.rol==='soporte';
         <Ticket size={18}/>
         {!sidebarCollapsed && <span>Tickets</span>}
       </button>
+      <button
+        className={section==='Configuración'?'active':''}
+        onClick={()=>{setSection('Configuración');setMobileNavOpen(false);}}
+        title="Configuración"
+      >
+        <Settings size={18}/>
+        {!sidebarCollapsed && <span>Configuración</span>}
+      </button>
     </>
   ) : (
     <>
@@ -2380,9 +2469,9 @@ const isAdminSoporte=auth?.rol==='soporte';
     ? 'Gestión de tickets de soporte'
     : <>Central de coordinación · Valparaíso{!isAdmin?' · Acceso de solo lectura':''}{!isAdmin && esperandoEstadoRemoto?' · Esperando datos en vivo del operador…':''}{!isAdmin && estadoRemoto?` · En vivo (operador: ${estadoRemoto.publicadoPor})`:''}</>
   }
-</p></div><div className="headerActions">{!isAdmin && !isAdminSoporte && <div className="readOnlyBadge" title="Tu cuenta solo puede visualizar, no asignar recursos"><Eye size={13}/> Solo lectura</div>}<button onClick={()=>setTheme(t=>t==='dark'?'light':'dark')} title={theme==='dark'?'Cambiar a tema claro':'Cambiar a tema oscuro'}>{theme==='dark'?<Sun size={17}/>:<Moon size={17}/>}</button><div className="live"><span/> EN VIVO</div><button onClick={()=>{setRefresh(x=>x+1);notify('Datos actualizados')}}><RefreshCw size={17}/></button><button onClick={()=>notify(`${queue.length} emergencias en cola`)}><Bell size={18}/></button><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
-    {section==='Emergencias' && !isAdminSoporte && <EmergenciasView queue={queue} claves={claves} now={now} onAtender={atenderEmergencia}/>}
-    {section==='Recursos' && !isAdminSoporte && <RecursosView resources={resources} alertaTimeoutIds={unidadesConAlertaTimeout}/>}
+</p></div><div className="headerActions">{!isAdmin && !isAdminSoporte && <div className="readOnlyBadge" title="Tu cuenta solo puede visualizar, no asignar recursos"><Eye size={13}/> Solo lectura</div>}<button onClick={()=>setTheme(t=>t==='dark'?'light':'dark')} title={theme==='dark'?'Cambiar a tema claro':'Cambiar a tema oscuro'}>{theme==='dark'?<Sun size={17}/>:<Moon size={17}/>}</button><div className="live"><span/> EN VIVO</div><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
+    {section==='Emergencias' && !isAdminSoporte && <EmergenciasView queue={queue} claves={claves} now={now} onAtender={atenderEmergencia} isAdmin={isAdmin}/>}
+    {section==='Recursos' && !isAdminSoporte && <RecursosView resources={resources} alertaTimeoutIds={unidadesConAlertaTimeout} isAdmin={isAdmin} onToggleFueraDeServicio={toggleFueraDeServicio} onVerCuartelEnMapa={verCuartelEnMapa}/>}
     {section==='Historial' && !isAdminSoporte && <HistorialView historial={historial} now={now}/>}
     {section==='Reportes' && !isAdminSoporte && <ReportesView historial={historial}/>}
     {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} onNotify={notify} auth={auth} onLogout={handleLogout} isAdmin={isAdmin} timeoutMinutos={timeoutMinutos} onChangeTimeout={setTimeoutMinutos}/>}
@@ -2419,7 +2508,7 @@ const isAdminSoporte=auth?.rol==='soporte';
        {isAdmin
          ?<div className="actions"><button className="assign" onClick={handleAsignar}>ASIGNAR</button><button className="reject" onClick={handleRechazar}>RECHAZAR</button></div>
          :<p className="emptyState readOnlyNote"><Lock size={12}/> Tu cuenta es de solo lectura: no puede asignar ni rechazar unidades.</p>}
-      </>:<p className="emptyState">{filtroCuartel==='todos'?'Sin unidades disponibles para esta emergencia en este momento — todas las compatibles están en misión.':`Sin unidades disponibles de ${filtroCuartel} para esta emergencia en este momento.`}</p>}
+      </>:<p className="emptyState">{currentEmergencia && currentEmergencia.status!=='Activa'?'Ya se despachó una unidad a esta emergencia — esperando a que la atienda y regrese a cuartel.':filtroCuartel==='todos'?'Sin unidades disponibles para esta emergencia en este momento — todas las compatibles están en misión.':`Sin unidades disponibles de ${filtroCuartel} para esta emergencia en este momento.`}</p>}
       </div></div></section>
       <section className="workspace"><div className="mapCard"><div className="cardHead"><div><b>Mapa de calor · Demanda de Bomberos</b><span>Predicción ML · próximas {(periodos.length||4)*3} horas · toca una zona para ver el detalle</span></div><span className="mlBadge">ML</span></div><HeatMapPanel zonas={currentZonas} seleccionadaId={zonaSeleccionada} focus={focusHeatmap} onSelectZona={z=>{setZonaSeleccionada(z.zona_id);setFocusHeatmap(z.centroid);}}/><div className="legend heatLegend"><span><i className="dot green"/> Baja</span><span><i className="dot yellow"/> Media</span><span><i className="dot red"/> Alta</span></div></div>
       <div className="sideCards"><div className="card alertsCard"><div className="cardHead"><div><b>Alertas predictivas</b><span>Zonas y horarios de mayor riesgo</span></div></div>

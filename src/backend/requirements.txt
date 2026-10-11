@@ -3,6 +3,13 @@ uvicorn[standard]
 pydantic
 pandas
 numpy
+# Fijado a 1.14.1: versiones mas nuevas de scipy (ver tambien el pin de
+# SQLAlchemy/pg8000 mas abajo, mismo problema repetido) traen compilada la
+# extension PROPACK (scipy.sparse.linalg._svdp._propack), que en Windows
+# con politicas de Control de aplicaciones corporativas no carga y rompe
+# CUALQUIER joblib.load() de un modelo (ver ml/predict.py), porque scikit-learn
+# importa scipy.sparse.linalg al arrancar. 1.14.1 no tira este error.
+scipy==1.14.1
 scikit-learn
 joblib
 tzdata
@@ -16,5 +23,9 @@ bcrypt
 # carga y tira ImportError al importar. 2.0.x funciona identico para lo
 # que usa este proyecto, sin esa extension.
 SQLAlchemy<2.1
-psycopg2-binary
+# pg8000 en vez de psycopg2-binary: mismo problema de Windows que el de
+# arriba, pero con el driver de Postgres (trae una extension compilada,
+# _psycopg) -- pg8000 es 100% Python puro, sin esa extension, y SQLAlchemy
+# lo soporta igual (ver core/db.py, URL reescrita a postgresql+pg8000://).
+pg8000
 alembic

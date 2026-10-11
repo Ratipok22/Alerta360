@@ -12,7 +12,7 @@ from sqlalchemy import engine_from_config, pool
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.db import Base  # noqa: E402
+from core.db import Base, DATABASE_URL  # noqa: E402
 from core import models  # noqa: E402,F401  (registra las tablas en Base.metadata)
 
 config = context.config
@@ -21,8 +21,8 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Misma variable que usa core/db.py -- una sola fuente de verdad para la
-# URL de conexion, nunca escrita dos veces.
-db_url = os.environ.get("DATABASE_URL", "postgresql://emergency:emergency@localhost:5432/emergency")
+# URL de conexion, nunca escrita dos veces (ya incluye el driver pg8000).
+db_url = DATABASE_URL
 config.set_main_option("sqlalchemy.url", db_url)
 
 target_metadata = Base.metadata

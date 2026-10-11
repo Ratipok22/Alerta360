@@ -77,6 +77,7 @@ html[data-theme="light"]{
 /* En tema claro el mapa usa las tiles normales de OpenStreetMap (sin el
    filtro oscuro de mas abajo). */
 html[data-theme="light"] #map .leaflet-tile-pane{filter:none}
+html[data-theme="light"] #heatmap .leaflet-tile-pane{filter:none}
 /* Botones tipo pildora en tema claro, como los CTA de bomberos.cl (rojo
    institucional, esquinas muy redondeadas). En oscuro se mantiene el
    estilo mas cuadrado de siempre. */
@@ -254,6 +255,10 @@ html[data-theme="light"] .kpiIcon-azul{background:var(--azul-operativo)}
    marcadores (estan en un pane hermano, .leaflet-marker-pane), y sus
    colores reales (verde=disponible, rojo=alerta, etc.) quedan intactos. */
 #map .leaflet-tile-pane{filter:invert(1) hue-rotate(200deg) brightness(.92) contrast(.92) saturate(.85)}
+/* Mismo truco que #map de arriba, aplicado al mapa de calor: antes tenia
+   un filtro plano (brightness/contrast) sobre todo #heatmap que solo lo
+   atenuaba un poco, sin verse realmente oscuro como el mapa principal. */
+#heatmap .leaflet-tile-pane{filter:invert(1) hue-rotate(200deg) brightness(.92) contrast(.92) saturate(.85)}
 .legend{position:absolute;bottom:11px;left:15px;background:#0b0c0ee6;border:1px solid var(--borde-sutil);border-radius:6px;padding:7px 9px;display:flex;gap:14px;font-size:10px;color:var(--gris-tenue)}
 .dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:5px}
 .green{background:var(--verde-disponible)}
@@ -324,6 +329,63 @@ html[data-theme="dark"] .reject:hover{background:color-mix(in srgb, var(--rojo-a
 .reject:active,.assign:active{transform:translateY(1px)}
 
 .linkBtn{border:0;background:none;color:var(--acento);font-size:13px;font-weight:600;cursor:pointer}
+
+/* Boton de accion dentro de la tabla de Emergencias: antes era un link de
+   texto plano (misma pinta que "Quitar filtro"), poco notorio para la
+   accion mas importante de esa vista. Reusa la misma paleta de .assign
+   (rojo en claro, azul en oscuro) para que se note como un CTA real. */
+.atenderBtn{
+  border:0;
+  border-radius:6px;
+  background:var(--rojo-alerta);
+  color:#FFFFFF;
+  font-size:12px;
+  font-weight:700;
+  letter-spacing:.3px;
+  padding:7px 14px;
+  cursor:pointer;
+  transition:background .15s,transform .15s;
+}
+.atenderBtn:hover{background:var(--rojo-hover)}
+.atenderBtn:active{transform:translateY(1px)}
+html[data-theme="dark"] .atenderBtn{background:var(--azul-operativo)}
+html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
+
+/* Botones de Recursos: a diferencia de .atenderBtn (rojo/azul segun tema,
+   es un CTA de marca), aca el color codifica el ESTADO resultante y debe
+   ser el mismo siempre, sin importar el tema -- rojo porque deja la unidad
+   fuera de servicio (igual que el badge .estado-9), verde porque la vuelve
+   a dejar disponible (igual que el badge .estado-0). */
+.fueraServicioBtn{
+  border:0;
+  border-radius:6px;
+  background:var(--rojo-alerta);
+  color:#FFFFFF;
+  font-size:12px;
+  font-weight:700;
+  letter-spacing:.3px;
+  padding:7px 14px;
+  cursor:pointer;
+  transition:background .15s,transform .15s;
+}
+.fueraServicioBtn:hover{background:var(--rojo-hover)}
+.fueraServicioBtn:active{transform:translateY(1px)}
+
+.reactivarBtn{
+  border:0;
+  border-radius:6px;
+  background:var(--verde-disponible);
+  color:#FFFFFF;
+  font-size:12px;
+  font-weight:700;
+  letter-spacing:.3px;
+  padding:7px 14px;
+  cursor:pointer;
+  transition:filter .15s,transform .15s;
+}
+.reactivarBtn:hover{filter:brightness(.9)}
+.reactivarBtn:active{transform:translateY(1px)}
+
 .locateBtn{margin:12px 0 10px;display:flex;align-items:center;gap:7px;border:1px solid var(--borde-sutil);background:var(--negro-panel);color:var(--acento);border-radius:6px;padding:10px 12px;font-size:13px;font-weight:700;cursor:pointer}
 .locateBtn:hover{border-color:var(--acento);background:color-mix(in srgb, var(--acento) 8%, transparent)}
 
@@ -341,7 +403,7 @@ html[data-theme="dark"] .reject:hover{background:color-mix(in srgb, var(--rojo-a
 
 /* ============ MAPA DE CALOR / PREDICCION ============ */
 .mlBadge{background:rgba(44,154,246,.15);color:var(--azul-operativo)!important;padding:5px 8px;border-radius:4px;font-weight:700;font-size:11px}
-#heatmap{flex:1;min-height:300px;filter:brightness(.6) contrast(1.05)}
+#heatmap{flex:1;min-height:300px}
 .alertsCard{height:465px;display:flex;flex-direction:column}
 .alertsBody{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column}
 .singleRow{margin-top:16px}
@@ -502,6 +564,16 @@ html[data-theme="dark"] .reject:hover{background:color-mix(in srgb, var(--rojo-a
    propiedad, el navegador interpola el movimiento). */
 .resource-marker{filter:drop-shadow(0 2px 4px #0009)}
 .leaflet-marker-icon.resource-marker{transition:transform .3s linear}
+/* Anillo de enfoque temporal: se dibuja sobre el punto exacto al usar
+   "Ver en el mapa"/"Atender"/tocar una compañia en Recursos, para
+   distinguirlo de otros marcadores cercanos (varios cuarteles juntos,
+   por ejemplo) que el simple centrado del mapa no alcanza a diferenciar.
+   Dos anillos desfasados en el tiempo para un efecto de "sonar" continuo;
+   se quita solo a los 4s (ver MapPanel). */
+.focus-ping{position:relative;pointer-events:none}
+.focus-ping span{position:absolute;top:-20px;left:-20px;width:40px;height:40px;border-radius:50%;border:3px solid var(--rojo-alerta);opacity:0;animation:focus-ping-anim 1.6s ease-out infinite}
+.focus-ping span:nth-child(2){animation-delay:.8s}
+@keyframes focus-ping-anim{0%{transform:scale(.3);opacity:.9}80%{opacity:0}100%{transform:scale(2.2);opacity:0}}
 /* Ruta activa: guiones "fluyendo" en la direccion de avance, para que se
    sienta una ruta viva y no una linea estatica. */
 .ruta-viva{animation:flujo-ruta 1s linear infinite}
@@ -1348,7 +1420,7 @@ html[data-theme="dark"] .emptyState{
 .adminTicketsToolbar{
   display:flex;
   gap:10px;
-  padding:0 20px 16px;
+  padding:16px 20px;
 }
 
 .adminTicketsToolbar input,
@@ -1386,8 +1458,16 @@ html[data-theme="dark"] .emptyState{
   grid-template-columns:120px minmax(0,1fr) 120px;
   gap:18px;
   align-items:center;
+  width:100%;
   padding:15px 20px;
+  border:0;
   border-top:1px solid var(--borde-sutil);
+  border-radius:0;
+  background:transparent;
+  color:inherit;
+  font:inherit;
+  text-align:left;
+  cursor:pointer;
   transition:background .15s;
 }
 

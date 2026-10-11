@@ -21,6 +21,13 @@ DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql://emergency:emergency@localhost:5432/emergency"
 )
 
+# Forzamos el driver pg8000 (100% Python) en vez de psycopg2: psycopg2 trae
+# una extension compilada (C) que en Windows con politicas de Control de
+# aplicaciones corporativas (mismo problema que bloqueo scipy y SQLAlchemy
+# 2.1, ver requirements.txt) no carga y tira ImportError al importar.
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+pg8000://", 1)
+
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
