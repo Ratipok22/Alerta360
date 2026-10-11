@@ -3,7 +3,8 @@ import {createRoot} from 'react-dom/client';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
-import {AlertTriangle, BarChart3, Bell, Building2, CheckCircle2, Clock3, Crosshair, Droplet, Eye, Flame, HardHat, History, Info, Layers3, LifeBuoy, Lightbulb, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Paperclip, Phone, Radio, RefreshCw, Send, Settings, ShieldCheck, Sun, Ticket, Truck, TreePine, Users, XCircle, Zap, Bug} from 'lucide-react';import logoDark from "./assets/logo-alerta360-dark.png";
+import {AlertTriangle, BarChart3, Bell, Building2, CheckCircle2, Clock3, Crosshair, Droplet, Eye, Flame, HardHat, History, Info, Layers3, LifeBuoy, Lightbulb, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Paperclip, Phone, Radio, RefreshCw, Send, Settings, ShieldCheck, Sun, Ticket, Truck, TreePine, Users, XCircle, Zap, Bug} from 'lucide-react';
+import logoDark from "./assets/logo-alerta360-dark.png";
 import logoLight from "./assets/logo-alerta360-light.png";
 
 // En localhost apunta al backend local de siempre. Si la app se abre a
@@ -381,8 +382,7 @@ function resumenGeneral(periodo:Periodo|undefined, zonas:ZoneDemand[], claves:Re
   let contexto='';
   if(mes>=12||mes<=3) contexto=' Estamos en temporada de incendios forestales (dic-mar), por lo que el riesgo de la clave 10-2 tiende a ser más alto de lo normal.';
   else if(mes>=6&&mes<=8) contexto=' Estamos en temporada de invierno, con más riesgo de incendios estructurales (10-0) y rescates viales (10-4).';
-
-}
+  }
 
 // Disponible para una nueva recomendacion: en cuartel (6-0) o ya regresando
 // de una emergencia anterior (6-8) — esta ultima puede ser redirigida a una

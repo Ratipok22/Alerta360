@@ -80,7 +80,7 @@ html[data-theme="light"] #map .leaflet-tile-pane{filter:none}
 /* Botones tipo pildora en tema claro, como los CTA de bomberos.cl (rojo
    institucional, esquinas muy redondeadas). En oscuro se mantiene el
    estilo mas cuadrado de siempre. */
-html[data-theme="light"] .actions button{border-radius:6px}
+html[data-theme="light"] .loginSubmit,html[data-theme="light"] .actions button{border-radius:999px}
 /* Los campos de login se notan mas: fondo gris (en vez del mismo blanco de
    la tarjeta) y borde mas marcado, para que se vea claramente donde hay
    que escribir. Al enfocar, se ponen blancos con borde rojo (ya definido
@@ -148,7 +148,7 @@ nav{display:flex;flex-direction:column;gap:4px}
 nav button{border:0;background:transparent;color:var(--sidebar-texto);padding:11px 13px;border-radius:6px;display:flex;gap:12px;align-items:center;font-size:13px;font-weight:500;cursor:pointer;text-align:left;transition:background .15s}
 nav button:hover{background:var(--sidebar-hover-bg);color:var(--sidebar-texto-fuerte)}
 nav button.active{background:color-mix(in srgb, var(--acento) 16%, transparent);color:var(--acento);font-weight:600;box-shadow:inset 3px 0 var(--acento)}
-.sidebarBottom{margin-top:auto;border-top:1px solid var(--sidebar-borde);padding:16px 8px;color:var(--sidebar-texto);font-size:14px}
+.sidebarBottom{margin-top:auto;border-top:1px solid var(--sidebar-borde);padding:16px 8px;color:var(--sidebar-texto);font-size:11px}
 .online{color:var(--verde-disponible);margin-bottom:10px;font-weight:600}
 .online span,.live span,.liveText span{display:inline-block;width:7px;height:7px;background:var(--verde-disponible);border-radius:50%;margin-right:7px;box-shadow:0 0 8px #34c75988}
 
@@ -162,6 +162,7 @@ html[data-theme="light"] .brandIcon img.logoDark{
 html[data-theme="dark"] .brandIcon img.logoLight{
   display:none;
 }
+
 /* Menu lateral colapsable: en modo colapsado se angosta a solo iconos.
    El boton para expandir/colapsar es un icono tipo "hamburguesa" solo,
    sin texto, arriba a la izquierda del sidebar (encima del logo). */
@@ -227,10 +228,7 @@ html[data-theme="light"] .kpiIcon,html[data-theme="light"] .activityIcon{backgro
    institucional (el mismo par que usa bomberos.cl en su grilla de bloques),
    en vez de que todos queden del mismo rojo -- se nota mas la diferencia
    entre cada indicador y se distingue mejor del fondo. */
-html[data-theme="light"] .kpiIcon-azul{
-    background:var(--acento);
-    color:var(--on-accent);
-}
+html[data-theme="light"] .kpiIcon-azul{background:var(--azul-operativo)}
 .kpiIcon svg{width:19px}
 .kpi span{display:block;color:var(--gris-tenue);font-size:11px;text-transform:uppercase;letter-spacing:.5px;font-weight:600}
 .kpi strong{display:block;font-size:23px;font-weight:700;color:var(--blanco);margin:3px 0}

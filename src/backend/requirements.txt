@@ -1,0 +1,20 @@
+fastapi
+uvicorn[standard]
+pydantic
+pandas
+numpy
+scikit-learn
+joblib
+tzdata
+httpx
+python-dotenv
+PyJWT
+bcrypt
+# Fijado a <2.1: SQLAlchemy 2.1+ trae una extension compilada (Cython,
+# _util_cy) que en Windows con politicas de Control de aplicaciones
+# corporativas (ver ml/evaluate_model.py, mismo problema con scipy) no
+# carga y tira ImportError al importar. 2.0.x funciona identico para lo
+# que usa este proyecto, sin esa extension.
+SQLAlchemy<2.1
+psycopg2-binary
+alembic
