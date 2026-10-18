@@ -7,6 +7,9 @@ mes (estacionalidad), buscando patrones realistas: por ejemplo, mas
 incendios forestales (10-2) en verano y mas rescates vehiculares (10-4)
 en horas punta.
 """
+
+import pathlib
+
 from datetime import date, timedelta
 
 import numpy as np
@@ -14,7 +17,10 @@ import pandas as pd
 
 from core.tiempo import hoy_chile
 
+
 from .weather import factor_incendio_forestal, factor_rescate_vehicular, simular_clima_dia
+
+
 from .zones import ZONES, EMERGENCY_TYPES, PERIOD_HOURS
 
 RNG_SEED = 42
@@ -55,12 +61,17 @@ BASE_RATE = {  # promedio de casos por zona y bloque de 3h en condiciones neutra
     # la cifra real reportada por CONAF: 575 incendios forestales en la Region
     # de Valparaiso durante la temporada 2025-2026 (conaf.cl). El resto del
     # patron (estacionalidad, distribucion horaria/por zona) sigue siendo un
+
     # supuesto razonado, no viene de CONAF. Se re-calibro (0.0113 -> 0.0088)
     # al incorporar el factor climatico (ml/weather.py): temperatura y viento
     # empujan el promedio de ese factor por encima de 1.0, asi que la tasa
     # base se ajusta hacia abajo para que el total anual simulado siga
     # cerca de la cifra real de CONAF.
     "10-2": 0.0088,
+
+    # supuesto razonado, no viene de CONAF.
+    "10-2": 0.0113,
+
     "10-3": 0.04,
     "10-4": 0.10,
     "10-5": 0.02,
@@ -86,11 +97,13 @@ def generate(start: date | None = None, days: int = DAYS_OF_HISTORY, seed: int =
         month = current_date.month
         for hour in PERIOD_HOURS:
             for zone in ZONES:
+
                 clima = simular_clima_dia(month, hour, zone.id, rng)
                 clima_factor = {
                     "10-2": factor_incendio_forestal(**clima),
                     "10-4": factor_rescate_vehicular(clima["viento_kmh"], clima["precipitacion_mm"]),
                 }
+
                 for tipo in EMERGENCY_TYPES:
                     lam = (
                         BASE_RATE[tipo]
@@ -100,6 +113,7 @@ def generate(start: date | None = None, days: int = DAYS_OF_HISTORY, seed: int =
                         * DOW_FACTOR[tipo][dow]
                         * MONTH_FACTOR[tipo][month]
                         * clima_factor.get(tipo, 1.0)
+
                     )
                     count = int(rng.poisson(lam))
                     recursos = int(rng.poisson(count * RECURSOS_POR_CASO[tipo])) if count else 0
@@ -112,6 +126,7 @@ def generate(start: date | None = None, days: int = DAYS_OF_HISTORY, seed: int =
                         "tipo_emergencia": tipo,
                         "cantidad_emergencias": count,
                         "recursos_utilizados": recursos,
+
                         "temperatura_c": clima["temperatura_c"],
                         "viento_kmh": clima["viento_kmh"],
                         "precipitacion_mm": clima["precipitacion_mm"],
@@ -122,6 +137,7 @@ def generate(start: date | None = None, days: int = DAYS_OF_HISTORY, seed: int =
 
 
 if __name__ == "__main__":
+
     # Nota: correr este script directo solo regenera el dataset en memoria
     # y lo muestra por consola. La base de datos real que usa el modelo
     # (persistente, ampliable con el tiempo) esta en ml/database.py --
@@ -130,3 +146,9 @@ if __name__ == "__main__":
     df = generate()
     print(f"Generados {len(df)} registros (solo en memoria, no se guardaron).")
     print("Para crear/usar la base de datos persistente: python -m ml.database")
+    out = pathlib.Path(__file__).parent / "data" / "historico_emergencias.csv"
+    out.parent.mkdir(exist_ok=True)
+    df = generate()
+    df.to_csv(out, index=False)
+    print(f"Generados {len(df)} registros -> {out}")
+

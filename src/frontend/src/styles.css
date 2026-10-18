@@ -718,7 +718,44 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
   transform:translateY(0);
 }
 
+/* Estilo general de las prioridades */
+.prioridad-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
 
+/* Prioridad crítica */
+.prioridad-critica {
+  color: #ef4444;
+  border-color: #ef4444;
+  background-color: rgba(239, 68, 68, 0.1);
+}
+
+/* Prioridad alta */
+.prioridad-alta {
+  color: #f59e0b;
+  border-color: #f59e0b;
+  background-color: rgba(245, 158, 11, 0.1);
+}
+
+/* Prioridad media */
+.prioridad-media {
+  color: #38bdf8;
+  border-color: #38bdf8;
+  background-color: rgba(56, 189, 248, 0.1);
+}
+
+/* Prioridad baja */
+.prioridad-baja {
+  color: #4ade80;
+  border-color: #4ade80;
+  background-color: rgba(74, 222, 128, 0.1);
+}
 
 /* =========================================================
    SOPORTE - ESTILO GENERAL DEL SISTEMA

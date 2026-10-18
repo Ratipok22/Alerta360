@@ -6,6 +6,7 @@ from .zones import PERIOD_HOURS
 WINDOW_PERIODS = 7 * len(PERIOD_HOURS)  # 7 dias de historial (8 bloques/dia)
 
 FEATURE_COLUMNS_CATEGORICAL = ["dia_semana", "mes", "bloque_hora", "zona_id", "tipo_emergencia"]
+
 # temperatura_c/viento_kmh/precipitacion_mm: condiciones climaticas del
 # bloque (ver ml/weather.py) -- afectan directamente el riesgo de incendio
 # forestal (10-2) y rescate vehicular (10-4), asi que se agregan como
@@ -14,6 +15,7 @@ FEATURE_COLUMNS_NUMERIC = [
     "freq_hist_7d", "demanda_recursos_hist_7d",
     "temperatura_c", "viento_kmh", "precipitacion_mm",
 ]
+
 FEATURE_COLUMNS = FEATURE_COLUMNS_CATEGORICAL + FEATURE_COLUMNS_NUMERIC
 TARGET_COLUMN = "cantidad_emergencias"
 

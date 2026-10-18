@@ -57,9 +57,11 @@ type Tramo={
   puntos?:{lat:number;lng:number}[]; acumKm?:number[];
 };
 type Resource={
-  id:string; name:string; type:ResourceType; lat:number; lng:number;
+  id:string; name:string; type:ResourceType; lat:number; lng:number; codigo?: string;
   radioState:RadioState; eta:number; distance:number; capacity:string; crew:number;
   compania:string; sector:string;
+  // Coordenadas fijas de la compañía.
+  homeLat?: number; homeLng?: number;
   destino?:{emergenciaId:number; lat:number; lng:number; address:string};
   tramo?:Tramo;
   // Marca de tiempo de la ultima transmision real de estado (6-0..6-9) de
@@ -68,13 +70,24 @@ type Resource={
   // marca con una alerta visual para que la central la verifique.
   ultimaActualizacion?:number;
 };
-type Emergency={id:number; codigo:string; address:string; lat:number; lng:number; status:'Activa'|'Asignada'|'Inactiva'; creadaEn:number;};
+//-------------------------NUEVA BASE DE DATOS
+type Emergency={
+  id:number;
+  codigo:string;
+  address:string;
+  lat:number;
+  lng:number;
+  status:'Activa'|'Asignada'|'PENDIENTE'|'ASIGNADA'|'EN_ATENCION'|'FINALIZADA'|'CANCELADA';
+  creadaEn:number;
+  prioridad:number;
+};
+//-------------------------
 type ClimaEsperado={temperatura_c:number; viento_kmh:number; precipitacion_mm:number;};
 type ZoneDemand={zona_id:string; nombre:string; bounds:{lat_min:number;lat_max:number;lng_min:number;lng_max:number}; centroid:{lat:number;lng:number}; demanda_total:number; desglose:Record<string,number>; clima_esperado?:ClimaEsperado;};
 type Periodo={periodo_inicio:string; periodo_fin:string; zonas:ZoneDemand[];};
 type VariableImportancia={nombre:string; peso_pct:number};
 type Clave={codigo:string; nombre:string; prioridad:string; prioridad_nivel:number; terreno:string;};
-type HistorialTipo='asignacion'|'rechazo'|'en_emergencia'|'liberacion'|'nueva_emergencia'|'fuera_servicio';
+type HistorialTipo='asignacion'|'rechazo'|'en_emergencia'|'liberacion'|'nueva_emergencia';
 type HistorialEntry={id:number; ts:number; tipo:HistorialTipo; texto:string;};
 
 // CONFIGURACION PARA SOPORTE TICKET //
@@ -119,19 +132,49 @@ function puntoEnFraccion(puntos:{lat:number;lng:number}[], acumKm:number[], frac
 // (r.tramo.puntos) cuando esta disponible, o una linea recta de respaldo
 // si el motor de rutas no alcanzo a responder. Si esta en el cuartel,
 // trabajando en la emergencia o fuera de servicio, es su posicion conocida.
-function posicionActual(r:Resource, nowMs:number):{lat:number;lng:number}{
-  if((r.radioState==='6-3'||r.radioState==='6-8') && r.tramo){
-    const t=Math.min(1, Math.max(0, (nowMs-r.tramo.inicio)/r.tramo.duracionMs));
-    if(r.tramo.puntos && r.tramo.acumKm && r.tramo.puntos.length>=2){
-      return puntoEnFraccion(r.tramo.puntos, r.tramo.acumKm, t);
+function posicionActual(r: Resource,nowMs: number): { lat: number; lng: number } {
+  if (
+    r.tramo &&
+    (r.radioState === '6-3' ||
+      r.radioState === '6-8' ||
+      r.radioState === '6-0')
+  ) {
+    const t = Math.min(
+      1,
+      Math.max(
+        0,
+        (nowMs - r.tramo.inicio) / r.tramo.duracionMs
+      )
+    );
+
+    if (
+      r.tramo.puntos &&
+      r.tramo.acumKm &&
+      r.tramo.puntos.length >= 2 &&
+      r.tramo.acumKm.length === r.tramo.puntos.length
+    ) {
+      return puntoEnFraccion(
+        r.tramo.puntos,
+        r.tramo.acumKm,
+        t
+      );
     }
+
+    // Si no hay ruta OSRM, no mover el vehículo.
+    return r.tramo.origen;
+  }
+
+  if (r.radioState === '6-7' && r.destino) {
     return {
-      lat: r.tramo.origen.lat + (r.tramo.destino.lat-r.tramo.origen.lat)*t,
-      lng: r.tramo.origen.lng + (r.tramo.destino.lng-r.tramo.origen.lng)*t,
+      lat: r.destino.lat,
+      lng: r.destino.lng,
     };
   }
-  if(r.radioState==='6-7' && r.destino) return {lat:r.destino.lat, lng:r.destino.lng};
-  return {lat:r.lat, lng:r.lng};
+
+  return {
+    lat: r.lat,
+    lng: r.lng,
+  };
 }
 
 // Segmento (par de puntos consecutivos de la ruta real) que la unidad esta
@@ -139,7 +182,7 @@ function posicionActual(r:Resource, nowMs:number):{lat:number;lng:number}{
 // segun hacia donde dobla en ese tramo puntual (no el rumbo general del
 // viaje completo).
 function segmentoActual(r:Resource, nowMs:number):{origen:{lat:number;lng:number}; destino:{lat:number;lng:number}}|null{
-  if(!((r.radioState==='6-3'||r.radioState==='6-8') && r.tramo)) return null;
+  if (!r.tramo ||!['6-0', '6-3', '6-8'].includes(r.radioState)) {return null;}
   const {puntos,acumKm}=r.tramo;
   if(!puntos || !acumKm || puntos.length<2) return {origen:r.tramo.origen, destino:r.tramo.destino};
   const t=Math.min(1, Math.max(0, (nowMs-r.tramo.inicio)/r.tramo.duracionMs));
@@ -155,22 +198,77 @@ function segmentoActual(r:Resource, nowMs:number):{origen:{lat:number;lng:number
 // cada tramo de la ruta. Si el servicio de rutas no responde (apagado,
 // error de red), devuelve null y quien llama sigue usando la linea recta
 // de respaldo — el mapa nunca se rompe por esto, solo se ve menos realista.
-async function obtenerRutaReal(origen:{lat:number;lng:number}, destino:{lat:number;lng:number}):Promise<{puntos:{lat:number;lng:number}[]; acumKm:number[]}|null>{
-  try{
-    const url=`${API_BASE}/route?origen_lat=${origen.lat}&origen_lng=${origen.lng}&destino_lat=${destino.lat}&destino_lng=${destino.lng}`;
-    const resp=await fetch(url,{credentials:'include', headers:authHeaders()});
-    if(!resp.ok) return null;
-    const data=await resp.json();
-    const puntos:{lat:number;lng:number}[]=data.puntos;
-    if(!Array.isArray(puntos) || puntos.length<2) return null;
-    const acumKm=[0];
-    for(let i=1;i<puntos.length;i++){
-      acumKm.push(acumKm[i-1]+haversineKm(puntos[i-1].lat,puntos[i-1].lng,puntos[i].lat,puntos[i].lng));
+type RutaOSRM = {puntos: {lat:number;lng:number}[];acumKm: number[];};
+async function obtenerRutaReal(origen: {lat:number;lng:number},destino: {lat:number;lng:number}): Promise<RutaOSRM> {
+
+  const params = new URLSearchParams({
+    origen_lat: String(origen.lat),
+    origen_lng: String(origen.lng),
+    destino_lat: String(destino.lat),
+    destino_lng: String(destino.lng),
+  });
+
+  const resp = await fetch(
+    `${API_BASE}/route?${params.toString()}`,
+    {
+      credentials: 'include',
+      headers: authHeaders(),
     }
-    return {puntos, acumKm};
-  }catch{
-    return null;
+  );
+
+  if (!resp.ok) {
+    throw new Error(
+      `OSRM no disponible: HTTP ${resp.status}`
+    );
   }
+
+  const data = await resp.json();
+
+  // El backend debe marcar explícitamente las rutas
+  // calculadas mediante el contenedor OSRM.
+  if (data.fuente !== 'osrm_local') {
+    throw new Error(
+      'Ruta rechazada: no proviene de OSRM Docker'
+    );
+  }
+
+  const puntos = data.puntos as {
+    lat:number;
+    lng:number;
+  }[];
+
+  if (
+    !Array.isArray(puntos) ||
+    puntos.length < 2 ||
+    !puntos.every(p =>
+      Number.isFinite(p.lat) &&
+      Number.isFinite(p.lng)
+    )
+  ) {
+    throw new Error(
+      'OSRM devolvió una geometría inválida'
+    );
+  }
+
+  const acumKm = [0];
+
+  for (let i = 1; i < puntos.length; i++) {
+    acumKm.push(
+      acumKm[i - 1] +
+      haversineKm(
+        puntos[i - 1].lat,
+        puntos[i - 1].lng,
+        puntos[i].lat,
+        puntos[i].lng
+      )
+    );
+  }
+
+  if (acumKm[acumKm.length - 1] <= 0) {
+    throw new Error('OSRM devolvió una ruta sin distancia');
+  }
+
+  return {puntos, acumKm};
 }
 
 // Distancia real (Haversine) y ETA, con la misma logica que el backend
@@ -221,35 +319,30 @@ function rumboGrados(lat1:number,lng1:number,lat2:number,lng2:number):number{
 // conflictos encontrados contra una tercera lista con direcciones que no
 // coincidían con OSM, p.ej. la 13ª y 15ª aparecían con Placilla/Rodelillo
 // invertidos).
-const RESOURCES_INICIALES:Resource[]=[
-{id:'B-1',name:'Carro Bomba B-1',type:'Bomberos',lat:-33.0388,lng:-71.6286,radioState:'6-0',eta:23.8,distance:13.88,capacity:'Incendios estructurales',crew:5,compania:'1ª Cía. "Bomba Americana"',sector:'Cochrane 625 / Plaza Sotomayor, Valparaíso'},
-{id:'B-2',name:'Carro Bomba B-2',type:'Bomberos',lat:-33.0388,lng:-71.6284,radioState:'6-9',eta:23.8,distance:13.86,capacity:'Incendios estructurales',crew:5,compania:'2ª Cía. "Bomba Germania"',sector:'Blanco 630, Valparaíso'},
-{id:'B-3',name:'Carro Bomba B-3',type:'Bomberos',lat:-33.0474,lng:-71.6152,radioState:'6-0',eta:22.4,distance:13.09,capacity:'Incendios estructurales',crew:5,compania:'3ª Cía. "Cousiño y A. Edwards"',sector:'Sector Almendral / Pedro Montt, Valparaíso'},
-{id:'B-4',name:'Carro Bomba B-4',type:'Bomberos',lat:-33.0445,lng:-71.6144,radioState:'6-0',eta:22.1,distance:12.89,capacity:'Incendios estructurales',crew:5,compania:'4ª Cía. "Almirante Blanco Encalada"',sector:'Freire, Almendral, Valparaíso'},
-{id:'R-5',name:'Unidad Rescate R-5',type:'Rescate',lat:-33.0443,lng:-71.6143,radioState:'6-0',eta:22.1,distance:12.87,capacity:'Rescate vehicular',crew:4,compania:'5ª Cía. "Pompe France"',sector:'Blanco, Almendral, Valparaíso'},
-{id:'B-6',name:'Carro Bomba B-6',type:'Bomberos',lat:-33.0487,lng:-71.6139,radioState:'6-0',eta:22.4,distance:13.05,capacity:'Incendios estructurales',crew:5,compania:'6ª Cía. "Cristoforo Colombo"',sector:'General Cruz 630, Valparaíso'},
-{id:'Q-7',name:'Escala Mecánica Q-7',type:'Escala',lat:-33.0470,lng:-71.6123,radioState:'6-0',eta:22.0,distance:12.83,capacity:'Escala en altura',crew:4,compania:'7ª Cía. "Bomba España"',sector:'Sector Almendral / Pedro Montt, Valparaíso'},
-{id:'H-8',name:'Unidad HazMat H-8',type:'Hazmat',lat:-33.0427,lng:-71.6239,radioState:'6-0',eta:23.4,distance:13.63,capacity:'Materiales peligrosos',crew:4,compania:'8ª Cía. "Zapadores Franco Chilenos"',sector:'Blanco Sur, Valparaíso'},
-{id:'B-9',name:'Carro Bomba B-9',type:'Bomberos',lat:-33.0447,lng:-71.6143,radioState:'6-0',eta:22.1,distance:12.89,capacity:'Incendios estructurales',crew:5,compania:'9ª Cía. "Zapadores Freire"',sector:'Freire, Almendral, Valparaíso'},
-{id:'B-10',name:'Carro Bomba B-10',type:'Bomberos',lat:-33.0486,lng:-71.6139,radioState:'6-0',eta:22.4,distance:13.04,capacity:'Incendios estructurales',crew:5,compania:'10ª Cía. "Bomba Chileno Árabe"',sector:'Sector Almendral / Parque Italia, Valparaíso'},
-{id:'R-11',name:'Unidad Rescate R-11',type:'Rescate',lat:-33.0428,lng:-71.6240,radioState:'6-0',eta:23.4,distance:13.64,capacity:'Rescate vehicular y técnico',crew:4,compania:'11ª Cía. "George Garland"',sector:'Melgarejo 147, Barrio Puerto, Valparaíso'},
-{id:'B-12',name:'Carro Bomba B-12',type:'Bomberos',lat:-33.0387,lng:-71.6458,radioState:'6-0',eta:26.4,distance:15.40,capacity:'Incendios estructurales',crew:5,compania:'12ª Cía. "Luis Bravo Osses - Bomba Suiza"',sector:'Cerro Playa Ancha, Valparaíso'},
-{id:'BF-13',name:'Autobomba Forestal BF-13',type:'Forestal',lat:-33.1186,lng:-71.5742,radioState:'6-0',eta:27.0,distance:15.73,capacity:'Incendios forestales',crew:6,compania:'13ª Cía. "George Mustakis Dragonas"',sector:'Av. Cardenal Samoré 930, Placilla, Valparaíso'},
-{id:'Z-13',name:'Carro Aljibe Z-13',type:'Cisterna',lat:-33.1186,lng:-71.5742,radioState:'6-0',eta:27.0,distance:15.73,capacity:'Cisterna de agua',crew:3,compania:'13ª Cía. "George Mustakis Dragonas"',sector:'Av. Cardenal Samoré 930, Placilla, Valparaíso'},
-{id:'BF-14',name:'Autobomba Forestal BF-14',type:'Forestal',lat:-33.0495,lng:-71.5747,radioState:'6-0',eta:17.1,distance:9.95,capacity:'Incendios forestales',crew:6,compania:'14ª Cía. "Reino de Bélgica"',sector:'Av. Manuel Antonio Matta 2503, Placeres Alto, Valparaíso'},
-{id:'BF-15',name:'Autobomba Forestal BF-15',type:'Forestal',lat:-33.0582,lng:-71.5767,radioState:'6-0',eta:18.3,distance:10.69,capacity:'Incendios forestales',crew:6,compania:'15ª Cía. "Bomba Israel"',sector:'Av. Rodelillo s/n, esquina Jardín de Abadía, Cerro Rodelillo, Valparaíso'},
-{id:'BF-16',name:'Autobomba Forestal BF-16',type:'Forestal',lat:-33.1076,lng:-71.6692,radioState:'6-0',eta:35.8,distance:20.87,capacity:'Incendios forestales',crew:6,compania:'16ª Cía. "Libertador Bernardo O\'Higgins"',sector:'Laguna Verde, Valparaíso'},
-{id:'B-V1',name:'Carro Bomba B-V1',type:'Bomberos',lat:-33.0263,lng:-71.5549,radioState:'6-0',eta:12.0,distance:7.01,capacity:'Incendios estructurales',crew:5,compania:'1ª Cía. (Bomberos Viña del Mar)',sector:'Álvarez 562, Viña del Mar'},
-{id:'B-V2',name:'Carro Bomba B-V2',type:'Bomberos',lat:-33.0251,lng:-71.5500,radioState:'6-0',eta:11.2,distance:6.55,capacity:'Incendios estructurales',crew:5,compania:'2ª Cía. (Bomberos Viña del Mar)',sector:'Av. Valparaíso 791, Viña del Mar'},
-{id:'R-V3',name:'Unidad Rescate R-V3',type:'Rescate',lat:-33.0361,lng:-71.5266,radioState:'6-0',eta:9.7,distance:5.64,capacity:'Rescate vehicular',crew:4,compania:'3ª Cía. (Bomberos Viña del Mar)',sector:'Limache 3001, Viña del Mar'},
-{id:'R-V4',name:'Unidad Rescate R-V4',type:'Rescate',lat:-33.0127,lng:-71.5417,radioState:'6-0',eta:9.0,distance:5.28,capacity:'Rescate vehicular',crew:4,compania:'4ª Cía. (Bomberos Viña del Mar)',sector:'12 Norte, Viña del Mar'},
-{id:'BF-V5',name:'Autobomba Forestal BF-V5',type:'Forestal',lat:-32.9979,lng:-71.5181,radioState:'6-0',eta:4.8,distance:2.77,capacity:'Incendios forestales',crew:6,compania:'5ª Cía. (Bomberos Viña del Mar)',sector:'Pacífico 5215, Viña del Mar'},
-{id:'B-V6',name:'Carro Bomba B-V6',type:'Bomberos',lat:-32.9262,lng:-71.5122,radioState:'6-0',eta:14.0,distance:8.16,capacity:'Incendios estructurales',crew:5,compania:'6ª Cía. (Bomberos Viña del Mar)',sector:'Vergara 1115, Concón'},
-{id:'H-V7',name:'Unidad HazMat H-V7',type:'Hazmat',lat:-33.0336,lng:-71.5551,radioState:'6-0',eta:12.8,distance:7.44,capacity:'Materiales peligrosos',crew:4,compania:'7ª Cía. (Bomberos Viña del Mar)',sector:'Logroño 1298, Viña del Mar'},
-{id:'Q-V8',name:'Escala Mecánica Q-V8',type:'Escala',lat:-32.9722,lng:-71.5376,radioState:'6-0',eta:9.2,distance:5.34,capacity:'Escala en altura',crew:4,compania:'8ª Cía. (Bomberos Viña del Mar)',sector:'Av. José Manuel Balmaceda 601, Viña del Mar'},
-{id:'BF-V9',name:'Autobomba Forestal BF-V9',type:'Forestal',lat:-32.9996,lng:-71.4882,radioState:'6-0',eta:2,distance:0.31,capacity:'Incendios forestales',crew:6,compania:'9ª Cía. "Brigada Reñaca Alto" (Bomberos Viña del Mar)',sector:'Altamira, Reñaca Alto'},
-{id:'BF-V10',name:'Autobomba Forestal BF-V10',type:'Forestal',lat:-33.0225,lng:-71.5040,radioState:'6-0',eta:5.5,distance:3.21,capacity:'Incendios forestales',crew:6,compania:'10ª Cía. (Bomberos Viña del Mar)',sector:'Av. Presidente Eduardo Frei Montalva 4350, Viña del Mar'},
-];
+// Los recursos se obtienen exclusivamente desde PostgreSQL mediante GET /resources.
+// No existe una flota precargada en el frontend.
+
+function tipoRecursoBD(tipo: unknown, codigo: string): ResourceType {
+  const valor = String(tipo ?? '').trim().toLowerCase();
+  const prefijo = codigo.toUpperCase().split('-')[0];
+  if (['forestal', 'bf'].includes(valor) || prefijo === 'BF') return 'Forestal';
+  if (['rescate', 'r'].includes(valor) || prefijo === 'R') return 'Rescate';
+  if (['hazmat', 'h', 'materiales peligrosos'].includes(valor) || prefijo === 'H') return 'Hazmat';
+  if (['escala', 'q'].includes(valor) || prefijo === 'Q') return 'Escala';
+  if (['cisterna', 'z', 'aljibe'].includes(valor) || prefijo === 'Z') return 'Cisterna';
+  return 'Bomberos';
+}
+
+function nombreRecursoBD(fila: any, codigo: string, tipo: ResourceType): string {
+  const nombre = String(fila.nombre ?? fila.nombre_recurso ?? '').trim();
+  if (nombre) return nombre;
+  const etiquetas: Record<ResourceType, string> = {
+    Bomberos: 'Carro Bomba', Forestal: 'Autobomba Forestal',
+    Rescate: 'Unidad Rescate', Hazmat: 'Unidad HazMat',
+    Escala: 'Escala Mecánica', Cisterna: 'Carro Aljibe',
+  };
+  return `${etiquetas[tipo]} ${codigo}`;
+}
 
 // Pool de emergencias simuladas que rota (una nueva reemplaza a la que se atiende)
 // Coordenadas geocodificadas con Nominatim/OpenStreetMap (2026-09-09).
@@ -490,10 +583,7 @@ function companiaOcupada(resources:Resource[], compania:string):boolean{
 }
 
 function pickRecommendation(resources:Resource[], emergencia:Emergency|null, rechazados:Set<string>, clave:Clave|undefined, nowMs:number):Resource|null{
-  // Una emergencia que ya tiene una unidad despachada (Asignada) o ya fue
-  // resuelta (Inactiva) no vuelve a recibir recomendaciones -- evita
-  // despachar una segunda unidad a algo que ya esta siendo atendido.
-  if(!emergencia || emergencia.status!=='Activa') return null;
+  if(!emergencia) return null;
   const candidatos=resources.filter(r=>esDisponible(r) && !rechazados.has(r.id) && !companiaOcupada(resources, r.compania));
   if(!candidatos.length) return null;
   return candidatos.slice().sort((a,b)=>{
@@ -518,7 +608,6 @@ function historialIcon(tipo:HistorialTipo){
   if(tipo==='rechazo') return <XCircle size={14}/>;
   if(tipo==='en_emergencia') return <Flame size={14}/>;
   if(tipo==='liberacion') return <Truck size={14}/>;
-  if(tipo==='fuera_servicio') return <XCircle size={14}/>;
   return <AlertTriangle size={14}/>;
 }
 function historialTitle(tipo:HistorialTipo){
@@ -526,7 +615,6 @@ function historialTitle(tipo:HistorialTipo){
   if(tipo==='rechazo') return 'Recomendación rechazada';
   if(tipo==='en_emergencia') return 'Unidad en la emergencia';
   if(tipo==='liberacion') return 'Unidad disponible';
-  if(tipo==='fuera_servicio') return 'Cambio manual de estado';
   return 'Nueva emergencia registrada';
 }
 
@@ -744,7 +832,12 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, isAdm
       unidadesPorCompania.set(r.compania, arr);
     });
     unidadesPorCompania.forEach((unidades, compania)=>{
-      const {lat,lng,sector}=unidades[0];
+      const {sector}=unidades[0];
+      // La compañía es fija: su ubicación proviene de emergencia.compania,
+      // nunca de la posición móvil de emergencia.recurso.
+      const lat=unidades[0].homeLat;
+      const lng=unidades[0].homeLng;
+      if(lat == null || lng == null || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
       const letras=unidades.map(u=>RESOURCE_LETRA[u.type]);
       L.marker([lat,lng],{
         icon:L.divIcon({className:'cuartel-marker', html:iconoCuartel(letras), iconSize:[22,22], iconAnchor:[11,11]}),
@@ -766,13 +859,9 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, isAdm
     });
     resources.forEach(r=>{
       const enMovimiento=!!r.tramo && (r.radioState==='6-3'||r.radioState==='6-8');
-      if(!r.tramo || !enMovimiento) return;
-      // La ruta dibujada es la real por calles (r.tramo.puntos, motor OSRM
-      // local) cuando ya llego del backend; mientras tanto, una linea recta
-      // de respaldo entre origen y destino del tramo actual.
-      const trazado:[number,number][]=(r.tramo.puntos && r.tramo.puntos.length>=2)
-        ? r.tramo.puntos.map(p=>[p.lat,p.lng])
-        : [[r.tramo.origen.lat,r.tramo.origen.lng],[r.tramo.destino.lat,r.tramo.destino.lng]];
+      if(!enMovimiento || !r.tramo?.puntos || r.tramo.puntos.length<2) return;
+      // Dibujar exclusivamente geometrías verificadas de OSRM.
+      const trazado:[number,number][]=r.tramo.puntos.map(p=>[p.lat,p.lng]);
       // className "ruta-viva" tiene una animacion CSS de guiones fluyendo,
       // para que se sienta una ruta activa y no una linea estatica.
       L.polyline(trazado,{color:'#29a9ff',weight:4,dashArray:'10 8',className:'ruta-viva'}).addTo(layer);
@@ -796,8 +885,10 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, isAdm
       // por eso no basta con mirar el radioState solo). En 6-0 sin tramo o
       // en 6-9 esta fisicamente en el mismo punto que el marcador fijo del
       // cuartel -- no hace falta un segundo icono ahi encima.
-      const enCuartelQuieto=(r.radioState==='6-0' && !r.tramo) || r.radioState==='6-9';
-      const fueraDeCuartel=!enCuartelQuieto;
+      // Mostrar TODOS los recursos que devuelve PostgreSQL, también los
+      // disponibles (6-0) y fuera de servicio (6-9). El cuartel se mantiene
+      // como un marcador independiente y fijo en la capa inferior.
+      const fueraDeCuartel=true;
       if(!fueraDeCuartel){
         const existente=marcadoresRef.current[r.id];
         if(existente){existente.remove(); delete marcadoresRef.current[r.id]; delete estadoIconoRef.current[r.id];}
@@ -814,6 +905,7 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, isAdm
       if(!m){
         m=L.marker([pos.lat,pos.lng],{
           icon:L.divIcon({className:'resource-marker', html:iconoVehiculo(color, RESOURCE_LETRA[r.type], rumbo), iconSize:[30,30], iconAnchor:[15,15]}),
+          zIndexOffset:200,
         }).addTo(map);
         m.bindTooltip(()=>{const d=datosRef.current[r.id]; return `${d.name} · ${RADIO_LABELS[d.radioState]}`;});
         m.bindPopup(()=>popupVehiculo(datosRef.current[r.id], emergenciesRef.current.length>0, isAdminRef.current));
@@ -939,10 +1031,16 @@ function EmergenciasView({queue,claves,now,onAtender,isAdmin}:{queue:Emergency[]
     <div className="cardHead"><div><b>Emergencias activas</b><span>{queue.length} en cola de atención</span></div></div>
     <div className="tableWrap"><table className="dataTable">
       <thead><tr><th>ID</th><th>Clave</th><th>Prioridad</th><th>Dirección</th><th>Tiempo</th><th>Estado</th>{isAdmin && <th></th>}</tr></thead>
-      <tbody>{queue.map(e=>{const c=claves[e.codigo]; return <tr key={e.id}>
+      <tbody>{[...queue].sort((a, b) => a.id - b.id).map(e => {const c = claves[e.codigo];return <tr key={e.id}>
         <td>#{e.id}</td>
         <td>{e.codigo} · {c?.nombre??'—'}</td>
-        <td><span className={`prio prio-${c?.prioridad_nivel??3}`}>{c?.prioridad??'—'}</span></td>
+        <td>
+          <span
+            className={`prioridad-badge ${obtenerClasePrioridad(e.prioridad)}`}
+          >
+            {obtenerNivelPrioridad(e.prioridad)}
+          </span>
+        </td>
         <td className="wrap">{e.address}</td>
         <td>{elapsedLabel(e.creadaEn,now)}</td>
         <td>{e.status}</td>
@@ -953,7 +1051,7 @@ function EmergenciasView({queue,claves,now,onAtender,isAdmin}:{queue:Emergency[]
 }
 
 const TODOS='todos' as const;
-function RecursosView({resources,alertaTimeoutIds,isAdmin,onToggleFueraDeServicio,onVerCuartelEnMapa}:{resources:Resource[];alertaTimeoutIds:Set<string>;isAdmin:boolean;onToggleFueraDeServicio:(resourceId:string)=>void;onVerCuartelEnMapa:(lat:number,lng:number)=>void}){
+function RecursosView({resources,alertaTimeoutIds,onVerCuartelEnMapa}:{resources:Resource[];alertaTimeoutIds:Set<string>;onVerCuartelEnMapa:(lat:number,lng:number)=>void}){
   const [busqueda,setBusqueda]=useState('');
   const [filtroTipo,setFiltroTipo]=useState<typeof TODOS|ResourceType>(TODOS);
   const [filtroEstado,setFiltroEstado]=useState<typeof TODOS|RadioState>(TODOS);
@@ -978,10 +1076,8 @@ function RecursosView({resources,alertaTimeoutIds,isAdmin,onToggleFueraDeServici
       </select>
     </div>
     <div className="tableWrap"><table className="dataTable">
-      <thead><tr><th></th><th>Unidad</th><th>Compañía</th><th>Sector</th><th>Tipo</th><th>Dotación</th><th>Distancia</th><th>ETA</th><th>Estado</th>{isAdmin && <th></th>}</tr></thead>
-      <tbody>{filtrados.length?filtrados.map(r=>{
-        const enMision=r.radioState==='6-3'||r.radioState==='6-7';
-        return <tr key={r.id}>
+      <thead><tr><th></th><th>Unidad</th><th>Compañía</th><th>Sector</th><th>Tipo</th><th>Dotación</th><th>Distancia</th><th>ETA</th><th>Estado</th></tr></thead>
+      <tbody>{filtrados.length?filtrados.map(r=><tr key={r.id}>
         <td className="resIconCell">{resourceIcon(r.type)}</td>
         <td>{r.name}</td>
         <td><button className="linkBtn" title="Ver cuartel en el mapa" onClick={()=>onVerCuartelEnMapa(r.lat,r.lng)}>{r.compania}</button></td>
@@ -991,8 +1087,7 @@ function RecursosView({resources,alertaTimeoutIds,isAdmin,onToggleFueraDeServici
         <td>{r.distance} km</td>
         <td>{r.eta} min</td>
         <td><span className={`estado estado-${r.radioState.replace('6-','')}`}>{r.radioState} · {RADIO_LABELS[r.radioState]}</span>{alertaTimeoutIds.has(r.id)&&<span className="timeoutBadge" title="Sin transmisión de estado dentro del umbral configurado"><AlertTriangle size={11}/> sin transmisión</span>}</td>
-        {isAdmin && <td>{enMision?<span className="gris-tenue" style={{fontSize:'11px'}}>En misión</span>:<button className={r.radioState==='6-9'?'reactivarBtn':'fueraServicioBtn'} title={r.radioState==='6-9'?'Reactivar unidad':'Dejar fuera de servicio (carga de agua/bencina, mantención, etc.)'} onClick={()=>onToggleFueraDeServicio(r.id)}>{r.radioState==='6-9'?'Reactivar':'Fuera de servicio'}</button>}</td>}
-      </tr>;}):<tr><td colSpan={isAdmin?10:9}><p className="emptyState">Ninguna unidad coincide con el filtro.</p></td></tr>}</tbody>
+      </tr>):<tr><td colSpan={9}><p className="emptyState">Ninguna unidad coincide con el filtro.</p></td></tr>}</tbody>
     </table></div>
   </div>;
 }
@@ -1809,6 +1904,44 @@ const handleLogin=(
 
 const isAdminSoporte=auth?.rol==='soporte';
 
+ //-------------------NUEVA BASE DE DATOS
+useEffect(()=>{
+  if(!auth) return;
+
+  let cancelado=false;
+
+  const cargarEmergencias=async()=>{
+    try{
+      const emergencias=await obtenerEmergenciasBD();
+
+      if(cancelado) return;
+
+      setQueue(emergencias);
+
+      setApiError(null);
+
+    }catch(error){
+      if(cancelado) return;
+
+      console.error('Error cargando emergencias:',error);
+
+      setApiError(
+        error instanceof Error
+          ? error.message
+          : 'No se pudieron cargar las emergencias'
+      );
+    }
+  };
+
+  cargarEmergencias();
+
+  return()=>{
+    cancelado=true;
+  };
+},[auth]);
+
+ //--------------------------------------------
+
  const [section,setSection]=useState('Dashboard');
  const [toast,setToast]=useState('');
  const [refresh,setRefresh]=useState(0);
@@ -1822,8 +1955,15 @@ const isAdminSoporte=auth?.rol==='soporte';
  const [estadoRemoto,setEstadoRemoto]=useState<{publicadoPor:string; publicadoEn:string}|null>(null);
  const [esperandoEstadoRemoto,setEsperandoEstadoRemoto]=useState(false);
  const [importanciaVariables,setImportanciaVariables]=useState<VariableImportancia[]>([]);
- const [resources,setResources]=useState<Resource[]>(RESOURCES_INICIALES);
- const [queue,setQueue]=useState<Emergency[]>(()=>POOL_EMERGENCIAS.slice(0,4).map((e,i)=>({...e,id:1258+i,status:'Activa',creadaEn:Date.now()})));
+ const [resources,setResources]=useState<Resource[]>([]);
+ const [recursosCargados,setRecursosCargados]=useState(false); 
+
+
+ //--------------NUEVA BASE DE DATOS----------------
+ const [queue,setQueue]=useState<Emergency[]>([]); 
+ //-------------------------------------------------
+
+
  const [rechazadosPorEmergencia,setRechazadosPorEmergencia]=useState<Record<number,Set<string>>>({});
  const [historial,setHistorial]=useState<HistorialEntry[]>([]);
  const [tickets,setTickets]=useState<SupportTicket[]>([]);
@@ -1894,6 +2034,9 @@ const isAdminSoporte=auth?.rol==='soporte';
  // setInterval de patrullaje sin recrearlo en cada cambio de estado (mismo
  // patron que soundOnRef mas abajo).
  const resourcesRef=useRef(resources);
+ const resourcesCargadosRef=useRef(false);
+ const catalogoBDRef=useRef<Resource[]>([]);
+ const operacionesPendientesRef=useRef<Set<string>>(new Set());
  const soundOnRef=useRef(soundOn);
  // Espejos del resto del estado simulado, para publicarlo tal cual esta
  // en este instante desde el setInterval de "publicar estado" (ver mas
@@ -1905,6 +2048,194 @@ const isAdminSoporte=auth?.rol==='soporte';
 
  useEffect(()=>{soundOnRef.current=soundOn;},[soundOn]);
  useEffect(()=>{resourcesRef.current=resources;},[resources]);
+ // Carga inicial desde PostgreSQL.
+// Los códigos B-1, R-5, BF-V10, etc. son la identidad
+// estable de cada vehículo en el frontend.
+ useEffect(() => {
+  if (!auth) {
+    setRecursosCargados(false);
+    resourcesCargadosRef.current = false;
+    catalogoBDRef.current = [];
+    setResources([]);
+    return;
+  }
+
+  let cancelado = false;
+
+  const cargarRecursos = async () => {
+    try {
+      const resp = await fetch(`${API_BASE}/resources`, {
+        credentials: 'include',
+        headers: authHeaders(),
+      });
+
+      if (!resp.ok) {
+        throw new Error(`Error HTTP ${resp.status}`);
+      }
+
+      const data = await resp.json();
+      const filas = data.resources;
+
+      if (!Array.isArray(filas)) {
+        throw new Error('Respuesta de recursos inválida');
+      }
+
+      const recursosBD: Resource[] = filas.map((fila: any) => {
+        const codigo = String(fila.codigo ?? fila.codigo_recurso ?? '').trim();
+        if (!codigo) throw new Error('PostgreSQL devolvió un recurso sin código');
+
+        const lat = Number(fila.lat ?? fila.latitud_recurso);
+        const lng = Number(fila.lng ?? fila.longitud_recurso);
+        const homeLat = Number(fila.lat_compania ?? fila.latitud_compania);
+        const homeLng = Number(fila.lng_compania ?? fila.longitud_compania);
+        if (
+          fila.lat == null && fila.latitud_recurso == null ||
+          fila.lng == null && fila.longitud_recurso == null ||
+          !Number.isFinite(lat) || !Number.isFinite(lng) ||
+          !Number.isFinite(homeLat) || !Number.isFinite(homeLng) ||
+          (fila.lat_compania == null && fila.latitud_compania == null) ||
+          (fila.lng_compania == null && fila.longitud_compania == null)
+        ) throw new Error(`Coordenadas incompletas en PostgreSQL para ${codigo}`);
+
+        const estado = String(fila.estado ?? fila.estado_radio ?? '').trim() as RadioState;
+        if (!(estado in RADIO_LABELS)) {
+          throw new Error(`Estado radial inválido en PostgreSQL para ${codigo}: ${estado}`);
+        }
+        const tipo = tipoRecursoBD(fila.tipo ?? fila.tipo_recurso, codigo);
+        return {
+          id: codigo,
+          codigo,
+          name: nombreRecursoBD(fila, codigo, tipo),
+          type: tipo,
+          lat, lng, homeLat, homeLng,
+          radioState: estado,
+          crew: Number(fila.dotacion ?? fila.dotacion_recurso ?? 0),
+          capacity: String(fila.capacidad ?? fila.capacitacion ?? fila.capacitacion_recurso ?? tipo),
+          compania: String(fila.compania ?? fila.nombre_compania ?? 'Sin compañía'),
+          sector: String(fila.sector ?? fila.sector_compania ?? 'Sin sector'),
+          eta: Number(fila.eta ?? 0),
+          distance: Number(fila.distance ?? 0),
+          tramo: undefined,
+          destino: undefined,
+        };
+      });
+
+      if (new Set(recursosBD.map(r => r.id)).size !== recursosBD.length) {
+        throw new Error('PostgreSQL devolvió códigos de recurso duplicados');
+      }
+
+      if (cancelado) return;
+
+      catalogoBDRef.current = recursosBD;
+      setResources(anteriores => {
+        // PostgreSQL define la lista de unidades y sus datos descriptivos.
+        // Solo el administrador conserva el tramo local de una simulación en curso.
+        const previos = new Map(anteriores.map(r => [r.id, r]));
+        const resultado = recursosBD.map(db => {
+          const anterior = previos.get(db.id);
+          if (isAdmin && anterior?.destino && ['6-3', '6-7', '6-8'].includes(anterior.radioState)) {
+            return { ...db, lat: anterior.lat, lng: anterior.lng,
+              radioState: anterior.radioState, tramo: anterior.tramo,
+              destino: anterior.destino, ultimaActualizacion: anterior.ultimaActualizacion };
+          }
+          return db;
+        });
+        resourcesRef.current = resultado;
+        return resultado;
+      });
+      resourcesCargadosRef.current = true;
+      setRecursosCargados(true);
+      setApiError(null);
+
+      console.log(
+        `${recursosBD.length} recursos cargados desde PostgreSQL`
+      );
+
+    } catch (error) {
+      if (cancelado) return;
+
+      console.error('Error cargando recursos:', error);
+      resourcesCargadosRef.current = false;
+      setRecursosCargados(false);
+      setApiError(
+        'No se pudo cargar la flota desde PostgreSQL.'
+      );
+    }
+  };
+
+  void cargarRecursos();
+  // Actualiza altas, bajas y cambios de la BD sin recargar la página.
+  const intervalo = window.setInterval(() => { void cargarRecursos(); }, 10000);
+  return () => {
+    cancelado = true;
+    window.clearInterval(intervalo);
+  };
+ }, [auth, isAdmin]);
+ // Sincroniza periódicamente las posiciones de la flota con PostgreSQL.
+ // Solo el administrador publica posiciones; los visualizadores no escriben.
+ useEffect(() => {
+  if (!auth || !isAdmin || !recursosCargados) return;
+
+  let cancelado = false;
+  let enviando = false;
+
+  const guardarPosiciones = async () => {
+    if (cancelado || enviando) return;
+
+    enviando = true;
+
+    try {
+      const ahora = Date.now();
+
+      await Promise.all(
+        resourcesRef.current.filter(recurso =>
+          recurso.radioState === '6-3' || recurso.radioState === '6-7' || recurso.radioState === '6-8'
+        ).map(async (recurso) => {
+          const posicion = posicionActual(recurso, ahora);
+          const codigo = recurso.codigo ?? recurso.id;
+
+          const respuesta = await fetch(
+            `${API_BASE}/resources/${encodeURIComponent(codigo)}/position`,
+            {
+              method: 'PATCH',
+              credentials: 'include',
+              headers: {
+                'Content-Type': 'application/json',
+                ...authHeaders(),
+              },
+              body: JSON.stringify({
+                lat: posicion.lat,
+                lng: posicion.lng,
+                estado: recurso.radioState,
+              }),
+            }
+          );
+
+          if (!respuesta.ok) {
+            console.error(
+              `Error guardando posición de ${codigo}:`,
+              respuesta.status
+            );
+          }
+        })
+      );
+    } catch (error) {
+      console.error(
+        'No se pudieron sincronizar las posiciones:',
+        error
+      );
+    } finally {
+      enviando = false;
+    }
+  };
+
+  const intervalo = window.setInterval(guardarPosiciones, 2000);
+
+  return () => {
+    cancelado = true;
+    window.clearInterval(intervalo);
+  };
+ }, [auth, isAdmin, recursosCargados]);
  useEffect(()=>{queueRef.current=queue;},[queue]);
  useEffect(()=>{historialRef.current=historial;},[historial]);
  useEffect(()=>{metricasAsignacionRef.current=metricasAsignacion;},[metricasAsignacion]);
@@ -1931,68 +2262,263 @@ const isAdminSoporte=auth?.rol==='soporte';
  // aplica SOLO si esa unidad sigue en el mismo tramo cuando la respuesta
  // llega (compara `inicio`) — si mientras tanto fue redirigida a otro
  // lado, el tramo viejo ya no existe y no corresponde pisarlo.
- const aplicarRutaCuandoLlegue=(resourceId:string, inicio:number, origen:{lat:number;lng:number}, destino:{lat:number;lng:number})=>{
-   obtenerRutaReal(origen, destino).then(ruta=>{
-     if(!ruta) return;
-     setResources(rs=>rs.map(x=>x.id===resourceId && x.tramo && x.tramo.inicio===inicio
-       ? {...x, tramo:{...x.tramo, puntos:ruta.puntos, acumKm:ruta.acumKm}}
-       : x));
-   });
+ const prepararTramoOSRM = async (resourceId: string,origen: { lat: number; lng: number },destino: { lat: number; lng: number },duracionMs: number): Promise<Tramo> => {
+  const ruta = await obtenerRutaReal(origen, destino);
+  return {
+    origen,
+    destino,
+    inicio: Date.now(),
+    duracionMs,
+    puntos: ruta.puntos,
+    acumKm: ruta.acumKm,
+  };
  };
 
- const intentarPatrullaje=()=>{
-   if(enPatrullajeRef.current.size>=MAX_EN_PATRULLAJE) return;
-   const libres=resourcesRef.current.filter(r=>r.radioState==='6-0' && !r.tramo && !enPatrullajeRef.current.has(r.id));
-   if(!libres.length) return;
-   const elegido=libres[Math.floor(Math.random()*libres.length)];
-   const punto=elegirPuntoPatrullaje();
-   const resourceId=elegido.id;
-   const home={lat:elegido.lat, lng:elegido.lng};
-   const destinoPatrullaje={lat:punto.lat, lng:punto.lng};
-   const distanciaKm=haversineKm(home.lat,home.lng,punto.lat,punto.lng);
-   // Recorrido lento a proposito (no es la velocidad real): se ve circular
-   // de a poco por el mapa, no llegar de un salto.
-   const duracionMs=Math.round(Math.max(20000, Math.min(etaMinutos(distanciaKm,'urbano')*3200, 70000)));
+const intentarPatrullaje = async () => {
+  if (!resourcesCargadosRef.current) return;
 
-   enPatrullajeRef.current.add(resourceId);
-   clearResourceTimers(resourceId);
-   const inicioIda=Date.now();
-   setResources(rs=>rs.map(x=>x.id===resourceId?{...x,tramo:{origen:home, destino:destinoPatrullaje, inicio:inicioIda, duracionMs}}:x));
-   aplicarRutaCuandoLlegue(resourceId, inicioIda, home, destinoPatrullaje);
+  if (enPatrullajeRef.current.size >= MAX_EN_PATRULLAJE) {
+    return;
+  }
 
-   const tLlegada=window.setTimeout(()=>{
-     const dwellMs=6000+Math.random()*8000;
-     const tRegreso=window.setTimeout(()=>{
-       // Si mientras tanto fue despachada a una emergencia real, ya no esta
-       // en 6-0 y no le corresponde este regreso de patrullaje.
-       const inicioVuelta=Date.now();
-       setResources(rs=>rs.map(x=>x.id===resourceId && x.radioState==='6-0'
-         ?{...x,tramo:{origen:destinoPatrullaje, destino:home, inicio:inicioVuelta, duracionMs}}
-         :x));
-       aplicarRutaCuandoLlegue(resourceId, inicioVuelta, destinoPatrullaje, home);
-       const tFin=window.setTimeout(()=>{
-         setResources(rs=>rs.map(x=>x.id===resourceId && x.radioState==='6-0'?{...x,tramo:undefined}:x));
-         enPatrullajeRef.current.delete(resourceId);
-       }, duracionMs);
-       registerResourceTimer(resourceId, tFin);
-     }, dwellMs);
-     registerResourceTimer(resourceId, tRegreso);
-   }, duracionMs);
-   registerResourceTimer(resourceId, tLlegada);
+  const libres = resourcesRef.current.filter(
+    r =>
+      r.radioState === '6-0' &&
+      !r.tramo &&
+      !enPatrullajeRef.current.has(r.id) &&
+      !operacionesPendientesRef.current.has(r.id)
+  );
+
+  if (!libres.length) return;
+
+  const elegido = libres[Math.floor(Math.random() * libres.length)];
+  const punto = elegirPuntoPatrullaje();
+  const resourceId = elegido.id;
+
+  const latCuartel = elegido.homeLat;
+  const lngCuartel = elegido.homeLng;
+
+  if (
+    latCuartel == null ||
+    lngCuartel == null ||
+    !Number.isFinite(latCuartel) ||
+    !Number.isFinite(lngCuartel)
+  ) {
+    console.error(`Cuartel sin coordenadas: ${resourceId}`);
+    return;
+  }
+
+  const cuartel: { lat: number; lng: number } = {
+    lat: latCuartel,
+    lng: lngCuartel,
+  };
+
+  const origen = posicionActual(elegido, Date.now());
+
+  const destinoPatrullaje = {
+    lat: punto.lat,
+    lng: punto.lng,
+  };
+
+  const distanciaKm = haversineKm(
+    origen.lat,
+    origen.lng,
+    destinoPatrullaje.lat,
+    destinoPatrullaje.lng
+  );
+
+  const duracionMs = Math.round(
+    Math.max(
+      20000,
+      Math.min(
+        etaMinutos(distanciaKm, 'urbano') * 3200,
+        70000
+      )
+    )
+  );
+
+  // Reservar temporalmente la unidad mientras OSRM responde.
+  operacionesPendientesRef.current.add(resourceId);
+
+  try {
+    // IDA: obtener primero la ruta por calles.
+    const tramoIda = await prepararTramoOSRM(
+      resourceId,
+      origen,
+      destinoPatrullaje,
+      duracionMs
+    );
+
+    const vigente = resourcesRef.current.find(
+      r => r.id === resourceId
+    );
+
+    if (
+      !vigente ||
+      vigente.radioState !== '6-0' ||
+      vigente.tramo ||
+      enPatrullajeRef.current.has(resourceId)
+    ) {
+      return;
+    }
+
+    // Solo ahora comienza el patrullaje.
+    enPatrullajeRef.current.add(resourceId);
+    clearResourceTimers(resourceId);
+
+    setResources(rs =>
+      rs.map(r =>
+        r.id === resourceId
+          ? { ...r, tramo: tramoIda }
+          : r
+      )
+    );
+
+    const tLlegada = window.setTimeout(() => {
+      const alLlegar = resourcesRef.current.find(
+        r => r.id === resourceId
+      );
+
+      if (
+        !alLlegar ||
+        alLlegar.radioState !== '6-0' ||
+        alLlegar.tramo?.inicio !== tramoIda.inicio ||
+        !enPatrullajeRef.current.has(resourceId)
+      ) {
+        return;
+      }
+
+      setResources(rs =>
+        rs.map(r =>
+          r.id === resourceId &&
+          r.radioState === '6-0' &&
+          r.tramo?.inicio === tramoIda.inicio
+            ? {
+                ...r,
+                lat: destinoPatrullaje.lat,
+                lng: destinoPatrullaje.lng,
+                tramo: undefined,
+              }
+            : r
+        )
+      );
+
+      const dwellMs = 6000 + Math.random() * 8000;
+
+      const tRegreso = window.setTimeout(async () => {
+        const antesDeVolver = resourcesRef.current.find(
+          r => r.id === resourceId
+        );
+
+        if (
+          !antesDeVolver ||
+          antesDeVolver.radioState !== '6-0' ||
+          !enPatrullajeRef.current.has(resourceId)
+        ) {
+          return;
+        }
+
+        try {
+          // VUELTA: solicitar una nueva ruta OSRM.
+          const tramoVuelta = await prepararTramoOSRM(
+            resourceId,
+            destinoPatrullaje,
+            cuartel,
+            duracionMs
+          );
+
+          const vigenteVuelta = resourcesRef.current.find(
+            r => r.id === resourceId
+          );
+
+          if (
+            !vigenteVuelta ||
+            vigenteVuelta.radioState !== '6-0' ||
+            vigenteVuelta.tramo ||
+            !enPatrullajeRef.current.has(resourceId)
+          ) {
+            return;
+          }
+
+          setResources(rs =>
+            rs.map(r =>
+              r.id === resourceId &&
+              r.radioState === '6-0'
+                ? {
+                    ...r,
+                    tramo: tramoVuelta,
+                  }
+                : r
+            )
+          );
+
+          const tFin = window.setTimeout(() => {
+            const alFinal = resourcesRef.current.find(
+              r => r.id === resourceId
+            );
+
+            if (
+              !alFinal ||
+              alFinal.radioState !== '6-0' ||
+              alFinal.tramo?.inicio !== tramoVuelta.inicio
+            ) {
+              return;
+            }
+
+            setResources(rs =>
+              rs.map(r =>
+                r.id === resourceId &&
+                r.radioState === '6-0' &&
+                r.tramo?.inicio === tramoVuelta.inicio
+                  ? {
+                      ...r,
+                      lat: cuartel.lat,
+                      lng: cuartel.lng,
+                      tramo: undefined,
+                    }
+                  : r
+              )
+            );
+
+            enPatrullajeRef.current.delete(resourceId);
+          }, tramoVuelta.duracionMs);
+
+          registerResourceTimer(resourceId, tFin);
+
+        } catch (error) {
+          console.error(
+            `OSRM no pudo calcular el regreso de patrullaje de ${resourceId}`,
+            error
+          );
+
+          // La unidad permanece en el punto de patrullaje.
+          // No se simula un regreso en línea recta.
+          notify(
+            `${resourceId}: no se pudo calcular el regreso por OSRM.`
+          );
+        }
+      }, dwellMs);
+
+      registerResourceTimer(resourceId, tRegreso);
+    }, tramoIda.duracionMs);
+
+    registerResourceTimer(resourceId, tLlegada);
+
+  } catch (error) {
+    console.error(
+      `No se pudo iniciar patrullaje de ${resourceId}:`,
+      error
+    );
+  } finally {
+    operacionesPendientesRef.current.delete(resourceId);
+  }
  };
 
- useEffect(()=>{
-   // No arranca el patrullaje (ni sus llamadas a /route) hasta que haya
-   // sesion iniciada -- antes del login no deberia haber ninguna unidad
-   // "trabajando" de fondo. Tampoco corre para el rol visualizador: ese
-   // rol no simula nada por su cuenta, solo observa el estado que publica
-   // el admin (ver efecto de publicar/consultar /state mas abajo) -- si
-   // ambos simularan de forma independiente, cada uno terminaria viendo
-   // datos distintos en vez de "lo mismo en vivo".
-   if(!auth || !isAdmin) return;
-   const t=setInterval(intentarPatrullaje, 6000);
-   return()=>clearInterval(t);
- },[auth, isAdmin]);
+ // Patrullaje automático DESACTIVADO: una unidad solo comienza a moverse
+ // cuando se le asigna explícitamente una emergencia. Se conserva la
+ // función intentarPatrullaje para una posible activación futura, pero
+ // no existe ningún temporizador que la ejecute espontáneamente.
+
 
  // Publicar estado (solo admin): cada 2s manda al backend una foto del
  // despacho tal como esta en este instante en su navegador, para que las
@@ -2000,7 +2526,7 @@ const isAdminSoporte=auth?.rol==='soporte';
  // Los Set no son serializables a JSON directo, por eso rechazados se
  // manda como arreglo de ids.
  useEffect(()=>{
-   if(!auth || !isAdmin) return;
+   if(!auth || !isAdmin || !recursosCargados) return;
    const publicar=()=>{
      const rechazadosPlano=Object.fromEntries(
        Object.entries(rechazadosPorEmergenciaRef.current).map(([id,set])=>[id, Array.from(set)])
@@ -2019,7 +2545,7 @@ const isAdminSoporte=auth?.rol==='soporte';
    publicar();
    const t=setInterval(publicar, 2000);
    return()=>clearInterval(t);
- },[auth, isAdmin]);
+ },[auth, isAdmin, recursosCargados]);
 
  // Consultar estado (solo visualizador): en vez de simular nada por su
  // cuenta, cada 2s trae lo ultimo que publico el admin y lo usa
@@ -2036,7 +2562,25 @@ const isAdminSoporte=auth?.rol==='soporte';
          if(!data.publicado){ setEsperandoEstadoRemoto(true); setEstadoRemoto(null); return; }
          setEsperandoEstadoRemoto(false);
          setEstadoRemoto({publicadoPor:data.publicadoPor, publicadoEn:data.publicadoEn});
-         if(Array.isArray(data.resources)) setResources(data.resources);
+         // /state solo aporta movimientos de unidades que siguen existiendo
+         // en PostgreSQL; jamás puede introducir vehículos del catálogo viejo.
+         if(Array.isArray(data.resources) && resourcesCargadosRef.current) {
+           const remotos = new Map<string, Resource>(
+             (data.resources as Resource[]).map(r => [String(r.codigo ?? r.id), r])
+           );
+           setResources(() => catalogoBDRef.current.map(db => {
+             const remoto = remotos.get(db.codigo ?? db.id);
+             if (!remoto) return db;
+             return { ...db,
+               lat: Number.isFinite(Number(remoto.lat)) ? Number(remoto.lat) : db.lat,
+               lng: Number.isFinite(Number(remoto.lng)) ? Number(remoto.lng) : db.lng,
+               radioState: remoto.radioState in RADIO_LABELS ? remoto.radioState : db.radioState,
+               tramo: remoto.tramo,
+               destino: remoto.destino,
+               ultimaActualizacion: remoto.ultimaActualizacion,
+             };
+           }));
+         }
          if(Array.isArray(data.queue)) setQueue(data.queue);
          if(Array.isArray(data.historial)) setHistorial(data.historial);
          if(Array.isArray(data.metricasAsignacion)) setMetricasAsignacion(data.metricasAsignacion);
@@ -2061,11 +2605,6 @@ const isAdminSoporte=auth?.rol==='soporte';
    [resources, filtroCuartel]
  );
 
- // La emergencia "actual" del Dashboard es la primera que todavia necesita
- // una decision (Activa) -- las que ya quedaron en Asignada se mantienen en
- // la cola (para no poder reasignarlas, ver despacharUnidad) pero no deben
- // bloquear el panel: el operador tiene que poder seguir despachando las
- // demas mientras esa unidad va en camino.
  const currentEmergencia=queue.find(e=>e.status==='Activa')??null;
  const claveActual=currentEmergencia?claves[currentEmergencia.codigo]:undefined;
  // La recomendacion se calcula SOLO sobre las unidades del cuartel elegido
@@ -2085,92 +2624,271 @@ const isAdminSoporte=auth?.rol==='soporte';
 
  const notify=(s:string)=>{setToast(s); setTimeout(()=>setToast(''),2800)};
 
+ const cambiarEstadoEmergenciaBD = async (
+   id: number,
+   estado: 'ASIGNADA' | 'EN_ATENCION' | 'FINALIZADA'
+ ): Promise<void> => {
+   const respuesta = await fetch(`${API_BASE}/emergencies/${id}/status`, {
+     method: 'PATCH',
+     credentials: 'include',
+     headers: {'Content-Type': 'application/json', ...authHeaders()},
+     body: JSON.stringify({estado}),
+   });
+   if (!respuesta.ok) {
+     const detalle = await respuesta.text();
+     throw new Error(`No se pudo cambiar la emergencia #${id} a ${estado}: ${respuesta.status} ${detalle}`);
+   }
+ };
+
  const pushHistorial=(tipo:HistorialTipo, texto:string)=>{
    setHistorial(h=>[{id:historialIdRef.current++, ts:Date.now(), tipo, texto}, ...h].slice(0,200));
  };
 
- // Fuera de servicio manual (carga de agua/bencina, mantencion, etc.): solo
- // disponible desde Recursos cuando la unidad no esta en mision (6-3/6-7),
- // ver RecursosView. Alterna entre 6-9 y 6-0 -- no hay estado intermedio
- // que registrar, a diferencia del ciclo automatico de una emergencia.
- const toggleFueraDeServicio=(resourceId:string)=>{
-   clearResourceTimers(resourceId);
-   enPatrullajeRef.current.delete(resourceId);
-   setResources(rs=>rs.map(r=>{
-     if(r.id!==resourceId) return r;
-     const vuelveDisponible=r.radioState==='6-9';
-     pushHistorial('fuera_servicio', vuelveDisponible?`${r.id} vuelve a estar disponible en cuartel`:`${r.id} marcada manualmente fuera de servicio`);
-     return {...r, radioState:vuelveDisponible?'6-0':'6-9', destino:undefined, tramo:undefined, ultimaActualizacion:Date.now()};
-   }));
- };
 
- const spawnEmergencia=():Emergency=>{
-   const seed=POOL_EMERGENCIAS[poolIndexRef.current % POOL_EMERGENCIAS.length];
-   poolIndexRef.current+=1;
-   const id=emergenciaIdRef.current++;
-   return {...seed, id, status:'Activa', creadaEn:Date.now()};
- };
+  //--------------------------NUEVA BASE DE DATOS
+const spawnEmergencia = (): Emergency => {
+  const seed =
+    POOL_EMERGENCIAS[
+      poolIndexRef.current % POOL_EMERGENCIAS.length
+    ];
 
- // Repone trabajo de inmediato al despachar una unidad (no al resolverse
- // del todo, ver quitarDeLaCola mas abajo): asi el operador siempre tiene
- // una emergencia Activa esperando y puede seguir despachando a ritmo
- // rapido, sin tener que esperar minutos a que la anterior termine su
- // ciclo completo (ida + atencion + vuelta) para recien ahi ver la
- // siguiente -- eso era el bug real: "Asignada" se quedaba en la cola
- // ocupando el lugar y nada la reemplazaba hasta que resolvia.
- const reponerEmergencia=()=>{
-   setQueue(q=>{
-     const nueva=spawnEmergencia();
-     pushHistorial('nueva_emergencia',`Emergencia #${nueva.id} · Clave ${nueva.codigo} en ${nueva.address}`);
-     if(soundOnRef.current) beep();
-     return [...q, nueva];
-   });
- };
+  poolIndexRef.current += 1;
 
- // Saca definitivamente de la cola una emergencia ya resuelta (Inactiva) --
- // sin reponer nada aca, porque el reemplazo ya se hizo al despacharla (ver
- // reponerEmergencia).
- const quitarDeLaCola=(resolvedId:number)=>{
-   setQueue(q=>q.filter(e=>e.id!==resolvedId));
-   setRechazadosPorEmergencia(r=>{const c={...r}; delete c[resolvedId]; return c;});
- };
+  const id = emergenciaIdRef.current++;
+
+  return {
+    ...seed,
+    id,
+    status: 'Activa',
+    creadaEn: Date.now(),
+    prioridad: 3,
+  };
+};
+
+ const advanceQueue=(resolvedId:number)=>{
+  setQueue(q=>q.filter(e=>e.id!==resolvedId));
+
+  setRechazadosPorEmergencia(r=>{
+    const c={...r};
+    delete c[resolvedId];
+    return c;
+  });
+};
+
+//--------------------------
 
  // El tramo de vuelta (6-8) usa la misma duracion que la ida: mismo
  // trayecto recorrido en sentido inverso, misma velocidad estimada.
- const scheduleResourceLifecycle=(resourceId:string, emergenciaSnap:Emergency, home:{lat:number;lng:number}, duracionTramoMs:number)=>{
-   // Cancela cualquier temporizador pendiente de un ciclo anterior de esta
-   // MISMA unidad (p.ej. si iba de regreso y fue redirigida a esta nueva
-   // emergencia antes de llegar a su cuartel, o si estaba en patrullaje).
-   clearResourceTimers(resourceId);
-   enPatrullajeRef.current.delete(resourceId);
-   const tiempoTrabajo=TIEMPO_TRABAJO_MS[emergenciaSnap.codigo]??18000;
-   const t1=window.setTimeout(()=>{
-     setResources(rs=>rs.map(r=>r.id===resourceId?{...r,radioState:'6-7',ultimaActualizacion:Date.now()}:r));
-     pushHistorial('en_emergencia',`${resourceId} llegó a la Emergencia #${emergenciaSnap.id} (${emergenciaSnap.address})`);
-     const t2=window.setTimeout(()=>{
-       const origenVuelta={lat:emergenciaSnap.lat,lng:emergenciaSnap.lng};
-       const inicioVuelta=Date.now();
-       setResources(rs=>rs.map(r=>r.id===resourceId?{
-         ...r,radioState:'6-8',
-         tramo:{origen:origenVuelta, destino:home, inicio:inicioVuelta, duracionMs:duracionTramoMs},
-         ultimaActualizacion:Date.now(),
-       }:r));
-       aplicarRutaCuandoLlegue(resourceId, inicioVuelta, origenVuelta, home);
-       pushHistorial('liberacion',`${resourceId} finalizó la atención de la Emergencia #${emergenciaSnap.id}, regresando a cuartel`);
-       // Recien aca la emergencia queda realmente resuelta: se marca
-       // Inactiva y se saca de la cola activa (reemplazada por una nueva),
-       // no en el momento de despachar la unidad (ver despacharUnidad).
-       setQueue(q=>q.map(e=>e.id===emergenciaSnap.id?{...e,status:'Inactiva'}:e));
-       quitarDeLaCola(emergenciaSnap.id);
-       const t3=window.setTimeout(()=>{
-         setResources(rs=>rs.map(r=>r.id===resourceId?{...r,radioState:'6-0',destino:undefined,tramo:undefined,ultimaActualizacion:Date.now()}:r));
-         pushHistorial('liberacion',`${resourceId} disponible nuevamente en cuartel`);
-       }, duracionTramoMs);
-       registerResourceTimer(resourceId, t3);
-     }, tiempoTrabajo);
-     registerResourceTimer(resourceId, t2);
-   }, duracionTramoMs);
-   registerResourceTimer(resourceId, t1);
+ const scheduleResourceLifecycle = (
+  resourceId: string,
+  emergenciaSnap: Emergency,
+  unidadInicial: Resource,
+  duracionTramoMs: number
+) => {
+  // Cancelar temporizadores anteriores de esta unidad.
+  clearResourceTimers(resourceId);
+  enPatrullajeRef.current.delete(resourceId);
+
+  const tiempoTrabajo =
+    TIEMPO_TRABAJO_MS[emergenciaSnap.codigo] ?? 18000;
+
+  // Coordenadas REALES del cuartel, cargadas desde PostgreSQL.
+  const latCuartel = unidadInicial.homeLat;
+  const lngCuartel = unidadInicial.homeLng;
+
+  if (
+    latCuartel == null ||
+    lngCuartel == null ||
+    !Number.isFinite(latCuartel) ||
+    !Number.isFinite(lngCuartel)
+  ) {
+    console.error(`La unidad ${resourceId} no tiene coordenadas válidas de compañía`);
+    notify(`No se pudo configurar el regreso de ${resourceId}: cuartel sin coordenadas`);
+    return;
+  }
+
+  const home: { lat: number; lng: number } = {
+    lat: latCuartel,
+    lng: lngCuartel,
+  };
+
+  // 1. Esperar hasta que termine el trayecto de ida.
+  const tLlegada = window.setTimeout(() => {
+    const actual = resourcesRef.current.find(
+      r => r.id === resourceId
+    );
+
+    // Si fue redirigida o cambió de estado, no ejecutar
+    // la llegada correspondiente a una misión anterior.
+    if (
+      !actual ||
+      actual.radioState !== '6-3' ||
+      actual.destino?.emergenciaId !== emergenciaSnap.id
+    ) {
+      return;
+    }
+
+    void cambiarEstadoEmergenciaBD(emergenciaSnap.id, 'EN_ATENCION')
+      .then(() => setQueue(q => q.map(e => e.id === emergenciaSnap.id ? {...e, status: 'EN_ATENCION'} : e)))
+      .catch(error => { console.error(error); notify(`Error guardando atención de emergencia #${emergenciaSnap.id}`); });
+
+    // La unidad llegó a la emergencia.
+    setResources(rs =>
+      rs.map(r =>
+        r.id === resourceId &&
+        r.radioState === '6-3' &&
+        r.destino?.emergenciaId === emergenciaSnap.id
+          ? {
+              ...r,
+              radioState: '6-7' as RadioState,
+              lat: emergenciaSnap.lat,
+              lng: emergenciaSnap.lng,
+              tramo: undefined,
+              ultimaActualizacion: Date.now(),
+            }
+          : r
+      )
+    );
+
+    pushHistorial(
+      'en_emergencia',
+      `${resourceId} llegó a la Emergencia #${emergenciaSnap.id} (${emergenciaSnap.address})`
+    );
+
+    // 2. Permanecer atendiendo la emergencia.
+    const tTrabajo = window.setTimeout(async () => {
+      const vigente = resourcesRef.current.find(
+        r => r.id === resourceId
+      );
+
+      if (
+        !vigente ||
+        vigente.radioState !== '6-7' ||
+        vigente.destino?.emergenciaId !== emergenciaSnap.id
+      ) {
+        return;
+      }
+
+      // Resolver en PostgreSQL al terminar la atención, aunque OSRM falle
+      // después al calcular la ruta de regreso.
+      try {
+        await cambiarEstadoEmergenciaBD(emergenciaSnap.id, 'FINALIZADA');
+        advanceQueue(emergenciaSnap.id);
+        pushHistorial('liberacion', `Emergencia #${emergenciaSnap.id} finalizada en PostgreSQL`);
+      } catch (error) {
+        console.error('No se pudo finalizar la emergencia:', error);
+        notify(error instanceof Error ? error.message : `No se pudo cerrar la emergencia #${emergenciaSnap.id} en PostgreSQL`);
+        return;
+      }
+
+      const origenVuelta = {
+        lat: emergenciaSnap.lat,
+        lng: emergenciaSnap.lng,
+      };
+
+      const destinoVuelta = {
+        lat: home.lat,
+        lng: home.lng,
+      };
+
+      try {
+        // 3. Pedir ruta de regreso al contenedor OSRM.
+        // No se inicia ningún movimiento hasta recibirla.
+        const tramoVuelta = await prepararTramoOSRM(
+          resourceId,
+          origenVuelta,
+          destinoVuelta,
+          duracionTramoMs
+        );
+
+        // Verificar nuevamente el estado, porque OSRM
+        // puede tardar y la unidad podría haber cambiado.
+        const antesDeRegresar = resourcesRef.current.find(
+          r => r.id === resourceId
+        );
+
+        if (
+          !antesDeRegresar ||
+          antesDeRegresar.radioState !== '6-7' ||
+          antesDeRegresar.destino?.emergenciaId !== emergenciaSnap.id
+        ) {
+          return;
+        }
+
+        // 4. Iniciar regreso siguiendo los puntos de OSRM.
+        setResources(rs =>
+          rs.map(r =>
+            r.id === resourceId &&
+            r.radioState === '6-7' &&
+            r.destino?.emergenciaId === emergenciaSnap.id
+              ? {
+                  ...r,
+                  radioState: '6-8' as RadioState,
+                  tramo: tramoVuelta,
+                  ultimaActualizacion: Date.now(),
+                }
+              : r
+          )
+        );
+
+        pushHistorial(
+          'liberacion',
+          `${resourceId} finalizó la atención de la Emergencia #${emergenciaSnap.id} y regresa a su cuartel por OSRM`
+        );
+
+        // 5. Esperar hasta completar el regreso.
+        const tFin = window.setTimeout(() => {
+          // La actualización funcional evita depender de una referencia de React
+          // que puede quedar desfasada respecto del último render/polling.
+          setResources(rs => {
+            const resultado = rs.map(r => {
+              if (r.id !== resourceId || r.radioState !== '6-8' ||
+                  r.destino?.emergenciaId !== emergenciaSnap.id ||
+                  r.tramo?.inicio !== tramoVuelta.inicio) return r;
+              return { ...r, radioState: '6-0' as RadioState,
+                lat: home.lat, lng: home.lng, destino: undefined,
+                tramo: undefined, ultimaActualizacion: Date.now() };
+            });
+            resourcesRef.current = resultado;
+            return resultado;
+          });
+          // Persistir 6-0 también: el polling solo refleja el estado
+          // de PostgreSQL y no debe volver a mostrar 6-8.
+          void fetch(`${API_BASE}/resources/${encodeURIComponent(unidadInicial.codigo ?? resourceId)}/position`, {
+            method: 'PATCH', credentials: 'include',
+            headers: {'Content-Type': 'application/json', ...authHeaders()},
+            body: JSON.stringify({lat: home.lat, lng: home.lng, estado: '6-0'}),
+          }).then(async respuesta => {
+            if (!respuesta.ok) throw new Error(`HTTP ${respuesta.status}: ${await respuesta.text()}`);
+          }).catch(error => {
+            console.error(`No se pudo guardar 6-0 de ${resourceId}:`, error);
+            notify(`Error guardando regreso a cuartel de ${resourceId}`);
+          });
+          pushHistorial('liberacion', `${resourceId} regresó a su cuartel y está disponible (6-0)`);
+        }, tramoVuelta.duracionMs);
+
+        registerResourceTimer(resourceId, tFin);
+
+      } catch (error) {
+        console.error(
+          `OSRM no pudo calcular el regreso de ${resourceId}:`,
+          error
+        );
+
+        // No crear un tramo alternativo en línea recta.
+        // La unidad permanece en estado 6-7.
+        notify(
+          `${resourceId}: OSRM Docker no está disponible. El vehículo permanece en la emergencia.`
+        );
+      }
+
+    }, tiempoTrabajo);
+
+    registerResourceTimer(resourceId, tTrabajo);
+
+  }, duracionTramoMs);
+
+  registerResourceTimer(resourceId, tLlegada);
  };
 
  // Nucleo compartido del despacho real: lo usan tanto la asignacion
@@ -2178,49 +2896,135 @@ const isAdminSoporte=auth?.rol==='soporte';
  // MANUAL (elegida por el operador desde el mapa) -- misma logica real de
  // movimiento/ruta/registro en ambos casos, solo cambia quien eligio la
  // unidad.
- const despacharUnidad=(unidad:Resource, emergenciaSnap:Emergency, manual:boolean)=>{
-   const resourceId=unidad.id;
-   const nombreClave=claves[emergenciaSnap.codigo]?.nombre??emergenciaSnap.codigo;
-   const fueRedirigida=unidad.radioState==='6-8';
-   // Origen del viaje: si la unidad va de regreso de otra emergencia, se usa
-   // su posicion actual en la ruta (no su cuartel) — se la redirige desde
-   // donde esta en este instante.
-   const origen=posicionActual(unidad, now);
-   const destinoEmergencia={lat:emergenciaSnap.lat,lng:emergenciaSnap.lng};
-   const info=distanciaYEtaHacia(unidad, destinoEmergencia, claveActual, now);
-   // Duracion del recorrido animado: proporcional al ETA real, pero mas
-   // lenta que "tiempo real x1" para que se vea circular de verdad por el
-   // mapa (con el reloj de 300ms de MapPanel) en vez de saltar de golpe.
-   const duracionMs=Math.max(25000, Math.min(info.etaMin*3200, 90000));
-   const inicioIda=Date.now();
-   setResources(rs=>rs.map(r=>r.id===resourceId?{
-     ...r,
-     radioState:'6-3',
-     destino:{emergenciaId:emergenciaSnap.id,lat:emergenciaSnap.lat,lng:emergenciaSnap.lng,address:emergenciaSnap.address},
-     tramo:{origen, destino:destinoEmergencia, inicio:inicioIda, duracionMs},
-     ultimaActualizacion:Date.now(),
-   }:r));
-   aplicarRutaCuandoLlegue(resourceId, inicioIda, origen, destinoEmergencia);
-   // Se guarda el ETA real, la idoneidad de tipo y la compañía de ESTA
-   // asignacion puntual (mismo desglose que ya usa el puntaje/justificacion)
-   // para calcular "Tiempo promedio" y "Cobertura estimada" del dashboard
-   // con datos reales de la sesion (y poder filtrarlos por cuartel).
-   setMetricasAsignacion(m=>[...m, {
-     etaMin: info.etaMin,
-     idoneidadTipo: scoreDetalle(unidad, claveActual, info.distanciaKm, info.etaMin).idoneidadTipo,
-     compania: unidad.compania,
-   }]);
-   pushHistorial('asignacion',`${unidad.name} asignada${manual?' MANUALMENTE por el operador':''} a Emergencia #${emergenciaSnap.id} · Clave ${emergenciaSnap.codigo} (${nombreClave}) — score ${Math.round(score(unidad,claveActual,info.distanciaKm,info.etaMin))}/100${fueRedirigida?' (redirigida mientras regresaba a cuartel)':''}`);
-   notify(`${unidad.name} asignada${manual?' manualmente':''} a la Emergencia #${emergenciaSnap.id}${fueRedirigida?' (redirigida en ruta)':''}`);
-   setFocus({lat:emergenciaSnap.lat,lng:emergenciaSnap.lng});
-   // La emergencia pasa a "Asignada" pero sigue en la cola (no se saca
-   // todavia) -- asi pickRecommendation ya no vuelve a ofrecerla para una
-   // segunda unidad. Se repone trabajo nuevo de inmediato (no se espera a
-   // que esta se resuelva del todo) para que el operador pueda seguir
-   // despachando emergencias a ritmo rapido sin quedar bloqueado.
-   setQueue(q=>q.map(e=>e.id===emergenciaSnap.id?{...e,status:'Asignada'}:e));
-   reponerEmergencia();
-   scheduleResourceLifecycle(resourceId, emergenciaSnap, {lat:unidad.lat,lng:unidad.lng}, duracionMs);
+ const despacharUnidad = async (unidad: Resource,emergenciaSnap: Emergency,manual: boolean) => {
+  if (!resourcesCargadosRef.current) {
+    notify('La flota todavía no está cargada desde PostgreSQL.');
+    return;
+  }
+
+  const resourceId = unidad.id;
+
+  if (operacionesPendientesRef.current.has(resourceId)) {
+    return;
+  }
+
+  operacionesPendientesRef.current.add(resourceId);
+
+  try {
+    const actual = resourcesRef.current.find(
+      r => r.id === resourceId
+    );
+
+    if (!actual || !esDisponible(actual)) {
+      notify('La unidad ya no está disponible.');
+      return;
+    }
+
+    const nombreClave =
+      claves[emergenciaSnap.codigo]?.nombre ??
+      emergenciaSnap.codigo;
+
+    const fueRedirigida = actual.radioState === '6-8';
+
+    const origen = posicionActual(actual, Date.now());
+
+    const destinoEmergencia = {
+      lat: emergenciaSnap.lat,
+      lng: emergenciaSnap.lng,
+    };
+
+    const info = distanciaYEtaHacia(
+      actual,
+      destinoEmergencia,
+      claves[emergenciaSnap.codigo],
+      Date.now()
+    );
+
+    const duracionMs = Math.max(
+      25000,
+      Math.min(info.etaMin * 3200, 90000)
+    );
+
+    // No modifica el vehículo hasta tener la ruta.
+    const tramo = await prepararTramoOSRM(
+      resourceId,
+      origen,
+      destinoEmergencia,
+      duracionMs
+    );
+
+    // Comprobar nuevamente que la unidad no cambió
+    // mientras esperábamos la respuesta de OSRM.
+    const vigente = resourcesRef.current.find(
+      r => r.id === resourceId
+    );
+
+    if (!vigente || !esDisponible(vigente)) {
+      notify('La unidad cambió de estado durante el cálculo.');
+      return;
+    }
+
+    // Confirmar la asignación en PostgreSQL antes de iniciar la simulación.
+    await cambiarEstadoEmergenciaBD(emergenciaSnap.id, 'ASIGNADA');
+    setQueue(q => q.map(e => e.id === emergenciaSnap.id ? {...e, status: 'Asignada'} : e));
+
+    // Solo ahora comienza el desplazamiento.
+    clearResourceTimers(resourceId);
+    enPatrullajeRef.current.delete(resourceId);
+
+    setResources(rs => rs.map(r =>
+      r.id === resourceId
+        ? {
+            ...r,
+            radioState: '6-3',
+            destino: {
+              emergenciaId: emergenciaSnap.id,
+              lat: emergenciaSnap.lat,
+              lng: emergenciaSnap.lng,
+              address: emergenciaSnap.address,
+            },
+            tramo,
+            ultimaActualizacion: Date.now(),
+          }
+        : r
+    ));
+
+    setMetricasAsignacion(m => [...m, {
+      etaMin: info.etaMin,
+      idoneidadTipo: scoreDetalle(
+        actual,
+        claves[emergenciaSnap.codigo],
+        info.distanciaKm,
+        info.etaMin
+      ).idoneidadTipo,
+      compania: actual.compania,
+    }]);
+
+    pushHistorial(
+      'asignacion',
+      `${actual.name} asignada a Emergencia #${emergenciaSnap.id} · Clave ${emergenciaSnap.codigo} (${nombreClave})${fueRedirigida ? ' · Redirigida en ruta' : ''}`
+    );
+
+    notify(
+      `${actual.name} despachada por ruta OSRM${manual ? ' (manual)' : ''}`
+    );
+
+    setFocus(destinoEmergencia);
+
+    scheduleResourceLifecycle(
+      resourceId,
+      emergenciaSnap,
+      actual,
+      tramo.duracionMs
+    );
+
+
+  } catch (error) {
+    console.error('Error de ruta OSRM:', error);
+    notify(error instanceof Error ? error.message : 'No se pudo despachar la unidad.');
+  } finally {
+    operacionesPendientesRef.current.delete(resourceId);
+  }
  };
 
  const handleAsignar=()=>{
@@ -2471,7 +3275,7 @@ const isAdminSoporte=auth?.rol==='soporte';
   }
 </p></div><div className="headerActions">{!isAdmin && !isAdminSoporte && <div className="readOnlyBadge" title="Tu cuenta solo puede visualizar, no asignar recursos"><Eye size={13}/> Solo lectura</div>}<button onClick={()=>setTheme(t=>t==='dark'?'light':'dark')} title={theme==='dark'?'Cambiar a tema claro':'Cambiar a tema oscuro'}>{theme==='dark'?<Sun size={17}/>:<Moon size={17}/>}</button><div className="live"><span/> EN VIVO</div><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
     {section==='Emergencias' && !isAdminSoporte && <EmergenciasView queue={queue} claves={claves} now={now} onAtender={atenderEmergencia} isAdmin={isAdmin}/>}
-    {section==='Recursos' && !isAdminSoporte && <RecursosView resources={resources} alertaTimeoutIds={unidadesConAlertaTimeout} isAdmin={isAdmin} onToggleFueraDeServicio={toggleFueraDeServicio} onVerCuartelEnMapa={verCuartelEnMapa}/>}
+    {section==='Recursos' && !isAdminSoporte && <RecursosView resources={resources} alertaTimeoutIds={unidadesConAlertaTimeout} onVerCuartelEnMapa={verCuartelEnMapa}/>}
     {section==='Historial' && !isAdminSoporte && <HistorialView historial={historial} now={now}/>}
     {section==='Reportes' && !isAdminSoporte && <ReportesView historial={historial}/>}
     {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} onNotify={notify} auth={auth} onLogout={handleLogout} isAdmin={isAdmin} timeoutMinutos={timeoutMinutos} onChangeTimeout={setTimeoutMinutos}/>}
@@ -2499,7 +3303,8 @@ const isAdminSoporte=auth?.rol==='soporte';
     <section className="kpis"><Kpi icon={<AlertTriangle/>} label="Emergencias activas" value={String(filtroCuartel==='todos'?queue.length:queueFiltrada.length)} meta={currentEmergencia?`atendiendo clave ${currentEmergencia.codigo}`:'sin emergencia activa'} tone="acento"/><Kpi icon={<Truck/>} label="Recursos disponibles" value={String(disponibles)} meta={filtroCuartel==='todos'?`de ${resources.length} unidades`:`de ${resourcesFiltrados.length} unidades de ${filtroCuartel}`} tone="azul"/><Kpi icon={<Clock3/>} label="Tiempo promedio" value={tiempoPromedioLabel} meta={tiempoPromedioMeta} tone="acento"/><Kpi icon={<ShieldCheck/>} label="Cobertura estimada" value={coberturaLabel} meta={coberturaMeta} tone="azul"/></section>
     <section className="workspace"><div className="mapCard"><div className="cardHead"><div><b>Mapa operacional</b><span>Emergencias y recursos en tiempo real{isAdmin?' · toca un cuartel o vehículo para asignarlo manualmente':' · modo solo lectura'}</span></div></div><MapPanel resources={resourcesFiltrados} emergencies={emergenciasMapaDashboard} focus={focus} center={operationalCenter} onAsignarManual={handleAsignarManual} isAdmin={isAdmin}/><div className="legend"><span><i className="dot green"/> Disponible</span><span><i className="dot red"/> En misión</span><span><i className="dot blue"/> Ruta recomendada</span></div></div>
       <div className="sideCards">
-      {currentEmergencia?<div className="emergencyCard"><div className={`tag prio prio-${claveActual?.prioridad_nivel??4}`}>{claveActual?`${claveActual.prioridad.toUpperCase()} PRIORIDAD`:'PRIORIDAD'}</div><div className="emergencyTitle"><div className="danger"><AlertTriangle/></div><div><b>Emergencia #{currentEmergencia.id}</b><span>{claveActual?.nombre??currentEmergencia.codigo}</span></div></div><div className="details"><p><MapPin size={18}/><span>{currentEmergencia.address}</span></p><p><Clock3 size={18}/><span>Tiempo transcurrido: <b>{elapsedLabel(currentEmergencia.creadaEn,now)}</b></span></p><p><Radio size={18}/><span>Estado: <b>{currentEmergencia.status}</b></span></p></div><div className="infoTipRow"><InfoTip texto={explicarEmergenciaActual(currentEmergencia.codigo, now)}/></div><button className="locateBtn" onClick={()=>setFocus({lat:currentEmergencia.lat,lng:currentEmergencia.lng})}><Crosshair size={13}/> Ver en el mapa</button></div>:<div className="emergencyCard"><p className="emptyState">Sin emergencias activas por el momento.</p></div>}
+      {currentEmergencia?<div className="emergencyCard"><div
+  className={`tag prioridad-badge ${obtenerClasePrioridad(currentEmergencia.prioridad)}`}>{obtenerNivelPrioridad(currentEmergencia.prioridad)} PRIORIDAD</div><div className="emergencyTitle"><div className="danger"><AlertTriangle/></div><div><b>Emergencia #{currentEmergencia.id}</b><span>{claveActual?.nombre??currentEmergencia.codigo}</span></div></div><div className="details"><p><MapPin size={18}/><span>{currentEmergencia.address}</span></p><p><Clock3 size={18}/><span>Tiempo transcurrido: <b>{elapsedLabel(currentEmergencia.creadaEn,now)}</b></span></p><p><Radio size={18}/><span>Estado: <b>{currentEmergencia.status}</b></span></p></div><div className="infoTipRow"><InfoTip texto={explicarEmergenciaActual(currentEmergencia.codigo, now)}/></div><button className="locateBtn" onClick={()=>setFocus({lat:currentEmergencia.lat,lng:currentEmergencia.lng})}><Crosshair size={13}/> Ver en el mapa</button></div>:<div className="emergencyCard"><p className="emptyState">Sin emergencias activas por el momento.</p></div>}
       <div className="recommend"><div className="recHead"><div><span>RECURSO RECOMENDADO</span><small>{filtroCuartel==='todos'?'Asignación multicriterio':`Asignación multicriterio · solo ${filtroCuartel}`}</small></div>{recommendation && recomendacionInfo && <div className="score" style={{color:scoreColor(Math.round(score(recommendation,claveActual,recomendacionInfo.distanciaKm,recomendacionInfo.etaMin)))}}>{Math.round(score(recommendation,claveActual,recomendacionInfo.distanciaKm,recomendacionInfo.etaMin))}<small>/100</small></div>}</div>
       {recommendation && recomendacionInfo?<>
        <div className="recBody"><div className="vehicleIcon">{resourceIcon(recommendation.type)}</div><div><b>{recommendation.name}</b><span className="recBodyCia">{recommendation.compania} · {recommendation.sector}</span><p><Clock3 size={17}/><span>ETA estimado: <strong>{recomendacionInfo.etaMin} min</strong></span></p><p><Navigation size={17}/><span>Distancia: <strong>{recomendacionInfo.distanciaKm} km</strong></span></p><p><CheckCircle2 size={17}/><span>Disponibilidad: <strong>{recommendation.radioState==='6-8'?'Regresando (redirigida a esta emergencia)':'Disponible en cuartel'}</strong></span></p><p><ShieldCheck size={17}/><span>Capacidad: <strong>{recommendation.capacity}</strong></span></p><p><Users size={17}/><span>Dotación: <strong>{recommendation.crew} personas</strong></span></p></div></div>
@@ -2508,7 +3313,7 @@ const isAdminSoporte=auth?.rol==='soporte';
        {isAdmin
          ?<div className="actions"><button className="assign" onClick={handleAsignar}>ASIGNAR</button><button className="reject" onClick={handleRechazar}>RECHAZAR</button></div>
          :<p className="emptyState readOnlyNote"><Lock size={12}/> Tu cuenta es de solo lectura: no puede asignar ni rechazar unidades.</p>}
-      </>:<p className="emptyState">{currentEmergencia && currentEmergencia.status!=='Activa'?'Ya se despachó una unidad a esta emergencia — esperando a que la atienda y regrese a cuartel.':filtroCuartel==='todos'?'Sin unidades disponibles para esta emergencia en este momento — todas las compatibles están en misión.':`Sin unidades disponibles de ${filtroCuartel} para esta emergencia en este momento.`}</p>}
+      </>:<p className="emptyState">{filtroCuartel==='todos'?'Sin unidades disponibles para esta emergencia en este momento — todas las compatibles están en misión.':`Sin unidades disponibles de ${filtroCuartel} para esta emergencia en este momento.`}</p>}
       </div></div></section>
       <section className="workspace"><div className="mapCard"><div className="cardHead"><div><b>Mapa de calor · Demanda de Bomberos</b><span>Predicción ML · próximas {(periodos.length||4)*3} horas · toca una zona para ver el detalle</span></div><span className="mlBadge">ML</span></div><HeatMapPanel zonas={currentZonas} seleccionadaId={zonaSeleccionada} focus={focusHeatmap} onSelectZona={z=>{setZonaSeleccionada(z.zona_id);setFocusHeatmap(z.centroid);}}/><div className="legend heatLegend"><span><i className="dot green"/> Baja</span><span><i className="dot yellow"/> Media</span><span><i className="dot red"/> Alta</span></div></div>
       <div className="sideCards"><div className="card alertsCard"><div className="cardHead"><div><b>Alertas predictivas</b><span>Zonas y horarios de mayor riesgo</span></div></div>
@@ -2604,3 +3409,74 @@ function InfoTip({texto}:{texto:string}){return <span className="infoTip" tabInd
 function Activity({icon,title,detail,time}:{icon:React.ReactNode;title:string;detail:string;time:string}){return <div className="activityRow"><div className="activityIcon">{icon}</div><div><b>{title}</b><span>{detail}</span></div><time>{time}</time></div>}
 
 createRoot(document.getElementById('root')!).render(<App/>);
+
+
+//-------------------------------NUeva para la base de datos
+async function obtenerEmergenciasBD():Promise<Emergency[]>{
+  const response=await fetch(
+    `${API_BASE}/emergencies`,
+    {
+      headers:{
+        ...authHeaders(),
+      },
+    }
+  );
+
+  if(!response.ok){
+    throw new Error(`No se pudieron obtener las emergencias (${response.status})`);
+  }
+
+  const data=await response.json();
+
+  return (data.emergencies||[]).filter((e:any)=>['ACTIVA','ASIGNADA','EN_ATENCION'].includes(String(e.estado_emergencia).toUpperCase())).map((e:any)=>({
+    id:e.id_emergencia,
+    codigo:e.codigo_emergencia,
+    address:e.direccion_emergencia??'Dirección no registrada',
+    lat:Number(e.latitud_emergencia??0),
+    lng:Number(e.longitud_emergencia??0),
+    status: (String(e.estado_emergencia).toUpperCase()==='ASIGNADA' ? 'Asignada' : String(e.estado_emergencia).toUpperCase()==='EN_ATENCION' ? 'EN_ATENCION' : 'Activa'),
+    creadaEn:e.fecha_creacion_emergencia
+      ? new Date(e.fecha_creacion_emergencia).getTime()
+      : Date.now(),
+    prioridad:Number(e.prioridad_emergencia??3),
+  }));
+}
+
+function obtenerNivelPrioridad(
+  prioridad: string | number | null | undefined
+): string {
+  const valor = String(prioridad ?? "").trim().toUpperCase();
+
+  const niveles: Record<string, string> = {
+    "1": "CRÍTICA",
+    "2": "ALTA",
+    "3": "MEDIA",
+    "4": "BAJA",
+    "CRITICA": "CRÍTICA",
+    "CRÍTICA": "CRÍTICA",
+    "ALTA": "ALTA",
+    "MEDIA": "MEDIA",
+    "BAJA": "BAJA",
+  };
+
+  return niveles[valor] ?? valor;
+}
+
+function obtenerClasePrioridad(
+  prioridad: string | number | null | undefined
+): string {
+  const nivel = obtenerNivelPrioridad(prioridad);
+
+  const clases: Record<string, string> = {
+    "CRÍTICA": "prioridad-critica",
+    "ALTA": "prioridad-alta",
+    "MEDIA": "prioridad-media",
+    "BAJA": "prioridad-baja",
+  };
+
+  return clases[nivel] ?? "";
+}
+
+
+
+//-------------------------------
