@@ -46,7 +46,10 @@ from .features import (
     TARGET_COLUMN,
     add_rolling_features,
 )
-from . import database
+from . import database as database_ml
+
+
+DATA_PATH = pathlib.Path(__file__).parent / "data" / "historico_emergencias.csv"
 
 ARTIFACT_PATH = pathlib.Path(__file__).parent / "artifacts" / "demand_model.joblib"
 
@@ -67,9 +70,11 @@ NOMBRE_VARIABLE = {
     "tipo_emergencia": "Clave radial",
     "freq_hist_7d": "Frecuencia histórica reciente (7 días)",
     "demanda_recursos_hist_7d": "Demanda histórica de recursos (7 días)",
+
     "temperatura_c": "Temperatura (°C)",
     "viento_kmh": "Viento (km/h)",
     "precipitacion_mm": "Precipitación (mm)",
+
 }
 
 
@@ -142,13 +147,8 @@ def calcular_importancia_variables(pipeline: Pipeline, X_eval: pd.DataFrame, y_e
 
 
 def load_or_generate_dataset() -> pd.DataFrame:
-    """Lee el historico desde la base de datos Excel persistente (ver
-    ml/database.py) -- ya NO se regeneran datos aleatorios nuevos en cada
-    entrenamiento. La primera vez que se corre, `database.py` crea el
-    archivo; despues siempre se reusa el mismo, incluyendo cualquier
-    registro que se haya agregado con `python -m ml.agregar_registro` o
-    el endpoint `POST /historico/registrar`."""
-    return database.cargar_base_datos()
+    """Carga el histórico real desde PostgreSQL (emergencia.registro_historico)."""
+    return database_ml.cargar_base_datos()
 
 
 def _buscar_mejor_config(nombre: str, estimador, grilla: dict, X_search: pd.DataFrame, y_search: pd.Series) -> dict:
@@ -170,6 +170,8 @@ def _buscar_mejor_config(nombre: str, estimador, grilla: dict, X_search: pd.Data
 
 def train() -> None:
     df = load_or_generate_dataset()
+    if len(df) < 20:
+        raise ValueError("Se necesitan al menos 20 registros históricos para entrenar y evaluar el modelo.")
     df = add_rolling_features(df)
 
     X = df[FEATURE_COLUMNS]
@@ -242,7 +244,7 @@ def train() -> None:
     )
 
     ARTIFACT_PATH.parent.mkdir(exist_ok=True)
-    joblib.dump({
+    artefacto = {
         "pipeline": pipeline_final,
         "last_features": last_features,
         "mae": mae,
@@ -251,8 +253,18 @@ def train() -> None:
         "modelo_ganador": mejor_nombre,
         "comparacion_modelos": resultados_por_familia,
         "trained_at": ahora_chile().isoformat(),
-    }, ARTIFACT_PATH)
-    print(f"\nModelo guardado en {ARTIFACT_PATH}")
+    }
+    joblib.dump(artefacto, ARTIFACT_PATH)
+    id_modelo = database_ml.guardar_modelo(
+        artefacto=artefacto,
+        ruta_artefacto=str(ARTIFACT_PATH),
+        n_registros=len(df),
+        datos_desde=df["fecha"].min(),
+        datos_hasta=df["fecha"].max(),
+    )
+    artefacto["id_modelo"] = id_modelo
+    joblib.dump(artefacto, ARTIFACT_PATH)
+    print(f"\\nModelo guardado en {ARTIFACT_PATH} y registrado en PostgreSQL como id_modelo={id_modelo}")
 
 
 if __name__ == "__main__":

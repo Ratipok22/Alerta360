@@ -10,8 +10,27 @@ import pandas as pd
 
 from core.tiempo import ahora_chile, con_hora_chile
 
+
 from .weather import clima_esperado
-from .zones import EMERGENCY_TYPES, PERIOD_HOURS, ZONES, ZONES_BY_ID
+
+from .zones import PERIOD_HOURS, Zone
+from database.database import obtener_conexion
+
+def _catalogo_db():
+    with obtener_conexion() as conn, conn.cursor() as cur:
+        cur.execute("""SELECT id_zona, nombre_zona, latitud_minima, latitud_maxima,
+                       longitud_minima, longitud_maxima FROM emergencia.zona
+                       WHERE actividad = TRUE ORDER BY id_zona""")
+        zonas = []
+        for ident, nombre, latmin, latmax, lngmin, lngmax in cur.fetchall():
+            if None in (latmin, latmax, lngmin, lngmax):
+                raise ValueError(f"La zona {ident} ({nombre}) no tiene límites geográficos completos.")
+            zonas.append(Zone(str(ident), nombre, latmin, latmax, lngmin, lngmax, 1.0, {}))
+        cur.execute("SELECT codigo_emergencia FROM emergencia.tipo_emergencia ORDER BY codigo_emergencia")
+        tipos = [row[0] for row in cur.fetchall() if row[0] != "10-12"]
+    if not zonas or not tipos:
+        raise ValueError("Se necesitan zonas activas con coordenadas y tipos de emergencia en PostgreSQL.")
+    return zonas, tipos
 
 ARTIFACT_PATH = pathlib.Path(__file__).parent / "artifacts" / "demand_model.joblib"
 
@@ -42,16 +61,20 @@ def predict_demand(now: datetime | None = None, horizon: int = 4) -> dict:
     now = con_hora_chile(now) if now else ahora_chile()
     period_start = _next_period_start(now)
 
+    zonas_db, tipos_db = _catalogo_db()
+    zonas_por_id = {z.id: z for z in zonas_db}
     rows = []
     for step in range(horizon):
         ts = period_start + timedelta(hours=3 * step)
-        for zone in ZONES:
+        for zone in zonas_db:
+
             # Sin pronostico meteorologico real integrado, se asume el clima
             # "normal" esperado para esa epoca del anio y bloque horario en
             # esa zona (normal climatica, sin ruido diario): ver ml/weather.py.
             clima = clima_esperado(ts.month, ts.hour, zone.id)
-            for tipo in EMERGENCY_TYPES:
-                key = (zone.id, tipo)
+
+            for tipo in tipos_db:
+                key = (str(zone.id), tipo)
                 if key in last_features.index:
                     freq_hist = float(last_features.loc[key, "freq_hist_7d"])
                     demanda_hist = float(last_features.loc[key, "demanda_recursos_hist_7d"])
@@ -66,25 +89,34 @@ def predict_demand(now: datetime | None = None, horizon: int = 4) -> dict:
                     "tipo_emergencia": tipo,
                     "freq_hist_7d": freq_hist,
                     "demanda_recursos_hist_7d": demanda_hist,
+
                     "temperatura_c": clima["temperatura_c"],
                     "viento_kmh": clima["viento_kmh"],
                     "precipitacion_mm": clima["precipitacion_mm"],
+
                 })
 
     X = pd.DataFrame(rows)
+    # En entrenamiento, zona_id se normaliza como texto desde PostgreSQL.
+    # Mantener el mismo tipo evita incompatibilidades con OneHotEncoder.
+    X["zona_id"] = X["zona_id"].astype(str)
     feature_cols = ["dia_semana", "mes", "bloque_hora", "zona_id", "tipo_emergencia",
+
                      "freq_hist_7d", "demanda_recursos_hist_7d",
                      "temperatura_c", "viento_kmh", "precipitacion_mm"]
+
     X["demanda_esperada"] = pipeline.predict(X[feature_cols]).clip(min=0)
 
     periodos = []
     for ts, group in X.groupby("timestamp"):
         zonas = []
         for zona_id, zgroup in group.groupby("zona_id"):
-            zone = ZONES_BY_ID[zona_id]
+            zone = zonas_por_id[zona_id]
             lat_c, lng_c = zone.centroid
             desglose = {row.tipo_emergencia: round(float(row.demanda_esperada), 2) for row in zgroup.itertuples()}
+
             primera_fila = zgroup.iloc[0]
+
             zonas.append({
                 "zona_id": zona_id,
                 "nombre": zone.nombre,
@@ -95,6 +127,7 @@ def predict_demand(now: datetime | None = None, horizon: int = 4) -> dict:
                 "centroid": {"lat": lat_c, "lng": lng_c},
                 "demanda_total": round(float(zgroup["demanda_esperada"].sum()), 2),
                 "desglose": desglose,
+
                 # Clima esperado (normal climatica del mes/hora, sin
                 # pronostico real -- ver ml/weather.py) usado como input del
                 # modelo para esta zona y periodo.
@@ -103,6 +136,7 @@ def predict_demand(now: datetime | None = None, horizon: int = 4) -> dict:
                     "viento_kmh": float(primera_fila["viento_kmh"]),
                     "precipitacion_mm": float(primera_fila["precipitacion_mm"]),
                 },
+
             })
         zonas.sort(key=lambda z: z["demanda_total"], reverse=True)
         periodos.append({

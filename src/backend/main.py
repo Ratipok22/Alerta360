@@ -1,3 +1,15 @@
+#-------------------------------NUeva para la base de datos
+
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+#-------------------------------
+
 import os
 import threading
 from datetime import datetime, timezone
@@ -8,7 +20,6 @@ from dotenv import load_dotenv
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
 # Carga variables desde .env (JWT_SECRET_KEY, etc.) cuando se corre
 # directo con uvicorn; docker-compose ya las inyecta por su cuenta, pero
@@ -18,20 +29,25 @@ load_dotenv()
 
 from core.auth import Usuario, crear_token, verificar_credenciales, verificar_token
 from core.companies import todas_las_unidades
-from core.db import get_db
 from core.eta import calcular_eta
-from core.models import Asignacion, Emergencia
 from core.radio_codes import CLAVES_RADIALES
 from core.vehicle_types import TIPOS_CARRO
 from ml.predict import predict_demand
-from ml.zones import ZONES
+
+from database.database import obtener_conexion
+from ml.database import guardar_predicciones
+from ml.db_catalog import obtener_zonas, obtener_tipos, obtener_recursos
+
+
+
+
 
 # Punto de referencia solo para ilustrar distancia/ETA en /resources (no hay
 # una emergencia real fija): Reñaca Alto, Viña del Mar.
 _REF_LAT, _REF_LNG = -32.9968, -71.4884
 
 # Motor de rutas local (OSRM, ver routing/) sobre calles reales de la
-# region -- no una API paga ni un servicio externo. Se genero una vez con
+# region  no una API paga ni un servicio externo. Se genero una vez con
 # datos reales de OpenStreetMap/Overpass y corre 100% local en Docker.
 # OSRM_URL es configurable por si se levanta con otro nombre/puerto (p.ej.
 # dentro de docker-compose, donde el nombre de servicio "osrm" resuelve por
@@ -61,6 +77,20 @@ class Emergency(BaseModel):
     lat: float
     lng: float
 
+
+#-------------------------------NUeva para la base de datos
+class EmergencyCreate(BaseModel):
+    codigo_emergencia: str
+    direccion_emergencia: str | None = None
+    latitud_emergencia: float | None = None
+    longitud_emergencia: float | None = None
+    prioridad_emergencia: int
+    estado_emergencia: str
+    id_zona: int | None = None
+
+#-------------------------------
+
+
 class LoginRequest(BaseModel):
     email: str
     password: str
@@ -74,6 +104,139 @@ class LoginResponse(BaseModel):
 @app.get("/health")
 def health():
     return {"status":"ok","service":"emergency-resource-api"}
+
+
+#NUEVA PARA LA BASE DE DATOS -------------------------------
+@app.post("/emergencies")
+def crear_emergencia(datos: EmergencyCreate):
+    conexion = None
+
+    try:
+        conexion = obtener_conexion()
+
+        with conexion.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO emergencia.emergencia (
+                    codigo_emergencia,
+                    direccion_emergencia,
+                    latitud_emergencia,
+                    longitud_emergencia,
+                    prioridad_emergencia,
+                    estado_emergencia, id_zona
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id_emergencia,
+                          codigo_emergencia,
+                          direccion_emergencia,
+                          latitud_emergencia,
+                          longitud_emergencia,
+                          prioridad_emergencia,
+                          estado_emergencia,
+                          fecha_creacion_emergencia, id_zona;
+                """,
+                (
+                    datos.codigo_emergencia,
+                    datos.direccion_emergencia,
+                    datos.latitud_emergencia,
+                    datos.longitud_emergencia,
+                    datos.prioridad_emergencia,
+                    datos.estado_emergencia,
+                    datos.id_zona,
+                ),
+            )
+
+            emergencia = cursor.fetchone()
+
+        conexion.commit()
+
+        return {
+            "id_emergencia": emergencia[0],
+            "codigo_emergencia": emergencia[1],
+            "direccion_emergencia": emergencia[2],
+            "latitud_emergencia": emergencia[3],
+            "longitud_emergencia": emergencia[4],
+            "prioridad_emergencia": emergencia[5],
+            "estado_emergencia": emergencia[6],
+            "fecha_creacion_emergencia": emergencia[7],
+            "id_zona": emergencia[8],
+        }
+
+    except Exception as e:
+        if conexion:
+            conexion.rollback()
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al crear la emergencia: {str(e)}"
+        )
+
+    finally:
+        if conexion:
+            conexion.close()
+
+
+@app.get("/emergencies")
+def obtener_emergencias():
+    conexion = None
+
+    try:
+        conexion = obtener_conexion()
+
+        with conexion.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    e.id_emergencia,
+                    e.codigo_emergencia,
+                    t.nombre_emergencia,
+                    e.direccion_emergencia,
+                    e.latitud_emergencia,
+                    e.longitud_emergencia,
+                    e.prioridad_emergencia,
+                    e.estado_emergencia,
+                    e.fecha_creacion_emergencia,
+                    e.fecha_cierre_emergencia,
+                    e.id_zona
+                FROM emergencia.emergencia e
+                INNER JOIN emergencia.tipo_emergencia t
+                    ON e.codigo_emergencia = t.codigo_emergencia
+                ORDER BY e.fecha_creacion_emergencia DESC;
+                """
+            )
+
+            filas = cursor.fetchall()
+
+        return {
+            "emergencies": [
+                {
+                    "id_emergencia": fila[0],
+                    "codigo_emergencia": fila[1],
+                    "nombre_emergencia": fila[2],
+                    "direccion_emergencia": fila[3],
+                    "latitud_emergencia": fila[4],
+                    "longitud_emergencia": fila[5],
+                    "prioridad_emergencia": fila[6],
+                    "estado_emergencia": fila[7],
+                    "fecha_creacion_emergencia": fila[8],
+                    "fecha_cierre_emergencia": fila[9],
+                    "id_zona": fila[10],
+                }
+                for fila in filas
+            ]
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al obtener emergencias: {str(e)}"
+        )
+
+    finally:
+        if conexion:
+            conexion.close()
+#-------------------------------
+
 
 @app.post("/auth/login", response_model=LoginResponse)
 def login(datos: LoginRequest):
@@ -113,50 +276,157 @@ def auth_me(usuario: Usuario = Depends(usuario_actual)):
     si no hace falta."""
     return {"email": usuario.email, "nombre": usuario.nombre, "rol": usuario.rol}
 
+class CambioEstadoEmergencia(BaseModel):
+    estado: Literal["ASIGNADA", "EN_ATENCION", "FINALIZADA"]
+
+
+@app.patch("/emergencies/{id_emergencia}/status")
+def cambiar_estado_emergencia(
+    id_emergencia: int,
+    datos: CambioEstadoEmergencia,
+    usuario: Usuario = Depends(requiere_admin),
+):
+    """Actualiza el ciclo de vida de una emergencia real en PostgreSQL."""
+    conexion = obtener_conexion()
+    try:
+        with conexion.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT estado_emergencia
+                FROM emergencia.emergencia
+                WHERE id_emergencia = %s
+                FOR UPDATE
+                """,
+                (id_emergencia,),
+            )
+            actual = cursor.fetchone()
+            if actual is None:
+                raise HTTPException(status_code=404, detail="Emergencia inexistente")
+            estado_actual = str(actual[0]).upper()
+            permitidos = {
+                "ACTIVA": {"ASIGNADA"},
+                "ASIGNADA": {"EN_ATENCION"},
+                "EN_ATENCION": {"FINALIZADA"},
+            }
+            if estado_actual == datos.estado:
+                conexion.commit()
+                return {"ok": True, "estado": datos.estado}
+            if datos.estado not in permitidos.get(estado_actual, set()):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Transición inválida: {estado_actual} -> {datos.estado}",
+                )
+            cursor.execute(
+                """
+                UPDATE emergencia.emergencia
+                SET estado_emergencia = %s,
+                    fecha_cierre_emergencia = CASE
+                        WHEN %s = 'FINALIZADA' THEN CURRENT_TIMESTAMP
+                        ELSE fecha_cierre_emergencia
+                    END
+                WHERE id_emergencia = %s
+                """,
+                (datos.estado, datos.estado, id_emergencia),
+            )
+        conexion.commit()
+        return {"ok": True, "estado": datos.estado}
+    except Exception:
+        conexion.rollback()
+        raise
+    finally:
+        conexion.close()
+
+
 @app.get("/resources")
 def resources(usuario: Usuario = Depends(usuario_actual)):
-    """Flota real: companias de Bomberos de Valparaiso y Vina del Mar
-    (ver core/companies.py para el detalle de que esta verificado)."""
-    out = []
-    for unidad, compania in todas_las_unidades():
-        tipo = TIPOS_CARRO.get(unidad.tipo)
-        eta = calcular_eta(compania.lat, compania.lng, _REF_LAT, _REF_LNG, terreno="urbano")
-        out.append({
-            "id": unidad.id,
-            "tipo": unidad.tipo,
-            "capacidad": tipo.nombre if tipo else unidad.tipo,
-            "estado": unidad.estado.value,
-            "compania": compania.nombre,
-            "cuerpo": compania.cuerpo,
-            "sector": compania.sector,
-            "eta": eta["eta_min"],
-            "distance": eta["distancia_km"],
-        })
-    return {"resources": out}
+    try:
+        return {"resources": obtener_recursos()}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"No se pudieron consultar los recursos: {exc}")
+
+class PosicionRecurso(BaseModel):
+    lat: float
+    lng: float
+    estado: Literal["6-0", "6-3", "6-7", "6-8", "6-9"]
+
+@app.patch("/resources/{codigo_recurso}/position")
+def actualizar_posicion_recurso(
+    codigo_recurso: str,
+    datos: PosicionRecurso,
+    usuario: Usuario = Depends(requiere_admin),
+):
+    if not (-90 <= datos.lat <= 90 and -180 <= datos.lng <= 180):
+        raise HTTPException(
+            status_code=422,
+            detail="Coordenadas fuera de rango",
+        )
+
+    conexion = obtener_conexion()
+
+    try:
+        with conexion.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE emergencia.recurso
+                SET
+                    latitud_recurso = %s,
+                    longitud_recurso = %s,
+                    estado_radio = %s
+                WHERE codigo_recurso = %s
+                RETURNING
+                    id_recurso,
+                    codigo_recurso,
+                    latitud_recurso,
+                    longitud_recurso,
+                    estado_radio
+                """,
+                (
+                    datos.lat,
+                    datos.lng,
+                    datos.estado,
+                    codigo_recurso,
+                ),
+            )
+
+            fila = cursor.fetchone()
+
+            if fila is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No existe el recurso {codigo_recurso}",
+                )
+
+        conexion.commit()
+
+        return {
+            "ok": True,
+            "id_recurso": fila[0],
+            "codigo_recurso": fila[1],
+            "lat": float(fila[2]),
+            "lng": float(fila[3]),
+            "estado": fila[4],
+        }
+
+    except Exception:
+        conexion.rollback()
+        raise
+
+    finally:
+        conexion.close()
 
 @app.get("/catalog/claves")
 def catalog_claves(usuario: Usuario = Depends(usuario_actual)):
-    """Catalogo de claves radiales 10-X (nombre, prioridad, terreno) para uso del frontend."""
-    return {"claves": [
-        {
-            "codigo": codigo,
-            "nombre": cr.nombre,
-            "prioridad": cr.prioridad.value,
-            "prioridad_nivel": cr.prioridad_nivel,
-            "terreno": cr.terreno,
-        } for codigo, cr in CLAVES_RADIALES.items()
-    ]}
+    try:
+        return {"claves": obtener_tipos()}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"No se pudieron consultar las claves: {exc}")
 
 @app.get("/zones")
 def zones(usuario: Usuario = Depends(usuario_actual)):
-    return {"zones": [
-        {
-            "zona_id": z.id,
-            "nombre": z.nombre,
-            "bounds": {"lat_min": z.lat_min, "lat_max": z.lat_max, "lng_min": z.lng_min, "lng_max": z.lng_max},
-            "centroid": {"lat": z.centroid[0], "lng": z.centroid[1]},
-        } for z in ZONES
-    ]}
+    try:
+        return {"zones": obtener_zonas()}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"No se pudieron consultar las zonas: {exc}")
 
 @app.get("/prediction/demand")
 def prediction_demand(horizon: int = 4, fecha: str | None = None, usuario: Usuario = Depends(usuario_actual)):
@@ -174,9 +444,18 @@ def prediction_demand(horizon: int = 4, fecha: str | None = None, usuario: Usuar
         except ValueError:
             raise HTTPException(status_code=400, detail="fecha invalida, usa formato ISO: 2026-01-15T15:00:00")
     try:
-        return predict_demand(now=now, horizon=horizon)
+        resultado = predict_demand(now=now, horizon=horizon)
+        resultado["persistencia"] = guardar_predicciones(resultado)
+        return resultado
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"No se pudo guardar la predicción en PostgreSQL: {e}",
+        )
 
 @app.get("/route")
 def route(origen_lat: float, origen_lng: float, destino_lat: float, destino_lng: float, usuario: Usuario = Depends(usuario_actual)):
@@ -204,7 +483,10 @@ def route(origen_lat: float, origen_lng: float, destino_lat: float, destino_lng:
         resp.raise_for_status()
         data = resp.json()
         if data.get("code") != "Ok" or not data.get("routes"):
-            return fallback
+            raise HTTPException(
+                status_code=503,
+                detail="OSRM no pudo calcular la ruta."
+            )
         ruta = data["routes"][0]
         puntos = [{"lat": c[1], "lng": c[0]} for c in ruta["geometry"]["coordinates"]]
         if len(puntos) < 2:
@@ -216,7 +498,10 @@ def route(origen_lat: float, origen_lng: float, destino_lat: float, destino_lng:
             "fuente": "osrm_local",
         }
     except (httpx.HTTPError, KeyError, ValueError, IndexError):
-        return fallback
+        raise HTTPException(
+            status_code=503,
+            detail="El servicio OSRM Docker no está disponible."
+        )
 
 
 # Estado compartido de la simulacion en curso (recursos, cola de
@@ -274,111 +559,141 @@ def recommend(emergency: Emergency, usuario: Usuario = Depends(requiere_admin)):
     return {"recommended_resource":best["id"],"score":score(best),"criteria":["priority","type","compatibility","availability","distance","eta","capacity"]}
 
 
-# ---------------------------------------------------------------------------
-# Persistencia real en Postgres (core/db.py, core/models.py) del modulo
-# Emergencia y Operacion. A diferencia de /state (arriba), que es un espejo
-# en memoria del estado simulado del frontend, estos endpoints son CRUD
-# real: lo que se crea aca sobrevive a un reinicio del backend.
-# ---------------------------------------------------------------------------
 
-class EmergenciaCreate(BaseModel):
-    codigo: str
-    direccion: str | None = None
-    latitud: float
-    longitud: float
-    prioridad: str
+@app.post("/assignments")
+def asignar_recurso(
+    id_emergencia: int,
+    id_recurso: int,
+    id_usuario: int,
+    tipo_asignacion: str = "Automatica",
+    puntaje_asignacion: float | None = None,
+    distancia_km: float | None = None,
+    eta_minutos: int | None = None,
+    usuario: Usuario = Depends(requiere_admin),
+):
+    conexion = None
 
-class EmergenciaOut(BaseModel):
-    id_emergencia: int
-    codigo: str
-    direccion: str | None
-    latitud: float
-    longitud: float
-    prioridad: str
-    estado: str
-    fecha_creacion: datetime
-    fecha_cierre: datetime | None
+    try:
+        conexion = obtener_conexion()
 
-    class Config:
-        from_attributes = True
+        with conexion.cursor() as cursor:
 
-class EstadoUpdate(BaseModel):
-    estado: str
-    fecha_cierre: datetime | None = None
+            # 1. Verificar que la emergencia esté activa
+            cursor.execute(
+                """
+                SELECT estado_emergencia
+                FROM emergencia.emergencia
+                WHERE id_emergencia = %s
+                """,
+                (id_emergencia,)
+            )
 
-class AsignacionCreate(BaseModel):
-    id_emergencia: int
-    id_recurso: str
-    score: float | None = None
-    distancia_km: float | None = None
-    eta_min: int | None = None
+            emergencia = cursor.fetchone()
 
-class AsignacionOut(BaseModel):
-    id_asignacion: int
-    id_emergencia: int
-    id_recurso: str
-    usuario_email: str
-    score: float | None
-    distancia_km: float | None
-    eta_min: int | None
-    fecha_asignacion: datetime
-    estado: str
+            if not emergencia:
+                raise HTTPException(
+                    status_code=404,
+                    detail="La emergencia no existe"
+                )
 
-    class Config:
-        from_attributes = True
+            if emergencia[0] != "Activa":
+                raise HTTPException(
+                    status_code=400,
+                    detail="La emergencia no está activa"
+                )
 
+            # 2. Verificar que el recurso esté disponible
+            cursor.execute(
+                """
+                SELECT estado_radio
+                FROM emergencia.recurso
+                WHERE id_recurso = %s
+                """,
+                (id_recurso,)
+            )
 
-@app.post("/emergencias", response_model=EmergenciaOut)
-def crear_emergencia(datos: EmergenciaCreate, db: Session = Depends(get_db), usuario: Usuario = Depends(requiere_admin)):
-    """Crea una emergencia real en Postgres (antes solo existia el modelo
-    Pydantic `Emergency` de /assignment/recommend, sin persistir nada)."""
-    nueva = Emergencia(**datos.model_dump())
-    db.add(nueva)
-    db.commit()
-    db.refresh(nueva)
-    return nueva
+            recurso = cursor.fetchone()
 
-@app.get("/emergencias", response_model=list[EmergenciaOut])
-def listar_emergencias(estado: str | None = None, db: Session = Depends(get_db), usuario: Usuario = Depends(usuario_actual)):
-    query = db.query(Emergencia)
-    if estado:
-        query = query.filter(Emergencia.estado == estado)
-    return query.order_by(Emergencia.fecha_creacion.desc()).all()
+            if not recurso:
+                raise HTTPException(
+                    status_code=404,
+                    detail="El recurso no existe"
+                )
 
-@app.get("/emergencias/{id_emergencia}", response_model=EmergenciaOut)
-def obtener_emergencia(id_emergencia: int, db: Session = Depends(get_db), usuario: Usuario = Depends(usuario_actual)):
-    emergencia = db.get(Emergencia, id_emergencia)
-    if not emergencia:
-        raise HTTPException(status_code=404, detail="Emergencia no encontrada")
-    return emergencia
+            if recurso[0] not in ("6-0", "Disponible"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="El recurso no está disponible"
+                )
 
-@app.patch("/emergencias/{id_emergencia}/estado", response_model=EmergenciaOut)
-def actualizar_estado_emergencia(id_emergencia: int, datos: EstadoUpdate, db: Session = Depends(get_db), usuario: Usuario = Depends(requiere_admin)):
-    emergencia = db.get(Emergencia, id_emergencia)
-    if not emergencia:
-        raise HTTPException(status_code=404, detail="Emergencia no encontrada")
-    emergencia.estado = datos.estado
-    if datos.fecha_cierre:
-        emergencia.fecha_cierre = datos.fecha_cierre
-    db.commit()
-    db.refresh(emergencia)
-    return emergencia
+            # 3. Crear la asignación
+            cursor.execute(
+                """
+                INSERT INTO emergencia.asignacion (
+                    id_emergencia,
+                    id_recurso,
+                    id_usuario,
+                    tipo_asignacion,
+                    puntaje_asignacion,
+                    distancia_km,
+                    eta_minutos,
+                    fecha_asignacion,
+                    estado_asignacion
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s,
+                    CURRENT_TIMESTAMP,
+                    'ASIGNADO'
+                )
+                RETURNING id_asignacion
+                """,
+                (
+                    id_emergencia,
+                    id_recurso,
+                    id_usuario,
+                    tipo_asignacion,
+                    puntaje_asignacion,
+                    distancia_km,
+                    eta_minutos,
+                )
+            )
 
-@app.post("/asignaciones", response_model=AsignacionOut)
-def crear_asignacion(datos: AsignacionCreate, db: Session = Depends(get_db), usuario: Usuario = Depends(requiere_admin)):
-    """usuario_email se toma del JWT autenticado, nunca de lo que mande el
-    cliente -- mismo criterio que ya usa /state con "publicadoPor"."""
-    if not db.get(Emergencia, datos.id_emergencia):
-        raise HTTPException(status_code=404, detail="Emergencia no encontrada")
-    nueva = Asignacion(**datos.model_dump(), usuario_email=usuario.email)
-    db.add(nueva)
-    db.commit()
-    db.refresh(nueva)
-    return nueva
+            id_asignacion = cursor.fetchone()[0]
 
-@app.get("/asignaciones", response_model=list[AsignacionOut])
-def listar_asignaciones(id_emergencia: int | None = None, db: Session = Depends(get_db), usuario: Usuario = Depends(usuario_actual)):
-    query = db.query(Asignacion)
-    if id_emergencia is not None:
-        query = query.filter(Asignacion.id_emergencia == id_emergencia)
-    return query.order_by(Asignacion.fecha_asignacion.desc()).all()
+            # 4. Cambiar recurso a EN SERVICIO
+            cursor.execute(
+                """
+                UPDATE emergencia.recurso
+                SET estado_radio = '6-8'
+                WHERE id_recurso = %s
+                """,
+                (id_recurso,)
+            )
+
+        conexion.commit()
+
+        return {
+            "mensaje": "Recurso asignado correctamente",
+            "id_asignacion": id_asignacion,
+            "estado_emergencia": "Activa",
+            "estado_recurso": "En servicio",
+            "estado_asignacion": "ASIGNADO"
+        }
+
+    except HTTPException:
+        if conexion:
+            conexion.rollback()
+        raise
+
+    except Exception as e:
+        if conexion:
+            conexion.rollback()
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al asignar recurso: {str(e)}"
+        )
+
+    finally:
+        if conexion:
+            conexion.close()
