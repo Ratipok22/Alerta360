@@ -504,6 +504,64 @@ def route(origen_lat: float, origen_lng: float, destino_lat: float, destino_lng:
         )
 
 
+# Historial de acciones (asignacion, llegada, finalizacion, regreso, etc.)
+# persistido en un archivo local -- NO en Postgres (regla explicita del
+# equipo: la base de datos la administra Alexsander, no se toca para nada
+# que no sea estrictamente necesario). Antes vivia solo en memoria del
+# navegador y se perdia con cada F5; con esto sobrevive a recargas y se ve
+# igual desde cualquier cuenta (admin o visualizador).
+HISTORIAL_PATH = Path(__file__).resolve().parent / "historial_acciones.json"
+HISTORIAL_MAX = 300
+_historial_lock = threading.Lock()
+
+
+def _leer_historial() -> list[dict[str, Any]]:
+    if not HISTORIAL_PATH.exists():
+        return []
+    try:
+        import json
+        with HISTORIAL_PATH.open("r", encoding="utf-8") as f:
+            datos = json.load(f)
+        return datos if isinstance(datos, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _escribir_historial(entradas: list[dict[str, Any]]) -> None:
+    import json
+    try:
+        with HISTORIAL_PATH.open("w", encoding="utf-8") as f:
+            json.dump(entradas, f, ensure_ascii=False)
+    except OSError as exc:
+        print(f"[historial] No se pudo guardar historial_acciones.json: {exc}")
+
+
+class HistorialCreate(BaseModel):
+    tipo: str
+    texto: str
+
+
+@app.post("/historial")
+def registrar_evento_historial(datos: HistorialCreate, usuario: Usuario = Depends(usuario_actual)):
+    with _historial_lock:
+        entradas = _leer_historial()
+        entradas.insert(0, {
+            "id": (entradas[0]["id"] + 1) if entradas else 1,
+            "ts": int(datetime.now(timezone.utc).timestamp() * 1000),
+            "tipo": datos.tipo,
+            "texto": datos.texto,
+        })
+        entradas = entradas[:HISTORIAL_MAX]
+        _escribir_historial(entradas)
+    return {"ok": True}
+
+
+@app.get("/historial")
+def obtener_historial_persistido(usuario: Usuario = Depends(usuario_actual)):
+    with _historial_lock:
+        return {"historial": _leer_historial()}
+
+
 # Estado compartido de la simulacion en curso (recursos, cola de
 # emergencias, historial, metricas), publicado por el navegador del
 # operador admin que esta manejando el despacho y consultado por las
@@ -544,19 +602,55 @@ def obtener_estado(usuario: Usuario = Depends(usuario_actual)):
             return {"publicado": False}
         return {"publicado": True, **_estado_compartido}
 
+# Tipos de recurso compatibles con cada clave radial (10-X), segun el
+# equipamiento real que exige cada tipo de emergencia.
+TIPOS_COMPATIBLES = {
+    "10-0": {"Bomberos", "Escala", "Cisterna"},
+    "10-1": {"Bomberos", "Cisterna"},
+    "10-2": {"Forestal", "Cisterna"},
+    "10-3": {"Rescate", "Escala"},
+    "10-4": {"Rescate"},
+    "10-5": {"Hazmat"},
+    "10-12": {"Bomberos", "Rescate", "Forestal", "Hazmat", "Cisterna", "Escala"},
+}
+
+
 @app.post("/assignment/recommend")
 def recommend(emergency: Emergency, usuario: Usuario = Depends(requiere_admin)):
-    # MVP: asignación multicriterio. En la versión final, pesos/configuración pueden vivir en BD.
-    candidates = [
-        {"id":"B-01","type":"Bomberos","available":True,"eta":5,"distance":2.1,"compatible":True,"capacity":True},
-        {"id":"R-01","type":"Rescate","available":True,"eta":8,"distance":4.7,"compatible":True,"capacity":True},
-        {"id":"H-01","type":"Hazmat","available":True,"eta":9,"distance":6.2,"compatible":False,"capacity":False},
-    ]
+    """Recomendacion multicriterio real: entre los recursos disponibles
+    (6-0) y compatibles con la clave radial de la emergencia, se elige el
+    de mejor puntaje combinando distancia real (Haversine), ETA y dotacion."""
+    tipos_info = {t["codigo"]: t for t in obtener_tipos()}
+    terreno = tipos_info.get(emergency.type, {}).get("terreno", "urbano")
+    compatibles = TIPOS_COMPATIBLES.get(emergency.type, set())
+
+    candidatos = []
+    for r in obtener_recursos():
+        if not r["disponible"] or r["lat"] is None or r["lng"] is None:
+            continue
+        if r["tipo"] not in compatibles:
+            continue
+        eta_info = calcular_eta(r["lat"], r["lng"], emergency.lat, emergency.lng, terreno)
+        candidatos.append({**r, **eta_info})
+
+    if not candidatos:
+        raise HTTPException(status_code=404, detail="No hay recursos disponibles y compatibles para esta emergencia")
+
     def score(r):
-        if not r["available"] or not r["compatible"]: return -1
-        return round(35 + 25 + 15 + (20 if r["capacity"] else 0) - min(r["eta"]*2,25) - min(r["distance"]*2,18), 2)
-    best=max(candidates,key=score)
-    return {"recommended_resource":best["id"],"score":score(best),"criteria":["priority","type","compatibility","availability","distance","eta","capacity"]}
+        dotacion = r["dotacion"] or 0
+        valor = 100 - min(r["distancia_km"] * 3, 40) - min(r["eta_min"] * 1.5, 30) + min(dotacion * 2, 20)
+        return round(max(0, min(100, valor)), 1)
+
+    mejor = max(candidatos, key=score)
+    return {
+        "recommended_resource": mejor["codigo"],
+        "id_recurso": mejor["id_recurso"],
+        "score": score(mejor),
+        "distancia_km": mejor["distancia_km"],
+        "eta_min": mejor["eta_min"],
+        "compania": mejor["compania"],
+        "criteria": ["priority", "type", "compatibility", "availability", "distance", "eta", "capacity"],
+    }
 
 
 

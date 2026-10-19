@@ -330,6 +330,12 @@ html[data-theme="dark"] .reject:hover{background:color-mix(in srgb, var(--rojo-a
 
 .linkBtn{border:0;background:none;color:var(--acento);font-size:13px;font-weight:600;cursor:pointer}
 
+/* Fila de la tabla de Emergencias: ademas del boton "Ver ubicacion", toda
+   la fila es clickeable para ubicar la alerta en el mapa sin tener que
+   apuntarle al boton exacto. */
+.emergenciaRow{cursor:pointer}
+.emergenciaRow:hover{background:var(--fondo-hover,rgba(127,127,127,.08))}
+
 /* Boton de accion dentro de la tabla de Emergencias: antes era un link de
    texto plano (misma pinta que "Quitar filtro"), poco notorio para la
    accion mas importante de esa vista. Reusa la misma paleta de .assign
@@ -456,6 +462,13 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
 .activityRow b{display:block;font-size:12px;color:var(--blanco);font-weight:600}
 .activityRow span{display:block;color:var(--gris-tenue);font-size:11px;margin-top:3px}
 .activityRow time{margin-left:auto;color:var(--gris-tenue);font-size:11px}
+/* Badge de estado por evento del historial: de un vistazo, si la emergencia
+   que menciona ese evento sigue activa ahora mismo o ya se cerro (ver
+   estadoEmergenciaDeEvento en HistorialView). display:inline-block anula el
+   display:block de ".activityRow span" generico (el detalle del evento). */
+.activityRow span.historialEstado{display:inline-block;flex-shrink:0;margin:0 0 0 12px;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+.historialEstado-activa{background:color-mix(in srgb, var(--rojo-alerta) 16%, transparent);color:var(--rojo-alerta)}
+.historialEstado-finalizada{background:color-mix(in srgb, var(--verde-disponible) 16%, transparent);color:var(--verde-disponible)}
 
 .toast{position:fixed;right:24px;bottom:22px;background:var(--negro-tarjeta);border:1px solid var(--verde-disponible);color:var(--verde-disponible);padding:12px 15px;border-radius:8px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px;box-shadow:0 10px 30px #0008}
 
