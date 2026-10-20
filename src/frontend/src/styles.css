@@ -268,9 +268,14 @@ html[data-theme="light"] .kpiIcon-azul{background:var(--azul-operativo)}
 
 .sideCards{display:flex;flex-direction:column;gap:16px}
 .emergencyCard,.recommend{border:1px solid var(--borde-sutil);border-radius:8px;background:var(--negro-tarjeta);padding:18px}
-.emergencyCard{position:relative}
-.tag{position:absolute;right:16px;top:16px}
-.emergencyTitle{display:flex;gap:12px;margin-bottom:14px}
+/* La etiqueta de prioridad iba con position:absolute a una distancia fija
+   del borde -- si el titulo de la emergencia (ej. "Emergencia #124") ocupaba
+   mas ancho del esperado, la etiqueta quedaba flotando ENCIMA del texto en
+   vez de correrse, superponiendose. Ahora es un hijo mas del flex con wrap,
+   asi en pantallas angostas cae a su propia linea en vez de pisar el texto. */
+.emergencyHeadRow{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.emergencyHeadRow .tag{flex-shrink:0}
+.emergencyTitle{display:flex;gap:12px}
 .danger{width:44px;height:44px;background:rgba(255,59,48,.12);color:var(--rojo-alerta);border-radius:8px;display:grid;place-items:center;flex-shrink:0}
 .emergencyTitle b{display:block;font-size:18px;font-weight:700;color:var(--blanco)}
 .emergencyTitle span{display:block;color:var(--gris-tenue);font-size:15px;margin-top:4px}
@@ -362,6 +367,9 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
    ser el mismo siempre, sin importar el tema -- rojo porque deja la unidad
    fuera de servicio (igual que el badge .estado-9), verde porque la vuelve
    a dejar disponible (igual que el badge .estado-0). */
+/* Mismo min-width en los dos (el texto "Fuera de servicio" es mas largo que
+   "Reactivar") para que ninguno de los dos quede viéndose mas chico que el
+   otro solo por tener menos texto -- ambos deben ocupar el mismo espacio. */
 .fueraServicioBtn{
   border:0;
   border-radius:6px;
@@ -371,6 +379,7 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
   font-weight:700;
   letter-spacing:.3px;
   padding:7px 14px;
+  min-width:124px;
   cursor:pointer;
   transition:background .15s,transform .15s;
 }
@@ -386,6 +395,7 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
   font-weight:700;
   letter-spacing:.3px;
   padding:7px 14px;
+  min-width:124px;
   cursor:pointer;
   transition:filter .15s,transform .15s;
 }
@@ -492,6 +502,14 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
 .dataTable tr:last-child td{border-bottom:none}
 .dataTable tr:hover td{background:var(--negro-panel)}
 .resIconCell{color:var(--acento)}
+/* Flota de Bomberos (RecursosView): "Compañía" y "Sector" traen nombres
+   largos (ej. 9ª Cía. "Brigada Reñaca Alto" (Bomberos Viña del Mar)) -- sin
+   .wrap, el white-space:nowrap de arriba forzaba a toda la tabla a estirarse
+   mas alla del ancho disponible, generando la barra de scroll horizontal.
+   Topes mas angostos que el .wrap generico (260px) para las columnas que
+   realmente no necesitan tanto espacio. */
+.resNombreCell{max-width:170px}
+.resEstadoCell{max-width:200px}
 
 /* Pastillas: clave radial (10-0, 10-4...) y estado 6-X */
 .prio,.estado{padding:5px 10px;border-radius:6px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;background:var(--negro-panel);border:1px solid}
@@ -1768,6 +1786,14 @@ html[data-theme="light"] .ticketUserReply textarea{
   color:var(--gris-tenue);
   font-size:12px;
 }
+
+/* Encabezado del detalle de un ticket: quien lo pidio (nombre + correo),
+   tipo y apartado, todo en una sola fila organizada que se parte en varias
+   lineas si no cabe (igual que .adminTicketMeta mas abajo). El !important
+   anula ".cardHead span{display:block}", que de otro modo apilaria cada
+   segmento en su propia linea. */
+.adminTicketHeadMeta{display:flex!important;flex-wrap:wrap;gap:4px 14px;margin-top:6px!important}
+.adminTicketHeadMeta span{display:flex!important;align-items:center;gap:5px}
 
 .adminTicketMeta span{
   display:flex;

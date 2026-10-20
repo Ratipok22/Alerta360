@@ -791,3 +791,278 @@ def asignar_recurso(
     finally:
         if conexion:
             conexion.close()
+
+
+# --- Soporte / Tickets ---------------------------------------------------
+# Integra el apartado de Soporte contra las tablas YA existentes en Postgres
+# (ticket, respuesta_ticket, tipo_ticket, apartado_ticket, usuario) -- no se
+# crea ninguna tabla ni columna nueva, solo se usan las que ya diseno el
+# equipo. Antes esto vivia 100% en memoria del navegador (useState local),
+# se perdia con cada F5 y nunca llegaba a la base real.
+
+def _resolver_id_usuario(email: str) -> int:
+    """Traduce el email del JWT (ver core/auth.py) al id_usuario real de
+    Postgres. Si la cuenta todavia no tiene fila en emergencia.usuario (y no
+    puede crear/responder tickets hasta que se agregue), se informa con un
+    error claro en vez de uno generico de FK."""
+    with obtener_conexion() as conexion, conexion.cursor() as cursor:
+        cursor.execute(
+            "SELECT id_usuario FROM emergencia.usuario WHERE email_usuario = %s",
+            (email,),
+        )
+        fila = cursor.fetchone()
+    if not fila:
+        raise HTTPException(
+            status_code=404,
+            detail=f"La cuenta {email} todavia no tiene una fila en emergencia.usuario -- no puede crear ni responder tickets hasta que se agregue.",
+        )
+    return fila[0]
+
+
+@app.get("/tickets/catalogos")
+def catalogos_tickets(usuario: Usuario = Depends(usuario_actual)):
+    """Tipos y apartados reales para los selects del formulario -- ya
+    existen en la base (tipo_ticket, apartado_ticket), no se inventan aca."""
+    with obtener_conexion() as conexion, conexion.cursor() as cursor:
+        cursor.execute(
+            "SELECT id_tipo, nombre_tipo FROM emergencia.tipo_ticket WHERE estado_tipo = 'Activo' ORDER BY id_tipo"
+        )
+        tipos = [{"id_tipo": r[0], "nombre_tipo": r[1]} for r in cursor.fetchall()]
+        cursor.execute(
+            "SELECT id_apartado, nombre_apartado FROM emergencia.apartado_ticket WHERE estado_apartado = 'Activo' ORDER BY id_apartado"
+        )
+        apartados = [{"id_apartado": r[0], "nombre_apartado": r[1]} for r in cursor.fetchall()]
+    return {"tipos": tipos, "apartados": apartados}
+
+
+class TicketCreate(BaseModel):
+    id_tipo: int
+    id_apartado: int | None = None
+    titulo_ticket: str
+    descripcion: str
+    archivo_url: str | None = None
+
+
+@app.post("/tickets")
+def crear_ticket(datos: TicketCreate, usuario: Usuario = Depends(usuario_actual)):
+    id_usuario = _resolver_id_usuario(usuario.email)
+    conexion = obtener_conexion()
+    try:
+        with conexion.cursor() as cursor:
+            # Ademas de id_tipo (la relacion real con tipo_ticket), la tabla
+            # tiene una columna de texto suelta "tipo_ticket" -- se guarda el
+            # nombre del tipo ahi tambien para que quede consistente con lo
+            # que ya espera el resto del equipo.
+            cursor.execute(
+                "SELECT nombre_tipo FROM emergencia.tipo_ticket WHERE id_tipo = %s",
+                (datos.id_tipo,),
+            )
+            fila_tipo = cursor.fetchone()
+            if not fila_tipo:
+                raise HTTPException(status_code=404, detail=f"id_tipo {datos.id_tipo} no existe en tipo_ticket")
+            nombre_tipo = fila_tipo[0]
+
+            # codigo_ticket es UNIQUE y NOT NULL -- se inserta un valor
+            # temporal y se actualiza ya con el id real asignado (evita
+            # depender de secuencias externas a la tabla).
+            cursor.execute(
+                """
+                INSERT INTO emergencia.ticket
+                    (id_usuario, id_tipo, id_apartado, codigo_ticket, titulo_ticket, descripcion, tipo_ticket, archivo_url)
+                VALUES (%s, %s, %s, 'TEMP', %s, %s, %s, %s)
+                RETURNING id_ticket
+                """,
+                (id_usuario, datos.id_tipo, datos.id_apartado, datos.titulo_ticket, datos.descripcion, nombre_tipo, datos.archivo_url),
+            )
+            id_ticket = cursor.fetchone()[0]
+            codigo = f"SOP-{id_ticket:04d}"
+            cursor.execute(
+                "UPDATE emergencia.ticket SET codigo_ticket = %s WHERE id_ticket = %s RETURNING estado_ticket, fecha_creacion",
+                (codigo, id_ticket),
+            )
+            estado, fecha_creacion = cursor.fetchone()
+        conexion.commit()
+        return {
+            "id_ticket": id_ticket,
+            "codigo_ticket": codigo,
+            "estado_ticket": estado,
+            "fecha_creacion": fecha_creacion.isoformat(),
+        }
+    except Exception:
+        conexion.rollback()
+        raise
+    finally:
+        conexion.close()
+
+
+@app.get("/tickets")
+def listar_tickets(usuario: Usuario = Depends(usuario_actual)):
+    """Todos los tickets (con tipo/apartado/autor ya resueltos por nombre)
+    mas sus respuestas, para que el frontend no tenga que pedirlas aparte
+    ticket por ticket.
+
+    El apartado de Tickets es individual por cuenta: cada quien ve y da
+    seguimiento SOLO a los tickets que el mismo creo (Benjamin no puede ver
+    ni responder los de Bruno, ni viceversa). La unica excepcion es la
+    cuenta de soporte, que necesita ver todos para poder atenderlos."""
+    with obtener_conexion() as conexion, conexion.cursor() as cursor:
+        if usuario.rol == "soporte":
+            cursor.execute(
+                """
+                SELECT t.id_ticket, t.codigo_ticket, t.titulo_ticket, t.descripcion,
+                       t.estado_ticket, t.archivo_url, t.fecha_creacion, t.fecha_actualizacion,
+                       tt.nombre_tipo, COALESCE(ap.nombre_apartado, 'General'), u.nombre_completo, u.email_usuario
+                FROM emergencia.ticket t
+                JOIN emergencia.tipo_ticket tt ON tt.id_tipo = t.id_tipo
+                LEFT JOIN emergencia.apartado_ticket ap ON ap.id_apartado = t.id_apartado
+                JOIN emergencia.usuario u ON u.id_usuario = t.id_usuario
+                ORDER BY t.fecha_creacion DESC
+                """
+            )
+        else:
+            id_usuario_actual = _resolver_id_usuario(usuario.email)
+            cursor.execute(
+                """
+                SELECT t.id_ticket, t.codigo_ticket, t.titulo_ticket, t.descripcion,
+                       t.estado_ticket, t.archivo_url, t.fecha_creacion, t.fecha_actualizacion,
+                       tt.nombre_tipo, COALESCE(ap.nombre_apartado, 'General'), u.nombre_completo, u.email_usuario
+                FROM emergencia.ticket t
+                JOIN emergencia.tipo_ticket tt ON tt.id_tipo = t.id_tipo
+                LEFT JOIN emergencia.apartado_ticket ap ON ap.id_apartado = t.id_apartado
+                JOIN emergencia.usuario u ON u.id_usuario = t.id_usuario
+                WHERE t.id_usuario = %s
+                ORDER BY t.fecha_creacion DESC
+                """,
+                (id_usuario_actual,),
+            )
+        filas_tickets = cursor.fetchall()
+        cursor.execute(
+            """
+            SELECT r.id_ticket, r.mensaje, r.tipo_respuesta, r.fecha_respuesta, u.nombre_completo
+            FROM emergencia.respuesta_ticket r
+            JOIN emergencia.usuario u ON u.id_usuario = r.id_usuario
+            ORDER BY r.fecha_respuesta ASC
+            """
+        )
+        filas_respuestas = cursor.fetchall()
+
+    respuestas_por_ticket: dict[int, list[dict[str, Any]]] = {}
+    for id_ticket, mensaje, tipo_respuesta, fecha_respuesta, autor in filas_respuestas:
+        respuestas_por_ticket.setdefault(id_ticket, []).append({
+            "mensaje": mensaje,
+            "tipo_respuesta": tipo_respuesta,
+            "fecha_respuesta": fecha_respuesta.isoformat(),
+            "autor": autor,
+        })
+
+    tickets = []
+    for (id_ticket, codigo, titulo, descripcion, estado, archivo_url,
+         fecha_creacion, fecha_actualizacion, nombre_tipo, nombre_apartado, autor, email_autor) in filas_tickets:
+        tickets.append({
+            "id_ticket": id_ticket,
+            "codigo_ticket": codigo,
+            "titulo_ticket": titulo,
+            "descripcion": descripcion,
+            "estado_ticket": estado,
+            "archivo_url": archivo_url,
+            "fecha_creacion": fecha_creacion.isoformat(),
+            "fecha_actualizacion": fecha_actualizacion.isoformat(),
+            "tipo": nombre_tipo,
+            "apartado": nombre_apartado,
+            "creado_por": autor,
+            "creado_por_email": email_autor,
+            "respuestas": respuestas_por_ticket.get(id_ticket, []),
+        })
+    return {"tickets": tickets}
+
+
+def requiere_soporte(usuario: Usuario = Depends(usuario_actual)) -> Usuario:
+    """Dependencia de RBAC para el apartado de Tickets: solo la cuenta con
+    rol 'soporte' (ver core/auth.py) puede responder o cerrar solicitudes --
+    el resto solo puede crearlas desde el formulario de Soporte."""
+    if usuario.rol != "soporte":
+        raise HTTPException(status_code=403, detail="Solo la cuenta de soporte puede administrar tickets")
+    return usuario
+
+
+class RespuestaCreate(BaseModel):
+    mensaje: str
+    tipo_respuesta: Literal["Respuesta", "Usuario"] = "Respuesta"
+
+
+@app.post("/tickets/{id_ticket}/respuestas")
+def responder_ticket(id_ticket: int, datos: RespuestaCreate, usuario: Usuario = Depends(usuario_actual)):
+    """Cualquier cuenta autenticada puede agregar su propia respuesta de
+    seguimiento (tipo_respuesta='Usuario'); solo soporte puede responder
+    oficialmente (tipo_respuesta='Respuesta', ver requiere_soporte abajo)."""
+    if datos.tipo_respuesta == "Respuesta" and usuario.rol != "soporte":
+        raise HTTPException(status_code=403, detail="Solo la cuenta de soporte puede responder oficialmente un ticket")
+    id_usuario = _resolver_id_usuario(usuario.email)
+    conexion = obtener_conexion()
+    try:
+        with conexion.cursor() as cursor:
+            # Un ticket "Resuelto" queda cerrado: el usuario que lo creo ya
+            # no puede seguir agregando seguimiento (si de verdad sigue sin
+            # resolverse, le corresponde abrir un ticket nuevo). Soporte si
+            # puede seguir escribiendo (p.ej. para aclarar algo despues de
+            # cerrarlo), por eso el check es solo para tipo_respuesta='Usuario'.
+            if datos.tipo_respuesta == "Usuario":
+                cursor.execute("SELECT estado_ticket, id_usuario FROM emergencia.ticket WHERE id_ticket = %s", (id_ticket,))
+                fila_ticket = cursor.fetchone()
+                if not fila_ticket:
+                    raise HTTPException(status_code=404, detail="Ticket no encontrado")
+                estado_actual, id_usuario_creador = fila_ticket
+                if estado_actual == "Resuelto":
+                    raise HTTPException(status_code=409, detail="Este ticket ya fue marcado como Resuelto, no se pueden agregar más respuestas.")
+                # El apartado de Tickets es individual: solo quien creo el
+                # ticket puede darle seguimiento, nunca otra cuenta.
+                if id_usuario_creador != id_usuario:
+                    raise HTTPException(status_code=403, detail="Solo la cuenta que creó este ticket puede responderlo")
+            cursor.execute(
+                """
+                INSERT INTO emergencia.respuesta_ticket (id_ticket, id_usuario, mensaje, tipo_respuesta)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id_respuesta, fecha_respuesta
+                """,
+                (id_ticket, id_usuario, datos.mensaje, datos.tipo_respuesta),
+            )
+            id_respuesta, fecha_respuesta = cursor.fetchone()
+            if datos.tipo_respuesta == "Respuesta":
+                cursor.execute(
+                    """
+                    UPDATE emergencia.ticket
+                    SET estado_ticket = CASE WHEN estado_ticket = 'Abierto' THEN 'En proceso' ELSE estado_ticket END,
+                        fecha_actualizacion = CURRENT_TIMESTAMP
+                    WHERE id_ticket = %s
+                    """,
+                    (id_ticket,),
+                )
+        conexion.commit()
+        return {"id_respuesta": id_respuesta, "fecha_respuesta": fecha_respuesta.isoformat()}
+    except Exception:
+        conexion.rollback()
+        raise
+    finally:
+        conexion.close()
+
+
+class TicketEstadoUpdate(BaseModel):
+    estado: Literal["Abierto", "En proceso", "Resuelto"]
+
+
+@app.patch("/tickets/{id_ticket}/estado")
+def cambiar_estado_ticket(id_ticket: int, datos: TicketEstadoUpdate, usuario: Usuario = Depends(requiere_soporte)):
+    conexion = obtener_conexion()
+    try:
+        with conexion.cursor() as cursor:
+            cursor.execute(
+                "UPDATE emergencia.ticket SET estado_ticket = %s, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id_ticket = %s",
+                (datos.estado, id_ticket),
+            )
+        conexion.commit()
+        return {"ok": True, "estado": datos.estado}
+    except Exception:
+        conexion.rollback()
+        raise
+    finally:
+        conexion.close()

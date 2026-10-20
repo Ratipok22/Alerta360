@@ -3,7 +3,7 @@ import {createRoot} from 'react-dom/client';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
-import {AlertTriangle, BarChart3, Building2, CheckCircle2, Clock3, Crosshair, Droplet, Eye, Flame, HardHat, History, Info, Layers3, LifeBuoy, Lightbulb, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Paperclip, Phone, Radio, Send, Settings, ShieldCheck, Sun, Ticket, Truck, TreePine, Users, XCircle, Zap, Bug} from 'lucide-react';
+import {AlertTriangle, BarChart3, Building2, CheckCircle2, Clock3, Crosshair, Droplet, Eye, Flame, HardHat, History, Info, LifeBuoy, Lightbulb, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Paperclip, Phone, Radio, Send, Settings, ShieldCheck, Sun, Ticket, Truck, TreePine, Users, XCircle, Zap, Bug} from 'lucide-react';
 import logoDark from "./assets/logo-alerta360-dark.png";
 import logoLight from "./assets/logo-alerta360-light.png";
 
@@ -93,18 +93,52 @@ type HistorialEntry={id:number; ts:number; tipo:HistorialTipo; texto:string;};
 // CONFIGURACION PARA SOPORTE TICKET //
 type UserRole = 'admin' | 'visualizador' | 'soporte';
 
+// Refleja 1:1 lo que ya devuelve GET /tickets en el backend, que a su vez
+// sale directo de las tablas ya existentes en Postgres (ticket,
+// respuesta_ticket, tipo_ticket, apartado_ticket) -- no se inventan campos
+// que no esten en esas tablas.
+type TicketRespuesta = {mensaje:string; tipo_respuesta:'Respuesta'|'Usuario'; fecha_respuesta:string; autor:string};
 type SupportTicket = {
-  id:string;
+  id_ticket:number;
+  id:string; // codigo_ticket, ej. "SOP-0004"
   tipo:string;
   apartado:string;
   titulo:string;
   descripcion:string;
-  estado:'Pendiente'|'En proceso'|'Resuelto';
+  estado:'Abierto'|'En proceso'|'Resuelto';
   fecha:string;
   archivo:string;
+  creadoPor:string;
+  creadoPorEmail:string;
+  respuestas:TicketRespuesta[];
   respuesta?:string;
+  respuestaAutor?:string;
   respuestaUsuario?:string;
 };
+type CatalogoTicket={id_tipo:number; nombre_tipo:string};
+type CatalogoApartado={id_apartado:number; nombre_apartado:string};
+function mapearTicketBD(t:any):SupportTicket{
+  const respuestas:TicketRespuesta[]=t.respuestas||[];
+  const ultimaDe=(tipo:'Respuesta'|'Usuario')=>[...respuestas].reverse().find(r=>r.tipo_respuesta===tipo);
+  const ultimaOficial=ultimaDe('Respuesta');
+  return {
+    id_ticket:t.id_ticket,
+    id:t.codigo_ticket,
+    tipo:t.tipo,
+    apartado:t.apartado,
+    titulo:t.titulo_ticket,
+    descripcion:t.descripcion,
+    estado:t.estado_ticket,
+    fecha:new Date(t.fecha_creacion).toLocaleString('es-CL'),
+    archivo:t.archivo_url??'',
+    creadoPor:t.creado_por,
+    creadoPorEmail:t.creado_por_email,
+    respuestas,
+    respuesta:ultimaOficial?.mensaje,
+    respuestaAutor:ultimaOficial?.autor,
+    respuestaUsuario:ultimaDe('Usuario')?.mensaje,
+  };
+}
 
 
 const RADIO_LABELS:Record<RadioState,string>={'6-0':'Disponible en cuartel','6-3':'En trayecto','6-7':'En la emergencia','6-8':'Regresando','6-9':'Fuera de servicio'};
@@ -1153,14 +1187,14 @@ function RecursosView({resources,alertaTimeoutIds,onVerCuartelEnMapa,isAdmin,onC
       <thead><tr><th></th><th>Unidad</th><th>Compañía</th><th>Sector</th><th>Tipo</th><th>Dotación</th><th>Distancia</th><th>ETA</th><th>Estado</th>{isAdmin && <th></th>}</tr></thead>
       <tbody>{filtrados.length?filtrados.map(r=><tr key={r.id}>
         <td className="resIconCell">{resourceIcon(r.type)}</td>
-        <td>{r.name}</td>
-        <td><button className="linkBtn" title="Ver cuartel en el mapa" onClick={()=>onVerCuartelEnMapa(r.lat,r.lng)}>{r.compania}</button></td>
-        <td>{r.sector}</td>
+        <td className="wrap resNombreCell">{r.name}</td>
+        <td className="wrap"><button className="linkBtn" title="Ver cuartel en el mapa" onClick={()=>onVerCuartelEnMapa(r.lat,r.lng)}>{r.compania}</button></td>
+        <td className="wrap">{r.sector}</td>
         <td>{r.type}</td>
         <td>{r.crew}</td>
         <td>{r.distance} km</td>
         <td>{r.eta} min</td>
-        <td><span className={`estado estado-${r.radioState.replace('6-','')}`}>{r.radioState} · {RADIO_LABELS[r.radioState]}</span>{alertaTimeoutIds.has(r.id)&&<span className="timeoutBadge" title="Sin transmisión de estado dentro del umbral configurado"><AlertTriangle size={11}/> sin transmisión</span>}</td>
+        <td className="wrap resEstadoCell"><span className={`estado estado-${r.radioState.replace('6-','')}`}>{r.radioState} · {RADIO_LABELS[r.radioState]}</span>{alertaTimeoutIds.has(r.id)&&<span className="timeoutBadge" title="Sin transmisión de estado dentro del umbral configurado"><AlertTriangle size={11}/> sin transmisión</span>}</td>
         {isAdmin && <td>
           {r.radioState==='6-9'
             ?<button className="reactivarBtn" onClick={()=>onCambiarFueraDeServicio(r,'6-0')}>Reactivar</button>
@@ -1260,31 +1294,20 @@ function LoginView({onLogin,theme,onToggleTheme}:{onLogin:(token:string, nombre:
   </div>;
 }
 
-function ReportesView({historial}:{historial:HistorialEntry[]}){
-  const asignaciones=historial.filter(h=>h.tipo==='asignacion').length;
-  const rechazos=historial.filter(h=>h.tipo==='rechazo').length;
-  const liberaciones=historial.filter(h=>h.tipo==='liberacion').length;
-  return <div className="sectionGrid">
-    <div className="kpis">
-      <Kpi icon={<Navigation/>} label="Asignaciones realizadas" value={String(asignaciones)} meta="esta sesión" tone="acento"/>
-      <Kpi icon={<XCircle/>} label="Recomendaciones rechazadas" value={String(rechazos)} meta="esta sesión" tone="azul"/>
-      <Kpi icon={<Truck/>} label="Unidades liberadas" value={String(liberaciones)} meta="regresaron a cuartel" tone="acento"/>
-    </div>
-    <div className="card sectionCard"><div className="cardHead"><div><b>Nota</b></div></div><p className="emptyState">Estos indicadores se calculan en vivo a partir de las acciones tomadas en esta sesión (asignar/rechazar recomendaciones). Al recargar la página el historial se reinicia, ya que aún no hay persistencia en base de datos.</p></div>
-  </div>;
-}
-
 function AdminTicketsView({
   tickets,
-  setTickets
+  onResponder,
+  onCambiarEstado,
 }:{
   tickets:SupportTicket[];
-  setTickets:React.Dispatch<React.SetStateAction<SupportTicket[]>>;
+  onResponder:(idTicket:number, mensaje:string)=>Promise<void>;
+  onCambiarEstado:(idTicket:number, estado:'Abierto'|'En proceso'|'Resuelto')=>Promise<void>;
 }){
   const [filtro,setFiltro]=useState('Todos');
   const [busqueda,setBusqueda]=useState('');
   const [ticketSeleccionadoId,setTicketSeleccionadoId]=useState<string|null>(null);
   const [respuesta,setRespuesta]=useState('');
+  const [enviando,setEnviando]=useState(false);
 
   const ticketsFiltrados=tickets.filter(ticket=>{
     const coincideEstado=filtro==='Todos' || ticket.estado===filtro;
@@ -1301,7 +1324,7 @@ function AdminTicketsView({
     return coincideEstado && coincideBusqueda;
   });
 
-  const pendientes=tickets.filter(ticket=>ticket.estado==='Pendiente').length;
+  const pendientes=tickets.filter(ticket=>ticket.estado==='Abierto').length;
   const enProceso=tickets.filter(ticket=>ticket.estado==='En proceso').length;
   const resueltos=tickets.filter(ticket=>ticket.estado==='Resuelto').length;
 
@@ -1311,49 +1334,36 @@ function AdminTicketsView({
 
   const abrirTicket=(ticket:SupportTicket)=>{
     setTicketSeleccionadoId(ticket.id);
-    setRespuesta(ticket.respuesta || '');
+    setRespuesta('');
   };
 
-  const guardarRespuesta=()=>{
+  // El estado solo cambia junto con una respuesta real -- no tiene sentido
+  // marcar "En proceso" o "Resuelto" sin dejar constancia de que se hizo
+  // algo, asi que ambos botones exigen el mensaje y lo envian como parte de
+  // la misma accion (en vez de dos acciones sueltas e independientes).
+  const responderYCambiarEstado=async(nuevoEstado:'En proceso'|'Resuelto')=>{
     if(!ticketSeleccionado){
       return;
     }
 
     if(!respuesta.trim()){
-      alert('Escribe una respuesta antes de enviarla.');
+      alert('Escribe una respuesta antes de cambiar el estado del ticket.');
       return;
     }
 
-    setTickets(prev=>
-      prev.map(ticket=>
-        ticket.id===ticketSeleccionado.id
-          ? {
-              ...ticket,
-              respuesta:respuesta.trim(),
-              estado:ticket.estado==='Pendiente'
-                ? 'En proceso'
-                : ticket.estado
-            }
-          : ticket
-      )
-    );
-
-    alert(`Respuesta enviada al ticket ${ticketSeleccionado.id}.`);
-  };
-
-  const cambiarEstado=(nuevoEstado:'Pendiente'|'En proceso'|'Resuelto')=>{
-    if(!ticketSeleccionado){
-      return;
+    setEnviando(true);
+    try{
+      await onResponder(ticketSeleccionado.id_ticket, respuesta.trim());
+      await onCambiarEstado(ticketSeleccionado.id_ticket, nuevoEstado);
+      setRespuesta('');
+      alert(`Respuesta enviada y ticket ${ticketSeleccionado.id} marcado como "${nuevoEstado}".`);
+    }catch(error){
+      alert(error instanceof Error?error.message:'No se pudo actualizar el ticket.');
+    }finally{
+      setEnviando(false);
     }
-
-    setTickets(prev=>
-      prev.map(ticket=>
-        ticket.id===ticketSeleccionado.id
-          ? {...ticket,estado:nuevoEstado}
-          : ticket
-      )
-    );
   };
+
 
   return (
     <div className="adminTicketsPage">
@@ -1402,7 +1412,7 @@ function AdminTicketsView({
             onChange={e=>setFiltro(e.target.value)}
           >
             <option value="Todos">Todos los estados</option>
-            <option value="Pendiente">Pendientes</option>
+            <option value="Abierto">Pendientes</option>
             <option value="En proceso">En proceso</option>
             <option value="Resuelto">Resueltos</option>
           </select>
@@ -1464,8 +1474,10 @@ function AdminTicketsView({
 
             <div>
               <b>{ticketSeleccionado.id} · {ticketSeleccionado.titulo}</b>
-              <span>
-                {ticketSeleccionado.tipo} · {ticketSeleccionado.apartado}
+              <span className="adminTicketHeadMeta">
+                <span><Users size={12}/> {ticketSeleccionado.creadoPor} · {ticketSeleccionado.creadoPorEmail}</span>
+                <span>Tipo: <b>{ticketSeleccionado.tipo}</b></span>
+                <span>Apartado: <b>{ticketSeleccionado.apartado}</b></span>
               </span>
             </div>
 
@@ -1497,7 +1509,7 @@ function AdminTicketsView({
               {ticketSeleccionado.archivo && (
                 <span>
                   <Paperclip size={13}/>
-                  <b>Archivo:</b> {ticketSeleccionado.archivo}
+                  <b>Archivo:</b> <a href={ticketSeleccionado.archivo} target="_blank" rel="noreferrer">{ticketSeleccionado.archivo}</a>
                 </span>
               )}
 
@@ -1528,7 +1540,7 @@ function AdminTicketsView({
               <textarea
                 value={respuesta}
                 onChange={e=>setRespuesta(e.target.value)}
-                placeholder="Escribe la respuesta para el usuario..."
+                placeholder="Escribe la respuesta para el usuario... (obligatoria para cambiar el estado)"
                 rows={5}
               />
             </label>
@@ -1538,26 +1550,23 @@ function AdminTicketsView({
               <button
                 type="button"
                 className="adminTicketBtn"
-                onClick={()=>cambiarEstado('En proceso')}
+                onClick={()=>responderYCambiarEstado('En proceso')}
+                disabled={enviando}
+                title="Envía la respuesta de arriba y marca el ticket como En proceso"
               >
-                En proceso
-              </button>
-
-              <button
-                type="button"
-                className="adminTicketBtn"
-                onClick={()=>cambiarEstado('Resuelto')}
-              >
-                Resuelto
+                <Send size={15}/>
+                {enviando?'Enviando…':'Responder y marcar en proceso'}
               </button>
 
               <button
                 type="button"
                 className="adminTicketBtn primary"
-                onClick={guardarRespuesta}
+                onClick={()=>responderYCambiarEstado('Resuelto')}
+                disabled={enviando}
+                title="Envía la respuesta de arriba y marca el ticket como Resuelto"
               >
                 <Send size={15}/>
-                Enviar respuesta
+                {enviando?'Enviando…':'Responder y marcar resuelto'}
               </button>
 
             </div>
@@ -1574,42 +1583,77 @@ function AdminTicketsView({
 
 function SoporteView({
   tickets,
-  setTickets
+  catalogos,
+  onCrear,
+  onResponderUsuario,
 }:{
   tickets:SupportTicket[];
-  setTickets:React.Dispatch<React.SetStateAction<SupportTicket[]>>;
+  catalogos:{tipos:CatalogoTicket[]; apartados:CatalogoApartado[]};
+  onCrear:(idTipo:number, idApartado:number|null, titulo:string, descripcion:string, archivoUrl:string|null)=>Promise<unknown>;
+  onResponderUsuario:(idTicket:number, mensaje:string)=>Promise<void>;
 }){
 
-  const [tipo,setTipo] = useState('Bug');
-  const [apartado,setApartado] = useState('Dashboard');
+  const [idTipo,setIdTipo] = useState<number|''>('');
+  const [idApartado,setIdApartado] = useState<number|''>('');
   const [titulo,setTitulo] = useState('');
   const [descripcion,setDescripcion] = useState('');
-  const [archivo,setArchivo] = useState<File|null>(null);
+  const [archivoUrl,setArchivoUrl] = useState('');
+  const [enviando,setEnviando] = useState(false);
+  // Borrador de respuesta del usuario por ticket (antes de enviarla al
+  // backend) -- se guarda por codigo_ticket, no se pisa con la respuesta ya
+  // persistida mientras se esta escribiendo una nueva.
+  const [borradores,setBorradores] = useState<Record<string,string>>({});
+  const [enviandoRespuesta,setEnviandoRespuesta] = useState<string|null>(null);
 
-  const crearTicket = () => {
+  // Primer tipo/apartado activo como valor por defecto del select, una vez
+  // que el catalogo real (tipo_ticket/apartado_ticket) termina de cargar.
+  useEffect(()=>{
+    if(idTipo==='' && catalogos.tipos.length) setIdTipo(catalogos.tipos[0].id_tipo);
+  },[catalogos.tipos, idTipo]);
+  useEffect(()=>{
+    if(idApartado==='' && catalogos.apartados.length) setIdApartado(catalogos.apartados[0].id_apartado);
+  },[catalogos.apartados, idApartado]);
+
+  const crearTicket = async () => {
     if(!titulo.trim() || !descripcion.trim()){
       alert('Completa el título y la descripción del problema.');
       return;
     }
+    if(idTipo===''){
+      alert('Selecciona un tipo de solicitud.');
+      return;
+    }
 
-    const nuevoTicket:SupportTicket = {
-      id:`SOP-${String(tickets.length + 1).padStart(4,'0')}`,
-      tipo,
-      apartado,
-      titulo,
-      descripcion,
-      estado:'Pendiente',
-      fecha:new Date().toLocaleString('es-CL'),
-      archivo:archivo ? archivo.name : ''
-    };
+    setEnviando(true);
+    try{
+      const creado=await onCrear(idTipo, idApartado===''?null:idApartado, titulo.trim(), descripcion.trim(), archivoUrl.trim()||null);
+      setTitulo('');
+      setDescripcion('');
+      setArchivoUrl('');
+      alert(`Ticket ${(creado as {codigo_ticket:string}).codigo_ticket} creado correctamente.`);
+    }catch(error){
+      alert(error instanceof Error?error.message:'No se pudo crear el ticket.');
+    }finally{
+      setEnviando(false);
+    }
+  };
 
-    setTickets(prev => [...prev,nuevoTicket]);
-
-    setTitulo('');
-    setDescripcion('');
-    setArchivo(null);
-
-    alert(`Ticket ${nuevoTicket.id} creado correctamente.`);
+  const enviarRespuestaUsuario = async (ticket:SupportTicket) => {
+    const mensaje=(borradores[ticket.id]||'').trim();
+    if(!mensaje){
+      alert('Escribe una respuesta antes de enviarla.');
+      return;
+    }
+    setEnviandoRespuesta(ticket.id);
+    try{
+      await onResponderUsuario(ticket.id_ticket, mensaje);
+      setBorradores(prev=>({...prev, [ticket.id]:''}));
+      alert(`Respuesta enviada al soporte para ${ticket.id}.`);
+    }catch(error){
+      alert(error instanceof Error?error.message:'No se pudo enviar la respuesta.');
+    }finally{
+      setEnviandoRespuesta(null);
+    }
   };
 
   return (
@@ -1688,13 +1732,10 @@ function SoporteView({
                 Tipo de solicitud
 
                 <select
-                  value={tipo}
-                  onChange={e=>setTipo(e.target.value)}
+                  value={idTipo}
+                  onChange={e=>setIdTipo(Number(e.target.value))}
                 >
-                  <option>Bug</option>
-                  <option>Problema técnico</option>
-                  <option>Sugerencia</option>
-                  <option>Solicitud de mejora</option>
+                  {catalogos.tipos.map(t=><option key={t.id_tipo} value={t.id_tipo}>{t.nombre_tipo}</option>)}
                 </select>
               </label>
 
@@ -1703,17 +1744,10 @@ function SoporteView({
                 Apartado afectado
 
                 <select
-                  value={apartado}
-                  onChange={e=>setApartado(e.target.value)}
+                  value={idApartado}
+                  onChange={e=>setIdApartado(Number(e.target.value))}
                 >
-                  <option>Dashboard</option>
-                  <option>Emergencias</option>
-                  <option>Recursos</option>
-                  <option>Historial</option>
-                  <option>Reportes</option>
-                  <option>Soporte</option>
-                  <option>Configuración</option>
-                  <option>Otro</option>
+                  {catalogos.apartados.map(a=><option key={a.id_apartado} value={a.id_apartado}>{a.nombre_apartado}</option>)}
                 </select>
               </label>
 
@@ -1745,20 +1779,21 @@ function SoporteView({
 
 
               <label>
-                Captura o archivo
+                Link de captura o archivo (opcional)
 
                 <input
-                  type="file"
-                  accept="image/*,.pdf"
-                  onChange={e=>setArchivo(e.target.files?.[0] || null)}
+                  type="url"
+                  value={archivoUrl}
+                  onChange={e=>setArchivoUrl(e.target.value)}
+                  placeholder="https://... (aún no hay almacenamiento de imágenes, solo un enlace)"
                 />
               </label>
 
 
-            {archivo && (
+            {archivoUrl.trim() && (
               <div className="supportFile">
                 <Paperclip size={16}/>
-                <span>{archivo.name}</span>
+                <span>{archivoUrl.trim()}</span>
               </div>
             )}
 
@@ -1768,9 +1803,10 @@ function SoporteView({
               <button
                 className="supportSubmit"
                 onClick={crearTicket}
+                disabled={enviando}
               >
                 <Ticket size={17}/>
-                Generar ticket
+                {enviando?'Generando…':'Generar ticket'}
               </button>
 
             </div>
@@ -1844,14 +1880,21 @@ function SoporteView({
                   {ticket.archivo && (
                     <div className="ticketAttachment">
                       <Paperclip size={13}/>
-                      {ticket.archivo}
+                      <a href={ticket.archivo} target="_blank" rel="noreferrer">{ticket.archivo}</a>
                     </div>
                   )}
 
                   {ticket.respuesta && (
                     <div className="ticketSupportResponse">
-                      <strong>Respuesta del soporte</strong>
+                      <strong>Respuesta del soporte{ticket.respuestaAutor?` · ${ticket.respuestaAutor}`:''}</strong>
                       <p>{ticket.respuesta}</p>
+                    </div>
+                  )}
+
+                  {ticket.respuestaUsuario && (
+                    <div className="ticketSupportResponse">
+                      <strong>Tu última respuesta</strong>
+                      <p>{ticket.respuestaUsuario}</p>
                     </div>
                   )}
 
@@ -1861,17 +1904,10 @@ function SoporteView({
                       <strong>Responder al soporte</strong>
 
                       <textarea
-                        value={ticket.respuestaUsuario || ''}
+                        value={borradores[ticket.id] ?? ''}
                         onChange={e=>{
                           const texto=e.target.value;
-
-                          setTickets(prev=>
-                            prev.map(t=>
-                              t.id===ticket.id
-                                ? {...t,respuestaUsuario:texto}
-                                : t
-                            )
-                          );
+                          setBorradores(prev=>({...prev, [ticket.id]:texto}));
                         }}
                         placeholder="Escribe una respuesta para el equipo de soporte..."
                         rows={4}
@@ -1879,28 +1915,11 @@ function SoporteView({
 
                       <button
                         type="button"
-                        onClick={()=>{
-                          if(!ticket.respuestaUsuario?.trim()){
-                            alert('Escribe una respuesta antes de enviarla.');
-                            return;
-                          }
-
-                          setTickets(prev=>
-                            prev.map(t=>
-                              t.id===ticket.id
-                                ? {
-                                    ...t,
-                                    respuestaUsuario:t.respuestaUsuario!.trim()
-                                  }
-                                : t
-                            )
-                          );
-
-                          alert(`Respuesta enviada al soporte para ${ticket.id}.`);
-                        }}
+                        onClick={()=>enviarRespuestaUsuario(ticket)}
+                        disabled={enviandoRespuesta===ticket.id}
                       >
                         <Send size={14}/>
-                        Enviar respuesta
+                        {enviandoRespuesta===ticket.id?'Enviando…':'Enviar respuesta'}
                       </button>
 
                     </div>
@@ -2072,6 +2091,43 @@ useEffect(()=>{
   return()=>{ cancelado=true; window.clearInterval(intervalo); };
 },[auth]);
 
+// Tickets de Soporte: ya vienen de verdad desde Postgres (ticket,
+// respuesta_ticket, tipo_ticket, apartado_ticket -- ver /tickets en
+// main.py), no de un useState local que se perdia con cada F5.
+const cargarTickets=async()=>{
+  try{
+    const respuesta=await fetch(`${API_BASE}/tickets`, {credentials:'include', headers:authHeaders()});
+    if(!respuesta.ok) return;
+    const datos=await respuesta.json();
+    setTickets((datos.tickets||[]).map(mapearTicketBD));
+  }catch(error){
+    console.error('No se pudieron cargar los tickets:', error);
+  }
+};
+useEffect(()=>{
+  if(!auth) return;
+  void cargarTickets();
+  const intervalo=window.setInterval(()=>{ void cargarTickets(); },10000);
+  return()=>{ window.clearInterval(intervalo); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+},[auth]);
+
+useEffect(()=>{
+  if(!auth) return;
+  let cancelado=false;
+  (async()=>{
+    try{
+      const respuesta=await fetch(`${API_BASE}/tickets/catalogos`, {credentials:'include', headers:authHeaders()});
+      if(!respuesta.ok || cancelado) return;
+      const datos=await respuesta.json();
+      if(!cancelado) setCatalogoTickets({tipos:datos.tipos||[], apartados:datos.apartados||[]});
+    }catch(error){
+      if(!cancelado) console.error('No se pudo cargar el catálogo de tickets:', error);
+    }
+  })();
+  return()=>{cancelado=true;};
+},[auth]);
+
  //--------------------------------------------
 
  const [section,setSection]=useState('Dashboard');
@@ -2099,6 +2155,7 @@ useEffect(()=>{
  const [rechazadosPorEmergencia,setRechazadosPorEmergencia]=useState<Record<number,Set<string>>>({});
  const [historial,setHistorial]=useState<HistorialEntry[]>([]);
  const [tickets,setTickets]=useState<SupportTicket[]>([]);
+ const [catalogoTickets,setCatalogoTickets]=useState<{tipos:CatalogoTicket[]; apartados:CatalogoApartado[]}>({tipos:[],apartados:[]});
  // ETA real e idoneidad de tipo de cada asignacion hecha esta sesion —
  // base para "Tiempo promedio" y "Cobertura estimada" del dashboard,
  // calculados de verdad en vez de numeros fijos.
@@ -3481,6 +3538,43 @@ const spawnEmergencia = (): Emergency => {
    }
  };
 
+ // Tickets de Soporte contra Postgres real (ticket/respuesta_ticket/
+ // tipo_ticket/apartado_ticket -- ver /tickets en main.py). Cada mutacion
+ // vuelve a pedir la lista completa en vez de actualizar el estado local a
+ // mano, para que tipo/apartado/autor/respuestas queden siempre resueltos
+ // tal como los devuelve el backend.
+ const crearTicketBD=async(idTipo:number, idApartado:number|null, titulo:string, descripcion:string, archivoUrl:string|null)=>{
+   const respuesta=await fetch(`${API_BASE}/tickets`,{
+     method:'POST', credentials:'include',
+     headers:{'Content-Type':'application/json', ...authHeaders()},
+     body:JSON.stringify({id_tipo:idTipo, id_apartado:idApartado, titulo_ticket:titulo, descripcion, archivo_url:archivoUrl}),
+   });
+   if(!respuesta.ok) throw new Error(`HTTP ${respuesta.status}: ${await respuesta.text()}`);
+   const creado=await respuesta.json();
+   await cargarTickets();
+   return creado;
+ };
+
+ const responderTicketBD=async(idTicket:number, mensaje:string, tipoRespuesta:'Respuesta'|'Usuario')=>{
+   const respuesta=await fetch(`${API_BASE}/tickets/${idTicket}/respuestas`,{
+     method:'POST', credentials:'include',
+     headers:{'Content-Type':'application/json', ...authHeaders()},
+     body:JSON.stringify({mensaje, tipo_respuesta:tipoRespuesta}),
+   });
+   if(!respuesta.ok) throw new Error(`HTTP ${respuesta.status}: ${await respuesta.text()}`);
+   await cargarTickets();
+ };
+
+ const cambiarEstadoTicketBD=async(idTicket:number, estado:'Abierto'|'En proceso'|'Resuelto')=>{
+   const respuesta=await fetch(`${API_BASE}/tickets/${idTicket}/estado`,{
+     method:'PATCH', credentials:'include',
+     headers:{'Content-Type':'application/json', ...authHeaders()},
+     body:JSON.stringify({estado}),
+   });
+   if(!respuesta.ok) throw new Error(`HTTP ${respuesta.status}: ${await respuesta.text()}`);
+   await cargarTickets();
+ };
+
  useEffect(()=>{
    // Intento de geolocalizacion del navegador: base para, a futuro, ubicar el
    // mapa segun la direccion real donde se este utilizando el sistema.
@@ -3640,7 +3734,6 @@ const spawnEmergencia = (): Emergency => {
         ['Emergencias',AlertTriangle],
         ['Recursos',Truck],
         ['Historial',History],
-        ['Reportes',Layers3],
         ['Soporte',LifeBuoy],
         ['Configuración',Settings]
       ].map(([label,Icon]:any)=>(
@@ -3667,19 +3760,21 @@ const spawnEmergencia = (): Emergency => {
     {section==='Emergencias' && !isAdminSoporte && <EmergenciasView queue={queue} claves={claves} now={now} onAtender={atenderEmergencia} onVerUbicacion={verEmergenciaEnMapa} isAdmin={isAdmin}/>}
     {section==='Recursos' && !isAdminSoporte && <RecursosView resources={resources} alertaTimeoutIds={unidadesConAlertaTimeout} onVerCuartelEnMapa={verCuartelEnMapa} isAdmin={isAdmin} onCambiarFueraDeServicio={cambiarFueraDeServicio}/>}
     {section==='Historial' && !isAdminSoporte && <HistorialView historial={historial} now={now}/>}
-    {section==='Reportes' && !isAdminSoporte && <ReportesView historial={historial}/>}
     {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} onNotify={notify} auth={auth} onLogout={handleLogout} isAdmin={isAdmin} timeoutMinutos={timeoutMinutos} onChangeTimeout={setTimeoutMinutos}/>}
     {section==='Soporte' && (
       <SoporteView
         tickets={tickets}
-        setTickets={setTickets}
+        catalogos={catalogoTickets}
+        onCrear={crearTicketBD}
+        onResponderUsuario={(id,mensaje)=>responderTicketBD(id,mensaje,'Usuario')}
       />
     )}
 
     {section==='Tickets' && isAdminSoporte && (
       <AdminTicketsView
         tickets={tickets}
-        setTickets={setTickets}
+        onResponder={(id,mensaje)=>responderTicketBD(id,mensaje,'Respuesta')}
+        onCambiarEstado={cambiarEstadoTicketBD}
       />
     )}
     {section==='Dashboard' && !isAdminSoporte && <>
@@ -3693,8 +3788,8 @@ const spawnEmergencia = (): Emergency => {
     <section className="kpis"><Kpi icon={<AlertTriangle/>} label="Emergencias activas" value={String(queue.length)} meta={currentEmergencia?`atendiendo clave ${currentEmergencia.codigo}`:'sin emergencia activa'} tone="acento"/><Kpi icon={<Truck/>} label="Recursos disponibles" value={String(disponibles)} meta={filtroCuartel==='todos'?`de ${resources.length} unidades`:`de ${resourcesFiltrados.length} unidades de ${filtroCuartel}`} tone="azul"/><Kpi icon={<Clock3/>} label="Tiempo promedio" value={tiempoPromedioLabel} meta={tiempoPromedioMeta} tone="acento"/><Kpi icon={<ShieldCheck/>} label="Cobertura estimada" value={coberturaLabel} meta={coberturaMeta} tone="azul"/></section>
     <section className="workspace"><div className="mapCard"><div className="cardHead"><div><b>Mapa operacional</b><span>Emergencias y recursos en tiempo real{isAdmin?' · toca un cuartel o vehículo para asignarlo manualmente':' · modo solo lectura'}</span></div></div><MapPanel resources={resourcesFiltrados} emergencies={emergenciasMapaDashboard} focus={focus} center={operationalCenter} onAsignarManual={handleAsignarManual} onSelectEmergencia={setEmergenciaSeleccionadaId} isAdmin={isAdmin}/><div className="legend"><span><i className="dot green"/> Disponible</span><span><i className="dot red"/> En misión</span><span><i className="dot blue"/> Ruta recomendada</span></div></div>
       <div className="sideCards">
-      {currentEmergencia?<div className="emergencyCard"><div
-  className={`tag prioridad-badge ${obtenerClasePrioridad(currentEmergencia.prioridad)}`}>{obtenerNivelPrioridad(currentEmergencia.prioridad)} PRIORIDAD</div><div className="emergencyTitle"><div className="danger"><AlertTriangle/></div><div><b>Emergencia #{currentEmergencia.id}</b><span>{claveActual?.nombre??currentEmergencia.codigo}</span></div></div><div className="details"><p><MapPin size={18}/><span>{currentEmergencia.address}</span></p><p><Clock3 size={18}/><span>Tiempo transcurrido: <b>{elapsedLabel(currentEmergencia.creadaEn,now)}</b></span></p><p><Radio size={18}/><span>Estado: <b>{currentEmergencia.status}</b></span></p></div><div className="infoTipRow"><InfoTip texto={explicarEmergenciaActual(currentEmergencia.codigo, now)}/></div><button className="locateBtn" onClick={()=>setFocus({lat:currentEmergencia.lat,lng:currentEmergencia.lng})}><Crosshair size={13}/> Ver en el mapa</button></div>:<div className="emergencyCard"><p className="emptyState">Sin emergencias activas por el momento.</p></div>}
+      {currentEmergencia?<div className="emergencyCard"><div className="emergencyHeadRow"><div className="emergencyTitle"><div className="danger"><AlertTriangle/></div><div><b>Emergencia #{currentEmergencia.id}</b><span>{claveActual?.nombre??currentEmergencia.codigo}</span></div></div><div
+  className={`tag prioridad-badge ${obtenerClasePrioridad(currentEmergencia.prioridad)}`}>{obtenerNivelPrioridad(currentEmergencia.prioridad)} PRIORIDAD</div></div><div className="details"><p><MapPin size={18}/><span>{currentEmergencia.address}</span></p><p><Clock3 size={18}/><span>Tiempo transcurrido: <b>{elapsedLabel(currentEmergencia.creadaEn,now)}</b></span></p><p><Radio size={18}/><span>Estado: <b>{currentEmergencia.status}</b></span></p></div><div className="infoTipRow"><InfoTip texto={explicarEmergenciaActual(currentEmergencia.codigo, now)}/></div><button className="locateBtn" onClick={()=>setFocus({lat:currentEmergencia.lat,lng:currentEmergencia.lng})}><Crosshair size={13}/> Ver en el mapa</button></div>:<div className="emergencyCard"><p className="emptyState">Sin emergencias activas por el momento.</p></div>}
       <div className="recommend"><div className="recHead"><div><span>RECURSO RECOMENDADO</span><small>{filtroCuartel==='todos'?'Asignación multicriterio':`Asignación multicriterio · solo ${filtroCuartel}`}</small></div>{recommendation && recomendacionInfo && <div className="score" style={{color:scoreColor(Math.round(score(recommendation,claveActual,recomendacionInfo.distanciaKm,recomendacionInfo.etaMin)))}}>{Math.round(score(recommendation,claveActual,recomendacionInfo.distanciaKm,recomendacionInfo.etaMin))}<small>/100</small></div>}</div>
       {recommendation && recomendacionInfo?<>
        <div className="recBody"><div className="vehicleIcon">{resourceIcon(recommendation.type)}</div><div><b>{recommendation.name}</b><span className="recBodyCia">{recommendation.compania} · {recommendation.sector}</span><p><Clock3 size={17}/><span>ETA estimado: <strong>{recomendacionInfo.etaMin} min</strong></span></p><p><Navigation size={17}/><span>Distancia: <strong>{recomendacionInfo.distanciaKm} km</strong></span></p><p><CheckCircle2 size={17}/><span>Disponibilidad: <strong>{recommendation.radioState==='6-8'?'Regresando (redirigida a esta emergencia)':'Disponible en cuartel'}</strong></span></p><p><ShieldCheck size={17}/><span>Capacidad: <strong>{recommendation.capacity}</strong></span></p><p><Users size={17}/><span>Dotación: <strong>{recommendation.crew} personas</strong></span></p></div></div>
