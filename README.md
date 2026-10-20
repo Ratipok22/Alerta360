@@ -26,12 +26,14 @@ Frontend (React + TypeScript + Vite)
 Backend / API (FastAPI, autenticacion JWT + Bcrypt, control de acceso por roles)
         |
 Logica de negocio
-  - Emergencias
-  - Recursos (unidades y companias)
-  - Asignacion multicriterio
+  - Emergencias, Recursos (unidades y companias), Asignacion multicriterio
   - Prediccion de demanda (Machine Learning)
+  - Soporte / Tickets
         |
-Estado compartido en memoria (/state)
+PostgreSQL 16 (persistencia real)
+        |
+Espejo en memoria (/state) solo para sincronizar en vivo
+al rol visualizador con lo que ve el operador admin
 ```
 
 La comunicación entre frontend y backend es vía API REST, documentada automáticamente con Swagger UI (`/docs`). El cálculo de rutas reales entre unidades y emergencias se realiza mediante OSRM (Open Source Routing Machine), ejecutado localmente en Docker sobre datos reales de calles de la Región de Valparaíso.
@@ -45,7 +47,7 @@ Alerta360/
 │   └── frontend/    # React + TypeScript + Vite + Leaflet
 ├── docker/          # docker-compose.yml y configuracion de contenedores
 ├── docs/            # Documentacion por fase (FASE 1, FASE 2, FASE 3)
-├── database/        # Esquema de persistencia (en definicion)
+├── database/        # Conexion a PostgreSQL (psycopg)
 └── tests/           # Pruebas automatizadas (en construccion)
 ```
 
@@ -53,15 +55,23 @@ Alerta360/
 
 - **Frontend:** React 18, TypeScript, Vite
 - **Backend / API:** Python, FastAPI, Pydantic, PyJWT, Bcrypt
+- **Base de datos:** PostgreSQL 16 (Docker), acceso vía `psycopg` 3 — emergencias, recursos, compañías, asignaciones y tickets de soporte persisten de verdad, no solo en memoria.
 - **Mapas y ruteo:** Leaflet, OpenStreetMap, OSRM (Open Source Routing Machine)
 - **Machine Learning:** scikit-learn (RandomForest, ExtraTrees, GradientBoosting, con Ridge como referencia/baseline), Pandas, NumPy
-- **Persistencia:** estado operacional compartido en memoria (`/state`); migración a PostgreSQL 16 planificada para la etapa final
 - **Contenerización:** Docker, Docker Compose
 - Todo se ejecuta de forma local, sin servicios externos de pago.
 
 ## Cómo ejecutar
 
-### Backend / API
+### 1. Base de datos (PostgreSQL) y motor de ruteo (OSRM)
+
+```bash
+cd docker
+cp .env.example .env   # completar con credenciales locales, nunca subir el .env real
+docker compose up -d db osrm
+```
+
+### 2. Backend / API
 
 ```bash
 cd src/backend
@@ -69,13 +79,14 @@ python -m venv .venv
 # Windows: .venv\Scripts\activate
 # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env   # completar con las mismas credenciales de Postgres y un JWT_SECRET_KEY propio
 python -m ml.train_model
 uvicorn main:app --reload
 ```
 
 API disponible en http://localhost:8000/docs
 
-### Frontend
+### 3. Frontend
 
 ```bash
 cd src/frontend
@@ -84,12 +95,6 @@ npm run dev
 ```
 
 Abrir la URL que indique Vite (normalmente http://localhost:5173).
-
-### Motor de ruteo (OSRM)
-
-```bash
-docker run -d --name osrm-valparaiso -p 5001:5000 fruna/osrm-valparaiso
-```
 
 ## Marco normativo (Bomberos de Chile)
 
@@ -113,16 +118,16 @@ Las zonas (`src/backend/ml/zones.py`) corresponden a sectores reales de Valpara�
 - [x] Algoritmo de asignación multicriterio con justificación explicable
 - [x] Modelo de Machine Learning de predicción de demanda, entrenado y expuesto vía API
 - [x] Marco normativo de Bomberos de Chile y flota de compañías reales
-- [x] Autenticación JWT y control de acceso por roles (RBAC)
+- [x] Autenticación JWT y control de acceso por roles (RBAC: admin, visualizador, soporte)
 - [x] Motor de ruteo real (OSRM) sobre calles de la Región de Valparaíso
-- [x] Sincronización de estado operacional compartido en tiempo real (`/state`)
-- [ ] Persistencia en PostgreSQL (actualmente en memoria)
+- [x] Persistencia en PostgreSQL 16 (emergencias, recursos, compañías, asignaciones)
+- [x] Módulo de Soporte / Tickets persistido en Postgres, con seguimiento individual por usuario
+- [x] Sincronización en tiempo real del rol visualizador (`/state`)
 - [ ] Suite de pruebas automatizadas
 - [ ] Documentación final del benchmark del algoritmo de asignación frente al baseline
 
 ## Próxima etapa
 
-1. Migrar la persistencia del estado operacional a PostgreSQL.
-2. Incorporar la suite de pruebas automatizadas.
-3. Documentar los resultados finales de la evaluación experimental y de Machine Learning.
-4. Consolidar en esta rama principal el trabajo desarrollado en las ramas de cada integrante.
+1. Incorporar la suite de pruebas automatizadas.
+2. Documentar los resultados finales de la evaluación experimental y de Machine Learning.
+3. Consolidar en esta rama principal el trabajo desarrollado en las ramas de cada integrante.
