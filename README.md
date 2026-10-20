@@ -108,6 +108,8 @@ Abrir la URL que indique Vite (normalmente http://localhost:5173).
 
 ## Predicción de demanda (Machine Learning)
 
+> **En desarrollo:** el mapa de calor / predicción de demanda está en proceso de migración a la nueva base de datos en PostgreSQL. Bruno Molina sigue trabajando en adaptar el dataset de entrenamiento y las zonas al esquema real; por ahora el dashboard operacional (mapa de emergencias y recursos) funciona de forma independiente y no depende de este módulo.
+
 El entrenamiento compara distintas familias de modelo (RandomForest, ExtraTrees, Gradient Boosting y una regresión Ridge como referencia lineal) y selecciona el de mejor desempeño para predecir la demanda esperada por zona y clave radial. La evaluación se realiza con un conjunto de datos de validación independiente, separado del de entrenamiento.
 
 Las zonas (`src/backend/ml/zones.py`) corresponden a sectores reales de Valparaíso, Viña del Mar y Concón, cada uno con un perfil de riesgo propio basado en su geografía real. La tasa base de incendio forestal está calibrada contra la cifra oficial reportada por CONAF para la temporada 2025-2026 en la Región de Valparaíso.
@@ -116,18 +118,19 @@ Las zonas (`src/backend/ml/zones.py`) corresponden a sectores reales de Valpara�
 
 - [x] Dashboard operacional funcional (mapa, recursos, emergencias, historial)
 - [x] Algoritmo de asignación multicriterio con justificación explicable
-- [x] Modelo de Machine Learning de predicción de demanda, entrenado y expuesto vía API
 - [x] Marco normativo de Bomberos de Chile y flota de compañías reales
 - [x] Autenticación JWT y control de acceso por roles (RBAC: admin, visualizador, soporte)
 - [x] Motor de ruteo real (OSRM) sobre calles de la Región de Valparaíso
 - [x] Persistencia en PostgreSQL 16 (emergencias, recursos, compañías, asignaciones)
 - [x] Módulo de Soporte / Tickets persistido en Postgres, con seguimiento individual por usuario
 - [x] Sincronización en tiempo real del rol visualizador (`/state`)
+- [ ] Mapa de calor / predicción de demanda (ML): migración del dataset y zonas a PostgreSQL en curso
 - [ ] Suite de pruebas automatizadas
 - [ ] Documentación final del benchmark del algoritmo de asignación frente al baseline
 
 ## Próxima etapa
 
-1. Incorporar la suite de pruebas automatizadas.
-2. Documentar los resultados finales de la evaluación experimental y de Machine Learning.
-3. Consolidar en esta rama principal el trabajo desarrollado en las ramas de cada integrante.
+1. Terminar la migración del módulo de predicción de demanda (ML) a PostgreSQL.
+2. Incorporar la suite de pruebas automatizadas.
+3. Documentar los resultados finales de la evaluación experimental y de Machine Learning.
+4. Consolidar en esta rama principal el trabajo desarrollado en las ramas de cada integrante.
