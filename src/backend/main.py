@@ -841,10 +841,39 @@ class TicketCreate(BaseModel):
     titulo_ticket: str
     descripcion: str
     archivo_url: str | None = None
+    # Quien reporta el problema NO decide la prioridad -- por eso no hay
+    # campo "prioridad" aca. Todo ticket nuevo entra como "Sin asignar" y
+    # soporte la fija despues desde PATCH /tickets/{id}/prioridad (ver
+    # TicketPrioridadUpdate), al revisar el caso.
+
+
+# Tickets viejos guardan ahi un link externo (http/https); el formulario
+# ahora manda la imagen ya codificada como "data:image/<tipo>;base64,<...>"
+# (ver seleccionarArchivo en el frontend). 4 MB en base64 ~= 3 MB reales,
+# el mismo limite que valida el frontend antes de codificar.
+_TIPOS_IMAGEN_PERMITIDOS = ("image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp")
+_LIMITE_ADJUNTO_BASE64 = 4 * 1024 * 1024
+
+
+def _validar_archivo_adjunto(archivo_url: str | None) -> None:
+    if not archivo_url:
+        return
+    if archivo_url.startswith("http://") or archivo_url.startswith("https://"):
+        return
+    if archivo_url.startswith("data:"):
+        encabezado, _, datos_base64 = archivo_url.partition(",")
+        tipo_mime = encabezado[len("data:"):].split(";")[0]
+        if tipo_mime not in _TIPOS_IMAGEN_PERMITIDOS:
+            raise HTTPException(status_code=400, detail=f"Tipo de imagen no permitido: {tipo_mime}")
+        if len(datos_base64) > _LIMITE_ADJUNTO_BASE64:
+            raise HTTPException(status_code=400, detail="La imagen adjunta pesa demasiado (máximo 3 MB).")
+        return
+    raise HTTPException(status_code=400, detail="Archivo adjunto inválido: debe ser una URL http(s) o una imagen.")
 
 
 @app.post("/tickets")
 def crear_ticket(datos: TicketCreate, usuario: Usuario = Depends(usuario_actual)):
+    _validar_archivo_adjunto(datos.archivo_url)
     id_usuario = _resolver_id_usuario(usuario.email)
     conexion = obtener_conexion()
     try:
@@ -868,8 +897,8 @@ def crear_ticket(datos: TicketCreate, usuario: Usuario = Depends(usuario_actual)
             cursor.execute(
                 """
                 INSERT INTO emergencia.ticket
-                    (id_usuario, id_tipo, id_apartado, codigo_ticket, titulo_ticket, descripcion, tipo_ticket, archivo_url)
-                VALUES (%s, %s, %s, 'TEMP', %s, %s, %s, %s)
+                    (id_usuario, id_tipo, id_apartado, codigo_ticket, titulo_ticket, descripcion, tipo_ticket, archivo_url, prioridad)
+                VALUES (%s, %s, %s, 'TEMP', %s, %s, %s, %s, 'Sin asignar')
                 RETURNING id_ticket
                 """,
                 (id_usuario, datos.id_tipo, datos.id_apartado, datos.titulo_ticket, datos.descripcion, nombre_tipo, datos.archivo_url),
@@ -911,7 +940,8 @@ def listar_tickets(usuario: Usuario = Depends(usuario_actual)):
                 """
                 SELECT t.id_ticket, t.codigo_ticket, t.titulo_ticket, t.descripcion,
                        t.estado_ticket, t.archivo_url, t.fecha_creacion, t.fecha_actualizacion,
-                       tt.nombre_tipo, COALESCE(ap.nombre_apartado, 'General'), u.nombre_completo, u.email_usuario
+                       tt.nombre_tipo, COALESCE(ap.nombre_apartado, 'General'), u.nombre_completo, u.email_usuario,
+                       t.prioridad
                 FROM emergencia.ticket t
                 JOIN emergencia.tipo_ticket tt ON tt.id_tipo = t.id_tipo
                 LEFT JOIN emergencia.apartado_ticket ap ON ap.id_apartado = t.id_apartado
@@ -925,7 +955,8 @@ def listar_tickets(usuario: Usuario = Depends(usuario_actual)):
                 """
                 SELECT t.id_ticket, t.codigo_ticket, t.titulo_ticket, t.descripcion,
                        t.estado_ticket, t.archivo_url, t.fecha_creacion, t.fecha_actualizacion,
-                       tt.nombre_tipo, COALESCE(ap.nombre_apartado, 'General'), u.nombre_completo, u.email_usuario
+                       tt.nombre_tipo, COALESCE(ap.nombre_apartado, 'General'), u.nombre_completo, u.email_usuario,
+                       t.prioridad
                 FROM emergencia.ticket t
                 JOIN emergencia.tipo_ticket tt ON tt.id_tipo = t.id_tipo
                 LEFT JOIN emergencia.apartado_ticket ap ON ap.id_apartado = t.id_apartado
@@ -957,7 +988,8 @@ def listar_tickets(usuario: Usuario = Depends(usuario_actual)):
 
     tickets = []
     for (id_ticket, codigo, titulo, descripcion, estado, archivo_url,
-         fecha_creacion, fecha_actualizacion, nombre_tipo, nombre_apartado, autor, email_autor) in filas_tickets:
+         fecha_creacion, fecha_actualizacion, nombre_tipo, nombre_apartado, autor, email_autor,
+         prioridad) in filas_tickets:
         tickets.append({
             "id_ticket": id_ticket,
             "codigo_ticket": codigo,
@@ -971,6 +1003,7 @@ def listar_tickets(usuario: Usuario = Depends(usuario_actual)):
             "apartado": nombre_apartado,
             "creado_por": autor,
             "creado_por_email": email_autor,
+            "prioridad": prioridad,
             "respuestas": respuestas_por_ticket.get(id_ticket, []),
         })
     return {"tickets": tickets}
@@ -1061,6 +1094,31 @@ def cambiar_estado_ticket(id_ticket: int, datos: TicketEstadoUpdate, usuario: Us
             )
         conexion.commit()
         return {"ok": True, "estado": datos.estado}
+    except Exception:
+        conexion.rollback()
+        raise
+    finally:
+        conexion.close()
+
+
+class TicketPrioridadUpdate(BaseModel):
+    prioridad: Literal["Baja", "Media", "Alta"]
+
+
+@app.patch("/tickets/{id_ticket}/prioridad")
+def cambiar_prioridad_ticket(id_ticket: int, datos: TicketPrioridadUpdate, usuario: Usuario = Depends(requiere_soporte)):
+    """Quien reporta el problema NO decide que tan urgente es -- eso lo
+    evalua soporte al revisar el ticket, por eso este endpoint (a
+    diferencia de la creacion del ticket) exige rol soporte."""
+    conexion = obtener_conexion()
+    try:
+        with conexion.cursor() as cursor:
+            cursor.execute(
+                "UPDATE emergencia.ticket SET prioridad = %s, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id_ticket = %s",
+                (datos.prioridad, id_ticket),
+            )
+        conexion.commit()
+        return {"ok": True, "prioridad": datos.prioridad}
     except Exception:
         conexion.rollback()
         raise

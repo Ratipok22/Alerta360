@@ -1109,6 +1109,130 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
   color:var(--acento);
 }
 
+.supportFilePreview{
+  max-width:160px;
+  max-height:120px;
+  border-radius:6px;
+  object-fit:cover;
+}
+
+.supportFileRemove{
+  border:1px solid currentColor;
+  background:transparent;
+  color:inherit;
+  border-radius:6px;
+  padding:5px 10px;
+  font-size:12px;
+  cursor:pointer;
+}
+
+.supportFileError{
+  color:var(--rojo-alerta);
+  font-size:12px;
+  font-weight:600;
+}
+
+.ticketAdjuntoImagenLink{
+  display:inline-block;
+  border:none;
+  background:none;
+  padding:0;
+  cursor:zoom-in;
+}
+
+.ticketAdjuntoImagenBtn{
+  display:block;
+  border:none;
+  background:none;
+  padding:0;
+  cursor:zoom-in;
+}
+
+.ticketImagenLightbox{
+  position:fixed;
+  inset:0;
+  z-index:1000;
+
+  display:flex;
+  align-items:center;
+  justify-content:center;
+
+  padding:40px;
+  background:rgba(0,0,0,.85);
+  cursor:zoom-out;
+}
+
+.ticketImagenLightbox img{
+  max-width:100%;
+  max-height:100%;
+  border-radius:8px;
+  object-fit:contain;
+}
+
+.ticketAdjuntoImagen{
+  max-width:200px;
+  max-height:150px;
+  border-radius:7px;
+  object-fit:cover;
+  display:block;
+  margin-top:4px;
+}
+
+.ticketAdjuntoBox{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  gap:10px;
+
+  padding:14px;
+  margin:4px 0 14px;
+
+  border:1px solid var(--borde-sutil);
+  border-radius:9px;
+  background:var(--negro-panel);
+}
+
+.ticketAdjuntoLabel{
+  display:flex;
+  align-items:center;
+  gap:6px;
+
+  font-size:11px;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:.3px;
+  color:var(--gris-tenue);
+}
+
+.ticketAdjuntoImagenGrande{
+  max-width:100%;
+  max-height:340px;
+  border-radius:8px;
+  object-fit:contain;
+  display:block;
+  cursor:zoom-in;
+}
+
+.ticketAdjuntoDescargar{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+
+  padding:7px 14px;
+  border:1px solid var(--acento);
+  border-radius:7px;
+
+  color:var(--acento);
+  font-size:12px;
+  font-weight:700;
+  text-decoration:none;
+}
+
+.ticketAdjuntoDescargar:hover{
+  background:var(--acento);
+  color:#fff;
+}
+
 
 /* =========================================================
    BOTÓN GENERAR TICKET
@@ -1523,11 +1647,11 @@ html[data-theme="dark"] .emptyState{
 
 .adminTicketRow{
   display:grid;
-  grid-template-columns:120px minmax(0,1fr) 120px;
-  gap:18px;
+  grid-template-columns:135px minmax(0,1fr) 170px;
+  gap:28px;
   align-items:center;
   width:100%;
-  padding:15px 20px;
+  padding:24px 28px;
   border:0;
   border-top:1px solid var(--borde-sutil);
   border-radius:0;
@@ -1546,14 +1670,14 @@ html[data-theme="dark"] .emptyState{
 .adminTicketId strong{
   display:block;
   color:var(--blanco);
-  font-size:13px;
+  font-size:15px;
 }
 
 .adminTicketId span{
   display:block;
-  margin-top:4px;
+  margin-top:7px;
   color:var(--gris-tenue);
-  font-size:10px;
+  font-size:12px;
 }
 
 .adminTicketInfo{
@@ -1563,7 +1687,7 @@ html[data-theme="dark"] .emptyState{
 .adminTicketInfo strong{
   display:block;
   color:var(--blanco);
-  font-size:13px;
+  font-size:16px;
   white-space:nowrap;
   overflow:hidden;
   text-overflow:ellipsis;
@@ -1571,18 +1695,41 @@ html[data-theme="dark"] .emptyState{
 
 .adminTicketInfo span{
   display:block;
-  margin-top:4px;
+  margin-top:8px;
   color:var(--gris-tenue);
-  font-size:11px;
+  font-size:13px;
 }
 
+/* Fila de metadatos (tipo/apartado + prioridad) debajo del titulo -- en
+   flex con gap para que la pastilla de prioridad quede separada del texto
+   en vez de pegada despues del ultimo "·", como pedido. Especificidad mas
+   alta que ".adminTicketInfo span" (misma regla de arriba) para cancelar
+   su display:block/margin-top en los dos <span> hijos de esta fila. */
+.adminTicketMetaRow{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  margin-top:8px;
+}
+
+.adminTicketMetaRow span{
+  display:inline-flex;
+  margin-top:0;
+}
+
+/* Ancho fijo e igual para los 3 estados (Abierto/En proceso/Resuelto) --
+   antes cada uno media distinto segun el largo de su texto. */
 .adminTicketStatus{
   justify-self:end;
-  padding:6px 9px;
+  width:140px;
+  padding:9px 12px;
   border-radius:20px;
-  border:1px solid currentColor;
-  font-size:10px;
-  font-weight:700;
+  border:2px solid currentColor;
+  font-size:13px;
+  font-weight:800;
+  text-transform:uppercase;
+  letter-spacing:.3px;
+  text-align:center;
   white-space:nowrap;
 }
 
@@ -1674,6 +1821,108 @@ html[data-theme="light"] .adminTicketsToolbar select:focus{
   color:var(--gris-texto);
   font-size:12px;
   line-height:1.5;
+}
+
+/* Hilo completo de la conversacion (ver TicketThread): antes solo se veia
+   la ULTIMA respuesta de cada lado y se perdia el resto del intercambio.
+   Mismo lenguaje visual que .ticketSupportResponse, un mensaje por burbuja
+   en orden cronologico, con el borde de color segun quien escribio. */
+.ticketThread{display:flex; flex-direction:column; gap:10px; margin-top:14px}
+.ticketThreadMsg{padding:13px 14px; border-left:3px solid var(--acento); background:var(--negro-panel); border-radius:7px}
+.ticketThreadMsg.esUsuario{border-left-color:var(--verde-disponible)}
+.ticketThreadMsg strong{display:block; font-size:11px; font-weight:700; text-transform:uppercase; margin-bottom:6px; color:var(--acento)}
+.ticketThreadMsg.esUsuario strong{color:var(--verde-disponible)}
+.ticketThreadMsg p{margin:0 0 6px; color:var(--gris-texto); font-size:12px; line-height:1.5}
+.ticketThreadMsg small{color:var(--gris-tenue); font-size:10px}
+
+/* Pastilla de prioridad del ticket (Baja/Media/Alta). display:inline-flex
+   + width:fit-content anulan ".adminTicketInfo span{display:block}" (una
+   regla mas general que, sin esto, estiraba la pastilla a todo el ancho de
+   la fila en vez de dejarla como una etiqueta chica).
+   Fondo SOLIDO (no transparente) + letras blancas con contorno negro: el
+   detalle del ticket (.cardHead) tiene fondo rojo en modo claro, y un texto
+   rojo-sobre-fondo-rojo-transparente se volvia invisible en "Alta" -- el
+   contorno garantiza que se lea sin importar el fondo (rojo del header,
+   blanco de la fila, oscuro del tema dark). Tamaño mas grande y llamativo,
+   como se pidio ("se haga ver").
+*/
+/* Paleta propia para prioridad de tickets -- deliberadamente distinta de
+   los colores semaforo (--rojo-alerta/--amarillo-precaucion/--verde-
+   disponible) que usa el resto de la app para alertas de emergencias
+   reales. Esos son brillantes/tipo iOS (alarma); para un sistema interno
+   de tickets se pidio algo mas corporativo y sobrio, y ademas asi un
+   cambio aca no afecta ningun otro indicador de la app. */
+:root{
+  --prioridad-baja:#2F6F4E;
+  --prioridad-media:#9C6B0B;
+  --prioridad-alta:#8E2436;
+}
+
+.ticketTopBadges{display:flex; align-items:center; gap:8px}
+.ticketPrioridad{
+  display:inline-flex;
+  width:fit-content;
+  margin-top:0!important;
+  padding:4px 11px;
+  border-radius:6px;
+  font-size:12px;
+  font-weight:800;
+  text-transform:uppercase;
+  letter-spacing:.4px;
+  color:#fff;
+  text-shadow:-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+}
+.ticketPrioridad-baja{background:var(--prioridad-baja)}
+.ticketPrioridad-media{background:var(--prioridad-media)}
+.ticketPrioridad-alta{background:var(--prioridad-alta)}
+
+/* Mismo look que .ticketPrioridad pero como <select> editable -- solo
+   soporte puede ajustar la prioridad (ver onCambiarPrioridad), quien
+   reporta el ticket no la elige. */
+.ticketPrioridadSelect{
+  display:inline-flex;
+  align-items:center;
+  border:2px solid #000;
+  border-radius:20px;
+  padding:4px 12px;
+  font-size:12px;
+  font-weight:800;
+  text-transform:uppercase;
+  letter-spacing:.4px;
+  cursor:pointer;
+  margin-left:4px;
+  color:#fff;
+  text-shadow:-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+}
+.ticketPrioridadSelect.ticketPrioridad-baja{background:var(--prioridad-baja)}
+.ticketPrioridadSelect.ticketPrioridad-media{background:var(--prioridad-media)}
+.ticketPrioridadSelect.ticketPrioridad-alta{background:var(--prioridad-alta)}
+
+/* Las opciones del <select> se ven como texto normal del navegador, no
+   como la pastilla (eso solo aplica al propio control cerrado) -- fondo
+   claro y texto oscuro para que se lean en el menu desplegable. */
+.ticketPrioridadSelect option{
+  color:#000;
+  text-shadow:none;
+  background:#fff;
+}
+
+/* "Sin asignar": un ticket recien creado no trae ninguna urgencia
+   predefinida -- esta pastilla es deliberadamente neutra/apagada (gris,
+   borde punteado) para que no se confunda con una prioridad real ya
+   evaluada por soporte. Va despues de las reglas base .ticketPrioridad/
+   .ticketPrioridadSelect para poder cancelar su color/fondo/contorno. */
+.ticketPrioridad-sinasignar{
+  background:transparent;
+  color:var(--gris-tenue);
+  text-shadow:none;
+  border:1px dashed var(--gris-tenue);
+}
+.ticketPrioridadSelect.ticketPrioridad-sinasignar{
+  background:transparent;
+  color:var(--gris-tenue);
+  text-shadow:none;
+  border:2px dashed var(--gris-tenue);
 }
 
 .ticketUserReply{

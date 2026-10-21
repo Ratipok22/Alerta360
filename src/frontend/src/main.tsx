@@ -3,7 +3,7 @@ import {createRoot} from 'react-dom/client';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
-import {AlertTriangle, BarChart3, Building2, CheckCircle2, Clock3, Crosshair, Droplet, Eye, Flame, HardHat, History, Info, LifeBuoy, Lightbulb, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Paperclip, Phone, Radio, Send, Settings, ShieldCheck, Sun, Ticket, Truck, TreePine, Users, XCircle, Zap, Bug} from 'lucide-react';
+import {AlertTriangle, BarChart3, Building2, CheckCircle2, Clock3, Crosshair, Download, Droplet, Eye, Flame, HardHat, History, Info, LifeBuoy, Lightbulb, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Paperclip, Phone, Radio, Send, Settings, ShieldCheck, Sun, Ticket, Truck, TreePine, Users, XCircle, Zap, Bug} from 'lucide-react';
 import logoDark from "./assets/logo-alerta360-dark.png";
 import logoLight from "./assets/logo-alerta360-light.png";
 
@@ -110,6 +110,7 @@ type SupportTicket = {
   archivo:string;
   creadoPor:string;
   creadoPorEmail:string;
+  prioridad:'Sin asignar'|'Baja'|'Media'|'Alta';
   respuestas:TicketRespuesta[];
   respuesta?:string;
   respuestaAutor?:string;
@@ -133,6 +134,7 @@ function mapearTicketBD(t:any):SupportTicket{
     archivo:t.archivo_url??'',
     creadoPor:t.creado_por,
     creadoPorEmail:t.creado_por_email,
+    prioridad:t.prioridad??'Sin asignar',
     respuestas,
     respuesta:ultimaOficial?.mensaje,
     respuestaAutor:ultimaOficial?.autor,
@@ -1294,23 +1296,122 @@ function LoginView({onLogin,theme,onToggleTheme}:{onLogin:(token:string, nombre:
   </div>;
 }
 
+function prioridadClase(p:'Sin asignar'|'Baja'|'Media'|'Alta'):string{
+  return p==='Alta' ? 'ticketPrioridad-alta'
+    : p==='Media' ? 'ticketPrioridad-media'
+    : p==='Baja' ? 'ticketPrioridad-baja'
+    : 'ticketPrioridad-sinasignar';
+}
+
+// Hilo completo de la conversacion de un ticket (respuestas oficiales de
+// soporte y seguimientos del usuario que lo creo), en orden cronologico --
+// antes solo se mostraba la ULTIMA respuesta de cada lado, perdiendo el
+// resto del historial de la conversacion.
+function TicketThread({respuestas}:{respuestas:TicketRespuesta[]}){
+  if(!respuestas.length) return null;
+  return <div className="ticketThread">
+    {respuestas.map((r,i)=>
+      <div key={i} className={`ticketThreadMsg ${r.tipo_respuesta==='Respuesta'?'esSoporte':'esUsuario'}`}>
+        <strong>{r.tipo_respuesta==='Respuesta'?'Soporte':'Usuario'} · {r.autor}</strong>
+        <p>{r.mensaje}</p>
+        <small>{new Date(r.fecha_respuesta).toLocaleString('es-CL')}</small>
+      </div>
+    )}
+  </div>;
+}
+
+// Los tickets antiguos guardan un link externo en archivo_url; los nuevos
+// guardan la imagen ya codificada como data URI (ver crearTicketBD). Un
+// mismo campo sirve para ambos casos: si empieza con "data:image" se
+// renderiza como <img>, si no, como enlace de texto (comportamiento previo).
+function esImagenAdjunta(url:string){
+  return url.startsWith('data:image');
+}
+
+// Extensión real del archivo a partir del mime type (para el nombre que
+// se ofrece al descargar: "adjunto-ticket.png", no "adjunto-ticket.data").
+function extensionImagen(dataUri:string){
+  const mime = dataUri.slice(5, dataUri.indexOf(';'));
+  return mime.split('/')[1] || 'png';
+}
+
+// Overlay a pantalla completa con la imagen ampliada. Los navegadores
+// Chromium (Chrome, Brave, Edge) bloquean la navegacion a una URL "data:"
+// en una pestaña nueva (pantalla en blanco, "Sin titulo") por seguridad
+// anti-phishing -- por eso esto se abre dentro de la misma pagina en vez
+// de usar <a target="_blank">.
+function LightboxImagenTicket({url, onCerrar}:{url:string; onCerrar:()=>void}){
+  return (
+    <div className="ticketImagenLightbox" onClick={onCerrar}>
+      <img src={url} alt="Imagen adjunta ampliada"/>
+    </div>
+  );
+}
+
+function AdjuntoTicket({url}:{url:string}){
+  const [ampliada,setAmpliada]=useState(false);
+  if(esImagenAdjunta(url)){
+    return <>
+      <button type="button" onClick={()=>setAmpliada(true)} className="ticketAdjuntoImagenLink">
+        <img src={url} alt="Captura adjunta al ticket" className="ticketAdjuntoImagen"/>
+      </button>
+      {ampliada && <LightboxImagenTicket url={url} onCerrar={()=>setAmpliada(false)}/>}
+    </>;
+  }
+  return <a href={url} target="_blank" rel="noreferrer">{url}</a>;
+}
+
+// Bloque dedicado para mostrar la imagen adjunta en grande, con marco y
+// boton de descarga -- separado del renglon de metadatos (Fecha/Estado)
+// porque una imagen no cabe bien ahi como un dato mas en linea.
+function ImagenAdjuntaTicket({url}:{url:string}){
+  const [ampliada,setAmpliada]=useState(false);
+  return (
+    <div className="ticketAdjuntoBox">
+      <span className="ticketAdjuntoLabel"><Paperclip size={13}/> Imagen adjunta</span>
+      <button type="button" onClick={()=>setAmpliada(true)} className="ticketAdjuntoImagenBtn">
+        <img src={url} alt="Imagen adjunta al ticket" className="ticketAdjuntoImagenGrande"/>
+      </button>
+      <a href={url} download={`adjunto-ticket.${extensionImagen(url)}`} className="ticketAdjuntoDescargar">
+        <Download size={14}/> Descargar imagen
+      </a>
+      {ampliada && <LightboxImagenTicket url={url} onCerrar={()=>setAmpliada(false)}/>}
+    </div>
+  );
+}
+
 function AdminTicketsView({
   tickets,
   onResponder,
   onCambiarEstado,
+  onCambiarPrioridad,
 }:{
   tickets:SupportTicket[];
   onResponder:(idTicket:number, mensaje:string)=>Promise<void>;
   onCambiarEstado:(idTicket:number, estado:'Abierto'|'En proceso'|'Resuelto')=>Promise<void>;
+  onCambiarPrioridad:(idTicket:number, prioridad:'Baja'|'Media'|'Alta')=>Promise<void>;
 }){
   const [filtro,setFiltro]=useState('Todos');
+  const [filtroPrioridad,setFiltroPrioridad]=useState('Todas');
   const [busqueda,setBusqueda]=useState('');
   const [ticketSeleccionadoId,setTicketSeleccionadoId]=useState<string|null>(null);
   const [respuesta,setRespuesta]=useState('');
   const [enviando,setEnviando]=useState(false);
+  const detalleRef=useRef<HTMLElement>(null);
+
+  // Al elegir un ticket de la lista, el panel de detalle recien aparece debajo
+  // (antes no existia en el DOM), asi que hay que esperar a que React lo
+  // renderice para poder hacerle scroll -- por eso va en un efecto que
+  // reacciona al id seleccionado, no directo en el onClick de la fila.
+  useEffect(()=>{
+    if(ticketSeleccionadoId){
+      detalleRef.current?.scrollIntoView({behavior:'smooth', block:'start'});
+    }
+  },[ticketSeleccionadoId]);
 
   const ticketsFiltrados=tickets.filter(ticket=>{
     const coincideEstado=filtro==='Todos' || ticket.estado===filtro;
+    const coincidePrioridad=filtroPrioridad==='Todas' || ticket.prioridad===filtroPrioridad;
 
     const textoBusqueda=busqueda.trim().toLowerCase();
 
@@ -1321,7 +1422,7 @@ function AdminTicketsView({
       ticket.tipo.toLowerCase().includes(textoBusqueda) ||
       ticket.apartado.toLowerCase().includes(textoBusqueda);
 
-    return coincideEstado && coincideBusqueda;
+    return coincideEstado && coincidePrioridad && coincideBusqueda;
   });
 
   const pendientes=tickets.filter(ticket=>ticket.estado==='Abierto').length;
@@ -1417,6 +1518,17 @@ function AdminTicketsView({
             <option value="Resuelto">Resueltos</option>
           </select>
 
+          <select
+            value={filtroPrioridad}
+            onChange={e=>setFiltroPrioridad(e.target.value)}
+          >
+            <option value="Todas">Toda prioridad</option>
+            <option value="Sin asignar">Sin asignar</option>
+            <option value="Alta">Alta</option>
+            <option value="Media">Media</option>
+            <option value="Baja">Baja</option>
+          </select>
+
         </div>
 
         <div className="adminTicketsList">
@@ -1449,7 +1561,10 @@ function AdminTicketsView({
 
                 <div className="adminTicketInfo">
                   <strong>{ticket.titulo}</strong>
-                  <span>{ticket.tipo} · {ticket.apartado}</span>
+                  <div className="adminTicketMetaRow">
+                    <span>{ticket.tipo} · {ticket.apartado}</span>
+                    <span className={`ticketPrioridad ${prioridadClase(ticket.prioridad)}`}>{ticket.prioridad}</span>
+                  </div>
                 </div>
 
                 <span className={`adminTicketStatus status-${ticket.estado.toLowerCase().replace(' ','-')}`}>
@@ -1468,7 +1583,7 @@ function AdminTicketsView({
 
       {ticketSeleccionado && (
 
-        <section className="card adminTicketsPanel adminTicketDetail">
+        <section className="card adminTicketsPanel adminTicketDetail" ref={detalleRef}>
 
           <div className="cardHead">
 
@@ -1478,6 +1593,23 @@ function AdminTicketsView({
                 <span><Users size={12}/> {ticketSeleccionado.creadoPor} · {ticketSeleccionado.creadoPorEmail}</span>
                 <span>Tipo: <b>{ticketSeleccionado.tipo}</b></span>
                 <span>Apartado: <b>{ticketSeleccionado.apartado}</b></span>
+                <span>
+                  Prioridad:
+                  <select
+                    className={`ticketPrioridadSelect ${prioridadClase(ticketSeleccionado.prioridad)}`}
+                    value={ticketSeleccionado.prioridad}
+                    onClick={ev=>ev.stopPropagation()}
+                    onChange={e=>onCambiarPrioridad(ticketSeleccionado.id_ticket, e.target.value as 'Baja'|'Media'|'Alta')}
+                    title="Solo soporte puede ajustar que tan urgente es este ticket"
+                  >
+                    {ticketSeleccionado.prioridad==='Sin asignar' && (
+                      <option value="Sin asignar" disabled>Sin asignar</option>
+                    )}
+                    <option value="Baja">Baja</option>
+                    <option value="Media">Media</option>
+                    <option value="Alta">Alta</option>
+                  </select>
+                </span>
               </span>
             </div>
 
@@ -1506,34 +1638,38 @@ function AdminTicketsView({
                 <b>Estado:</b> {ticketSeleccionado.estado}
               </span>
 
-              {ticketSeleccionado.archivo && (
+              {ticketSeleccionado.archivo && !esImagenAdjunta(ticketSeleccionado.archivo) && (
                 <span>
                   <Paperclip size={13}/>
-                  <b>Archivo:</b> <a href={ticketSeleccionado.archivo} target="_blank" rel="noreferrer">{ticketSeleccionado.archivo}</a>
+                  <b>Archivo:</b> <AdjuntoTicket url={ticketSeleccionado.archivo}/>
                 </span>
               )}
 
             </div>
+
+            {ticketSeleccionado.archivo && esImagenAdjunta(ticketSeleccionado.archivo) && (
+              <ImagenAdjuntaTicket url={ticketSeleccionado.archivo}/>
+            )}
 
             <div className="adminTicketDescription">
               <span>Descripción</span>
               <p>{ticketSeleccionado.descripcion}</p>
             </div>
 
-            {ticketSeleccionado.respuesta && (
-              <div className="adminTicketExistingResponse">
-                <span>Respuesta actual</span>
-                <p>{ticketSeleccionado.respuesta}</p>
-              </div>
-            )}
+            <TicketThread respuestas={ticketSeleccionado.respuestas}/>
 
-            {ticketSeleccionado.respuestaUsuario && (
-              <div className="adminTicketUserResponse">
-                <span>Respuesta del usuario</span>
-                <p>{ticketSeleccionado.respuestaUsuario}</p>
+            {ticketSeleccionado.estado==='Resuelto' ? (
+              <div className="adminTicketActions">
+                <button
+                  type="button"
+                  className="adminTicketBtn"
+                  onClick={()=>onCambiarEstado(ticketSeleccionado.id_ticket,'En proceso')}
+                  title="Vuelve a dejar el ticket En proceso, por si se cerró por error"
+                >
+                  Reabrir ticket
+                </button>
               </div>
-            )}
-
+            ) : <>
             <label className="adminTicketResponse">
               Responder ticket
 
@@ -1570,6 +1706,7 @@ function AdminTicketsView({
               </button>
 
             </div>
+            </>}
 
           </div>
 
@@ -1598,6 +1735,7 @@ function SoporteView({
   const [titulo,setTitulo] = useState('');
   const [descripcion,setDescripcion] = useState('');
   const [archivoUrl,setArchivoUrl] = useState('');
+  const [archivoError,setArchivoError] = useState('');
   const [enviando,setEnviando] = useState(false);
   // Borrador de respuesta del usuario por ticket (antes de enviarla al
   // backend) -- se guarda por codigo_ticket, no se pisa con la respuesta ya
@@ -1614,6 +1752,27 @@ function SoporteView({
     if(idApartado==='' && catalogos.apartados.length) setIdApartado(catalogos.apartados[0].id_apartado);
   },[catalogos.apartados, idApartado]);
 
+  // Limite de tamaño del archivo original (antes de codificar a base64,
+  // que agrega ~33% de peso) para no mandar imagenes gigantes al backend.
+  const LIMITE_ADJUNTO_BYTES = 3*1024*1024;
+
+  const seleccionarArchivo = (archivo:File|undefined) => {
+    setArchivoError('');
+    if(!archivo) return;
+    if(!archivo.type.startsWith('image/')){
+      setArchivoError('Solo se permiten imágenes (PNG, JPG, GIF, WEBP).');
+      return;
+    }
+    if(archivo.size > LIMITE_ADJUNTO_BYTES){
+      setArchivoError('La imagen pesa demasiado (máximo 3 MB).');
+      return;
+    }
+    const lector = new FileReader();
+    lector.onload = () => setArchivoUrl(typeof lector.result==='string'?lector.result:'');
+    lector.onerror = () => setArchivoError('No se pudo leer la imagen.');
+    lector.readAsDataURL(archivo);
+  };
+
   const crearTicket = async () => {
     if(!titulo.trim() || !descripcion.trim()){
       alert('Completa el título y la descripción del problema.');
@@ -1626,10 +1785,14 @@ function SoporteView({
 
     setEnviando(true);
     try{
+      // La prioridad la decide soporte al revisar el ticket, no quien lo
+      // reporta -- el ticket entra "Sin asignar" (lo fija el backend) y
+      // soporte la ajusta despues (ver selector en AdminTicketsView).
       const creado=await onCrear(idTipo, idApartado===''?null:idApartado, titulo.trim(), descripcion.trim(), archivoUrl.trim()||null);
       setTitulo('');
       setDescripcion('');
       setArchivoUrl('');
+      setArchivoError('');
       alert(`Ticket ${(creado as {codigo_ticket:string}).codigo_ticket} creado correctamente.`);
     }catch(error){
       alert(error instanceof Error?error.message:'No se pudo crear el ticket.');
@@ -1779,21 +1942,25 @@ function SoporteView({
 
 
               <label>
-                Link de captura o archivo (opcional)
+                Imagen adjunta (opcional, máx. 3 MB)
 
                 <input
-                  type="url"
-                  value={archivoUrl}
-                  onChange={e=>setArchivoUrl(e.target.value)}
-                  placeholder="https://... (aún no hay almacenamiento de imágenes, solo un enlace)"
+                  type="file"
+                  accept="image/*"
+                  onChange={e=>seleccionarArchivo(e.target.files?.[0])}
                 />
               </label>
 
+            {archivoError && (
+              <div className="supportFileError">{archivoError}</div>
+            )}
 
-            {archivoUrl.trim() && (
+            {archivoUrl.trim() && !archivoError && (
               <div className="supportFile">
-                <Paperclip size={16}/>
-                <span>{archivoUrl.trim()}</span>
+                <img src={archivoUrl} alt="Vista previa de la imagen adjunta" className="supportFilePreview"/>
+                <button type="button" className="supportFileRemove" onClick={()=>setArchivoUrl('')}>
+                  Quitar imagen
+                </button>
               </div>
             )}
 
@@ -1858,7 +2025,10 @@ function SoporteView({
 
                     <strong>{ticket.id}</strong>
 
-                    <span>{ticket.estado}</span>
+                    <div className="ticketTopBadges">
+                      <span className={`ticketPrioridad ${prioridadClase(ticket.prioridad)}`}>{ticket.prioridad}</span>
+                      <span>{ticket.estado}</span>
+                    </div>
 
                   </div>
 
@@ -1877,26 +2047,18 @@ function SoporteView({
                   </div>
 
 
-                  {ticket.archivo && (
+                  {ticket.archivo && !esImagenAdjunta(ticket.archivo) && (
                     <div className="ticketAttachment">
                       <Paperclip size={13}/>
-                      <a href={ticket.archivo} target="_blank" rel="noreferrer">{ticket.archivo}</a>
+                      <AdjuntoTicket url={ticket.archivo}/>
                     </div>
                   )}
 
-                  {ticket.respuesta && (
-                    <div className="ticketSupportResponse">
-                      <strong>Respuesta del soporte{ticket.respuestaAutor?` · ${ticket.respuestaAutor}`:''}</strong>
-                      <p>{ticket.respuesta}</p>
-                    </div>
+                  {ticket.archivo && esImagenAdjunta(ticket.archivo) && (
+                    <ImagenAdjuntaTicket url={ticket.archivo}/>
                   )}
 
-                  {ticket.respuestaUsuario && (
-                    <div className="ticketSupportResponse">
-                      <strong>Tu última respuesta</strong>
-                      <p>{ticket.respuestaUsuario}</p>
-                    </div>
-                  )}
+                  <TicketThread respuestas={ticket.respuestas}/>
 
                   {ticket.estado==='En proceso' && (
                     <div className="ticketUserReply">
@@ -2094,12 +2256,38 @@ useEffect(()=>{
 // Tickets de Soporte: ya vienen de verdad desde Postgres (ticket,
 // respuesta_ticket, tipo_ticket, apartado_ticket -- ver /tickets en
 // main.py), no de un useState local que se perdia con cada F5.
+//
+// Ademas, cada vez que se repolea se avisa (toast) al creador del ticket
+// si le llego una respuesta OFICIAL nueva de soporte desde la ultima vez
+// -- antes no se enteraba hasta entrar el solo a mirar.
+const ultimasRespuestasOficialesRef=useRef<Record<string,number>>({});
+const primerCargaTicketsRef=useRef(true);
 const cargarTickets=async()=>{
   try{
     const respuesta=await fetch(`${API_BASE}/tickets`, {credentials:'include', headers:authHeaders()});
     if(!respuesta.ok) return;
     const datos=await respuesta.json();
-    setTickets((datos.tickets||[]).map(mapearTicketBD));
+    const nuevos:SupportTicket[]=(datos.tickets||[]).map(mapearTicketBD);
+
+    if(!primerCargaTicketsRef.current && auth){
+      for(const t of nuevos){
+        const cantidadOficiales=t.respuestas.filter(r=>r.tipo_respuesta==='Respuesta').length;
+        const anterior=ultimasRespuestasOficialesRef.current[t.id];
+        if(
+          t.creadoPorEmail===auth.email &&
+          anterior!==undefined &&
+          cantidadOficiales>anterior
+        ){
+          notify(`Soporte respondió tu ticket ${t.id}: "${t.titulo}"`);
+        }
+      }
+    }
+    nuevos.forEach(t=>{
+      ultimasRespuestasOficialesRef.current[t.id]=t.respuestas.filter(r=>r.tipo_respuesta==='Respuesta').length;
+    });
+    primerCargaTicketsRef.current=false;
+
+    setTickets(nuevos);
   }catch(error){
     console.error('No se pudieron cargar los tickets:', error);
   }
@@ -3575,6 +3763,19 @@ const spawnEmergencia = (): Emergency => {
    await cargarTickets();
  };
 
+ const cambiarPrioridadTicketBD=async(idTicket:number, prioridad:'Baja'|'Media'|'Alta')=>{
+   const respuesta=await fetch(`${API_BASE}/tickets/${idTicket}/prioridad`,{
+     method:'PATCH', credentials:'include',
+     headers:{'Content-Type':'application/json', ...authHeaders()},
+     body:JSON.stringify({prioridad}),
+   });
+   if(!respuesta.ok){
+     notify(`No se pudo cambiar la prioridad: ${await respuesta.text()}`);
+     return;
+   }
+   await cargarTickets();
+ };
+
  useEffect(()=>{
    // Intento de geolocalizacion del navegador: base para, a futuro, ubicar el
    // mapa segun la direccion real donde se este utilizando el sistema.
@@ -3775,6 +3976,7 @@ const spawnEmergencia = (): Emergency => {
         tickets={tickets}
         onResponder={(id,mensaje)=>responderTicketBD(id,mensaje,'Respuesta')}
         onCambiarEstado={cambiarEstadoTicketBD}
+        onCambiarPrioridad={cambiarPrioridadTicketBD}
       />
     )}
     {section==='Dashboard' && !isAdminSoporte && <>
