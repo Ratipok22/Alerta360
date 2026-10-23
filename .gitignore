@@ -19,4 +19,4 @@ src/backend/ml/artifacts/*.joblib
 # Historial de acciones persistido en archivo local (no en Postgres, ver
 # /historial en main.py) -- es estado en tiempo de ejecucion, no codigo.
 src/backend/historial_acciones.json
-**/doc
+**/docs
