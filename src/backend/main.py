@@ -78,15 +78,49 @@ class Emergency(BaseModel):
     lng: float
 
 
+def usuario_actual(authorization: str | None = Header(default=None)) -> Usuario:
+    """Dependencia de FastAPI: exige un JWT valido en el header
+    Authorization: Bearer <token> para acceder a los endpoints reales de
+    datos -- ver core/auth.py."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="No autenticado")
+    usuario = verificar_token(authorization.split(" ", 1)[1])
+    if not usuario:
+        raise HTTPException(status_code=401, detail="Sesión inválida o expirada, inicia sesión de nuevo")
+    return usuario
+
+def requiere_admin(usuario: Usuario = Depends(usuario_actual)) -> Usuario:
+    """Dependencia de FastAPI para RBAC: exige ademas que el operador
+    autenticado tenga rol "admin" (coordinacion/despacho). El rol se lee
+    siempre desde core.auth.USUARIOS (la fuente de verdad del servidor),
+    nunca de un dato que venga del cliente -- asi que no se puede escalar
+    privilegios manipulando el token ni la app."""
+    if usuario.rol != "admin":
+        raise HTTPException(status_code=403, detail="Tu cuenta no tiene permiso para realizar esta acción (rol de solo lectura)")
+    return usuario
+
+def requiere_admin_o_visualizador(usuario: Usuario = Depends(usuario_actual)) -> Usuario:
+    """Igual que requiere_admin pero tambien deja pasar al rol
+    "visualizador" -- usado solo para la accion puntual de marcar un
+    recurso Fuera de servicio/Disponible (ver PATCH /resources/{..}/estado),
+    que el equipo decidio abrir a visualizador aunque el resto del
+    despacho/asignacion se mantiene exclusivo de admin."""
+    if usuario.rol not in ("admin", "visualizador"):
+        raise HTTPException(status_code=403, detail="Tu cuenta no tiene permiso para realizar esta acción")
+    return usuario
+
+
 #-------------------------------NUeva para la base de datos
 class EmergencyCreate(BaseModel):
     codigo_emergencia: str
-    direccion_emergencia: str | None = None
-    latitud_emergencia: float | None = None
-    longitud_emergencia: float | None = None
+    direccion_emergencia: str
+    latitud_emergencia: float
+    longitud_emergencia: float
     prioridad_emergencia: int
-    estado_emergencia: str
     id_zona: int | None = None
+    # estado_emergencia NO viene del cliente: el formulario de ingreso
+    # rapido (CAD) solo crea emergencias nuevas, siempre "Activa" -- se
+    # fuerza server-side en vez de confiar en lo que mande el frontend.
 
 #-------------------------------
 
@@ -108,7 +142,26 @@ def health():
 
 #NUEVA PARA LA BASE DE DATOS -------------------------------
 @app.post("/emergencies")
-def crear_emergencia(datos: EmergencyCreate):
+def crear_emergencia(datos: EmergencyCreate, usuario: Usuario = Depends(requiere_admin)):
+    """Ingreso rapido de emergencias (CAD) -- solo admin (ver requiere_admin).
+    El codigo debe existir en el catalogo real (emergencia.tipo_emergencia,
+    el mismo que expone GET /catalog/claves) para no insertar una clave
+    inventada que despues rompa el JOIN de GET /emergencies. El estado
+    siempre se fuerza a 'Activa': este endpoint solo sirve para reportar
+    una emergencia nueva, nunca para crear una ya cerrada.
+
+    La validacion es contra emergencia.tipo_emergencia (obtener_tipos()),
+    NO contra CLAVES_RADIALES -- ese dict en core/radio_codes.py es un
+    subconjunto mas chico (solo los codigos con requisitos de unidades ya
+    modelados para el algoritmo de asignacion) y quedaria desactualizado
+    cada vez que se agrega un codigo nuevo solo al catalogo de la base."""
+    codigos_validos = {t["codigo"] for t in obtener_tipos()}
+    if datos.codigo_emergencia not in codigos_validos:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Código de emergencia '{datos.codigo_emergencia}' no existe en el catálogo.",
+        )
+
     conexion = None
 
     try:
@@ -125,7 +178,7 @@ def crear_emergencia(datos: EmergencyCreate):
                     prioridad_emergencia,
                     estado_emergencia, id_zona
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, 'Activa', %s)
                 RETURNING id_emergencia,
                           codigo_emergencia,
                           direccion_emergencia,
@@ -141,7 +194,6 @@ def crear_emergencia(datos: EmergencyCreate):
                     datos.latitud_emergencia,
                     datos.longitud_emergencia,
                     datos.prioridad_emergencia,
-                    datos.estado_emergencia,
                     datos.id_zona,
                 ),
             )
@@ -248,26 +300,9 @@ def login(datos: LoginRequest):
         raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
     return LoginResponse(token=crear_token(usuario), nombre=usuario.nombre, email=usuario.email, rol=usuario.rol)
 
-def usuario_actual(authorization: str | None = Header(default=None)) -> Usuario:
-    """Dependencia de FastAPI: exige un JWT valido en el header
-    Authorization: Bearer <token> para acceder a los endpoints reales de
-    datos -- ver core/auth.py."""
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="No autenticado")
-    usuario = verificar_token(authorization.split(" ", 1)[1])
-    if not usuario:
-        raise HTTPException(status_code=401, detail="Sesión inválida o expirada, inicia sesión de nuevo")
-    return usuario
-
-def requiere_admin(usuario: Usuario = Depends(usuario_actual)) -> Usuario:
-    """Dependencia de FastAPI para RBAC: exige ademas que el operador
-    autenticado tenga rol "admin" (coordinacion/despacho). El rol se lee
-    siempre desde core.auth.USUARIOS (la fuente de verdad del servidor),
-    nunca de un dato que venga del cliente -- asi que no se puede escalar
-    privilegios manipulando el token ni la app."""
-    if usuario.rol != "admin":
-        raise HTTPException(status_code=403, detail="Tu cuenta no tiene permiso para realizar esta acción (rol de solo lectura)")
-    return usuario
+# usuario_actual y requiere_admin se definen mas arriba, antes de
+# EmergencyCreate/crear_emergencia (que ahora los necesita para exigir rol
+# admin al crear una emergencia manualmente).
 
 @app.get("/auth/me")
 def auth_me(usuario: Usuario = Depends(usuario_actual)):
@@ -411,6 +446,43 @@ def actualizar_posicion_recurso(
         conexion.rollback()
         raise
 
+    finally:
+        conexion.close()
+
+class EstadoRecursoUpdate(BaseModel):
+    estado: Literal["6-0", "6-9"]
+
+@app.patch("/resources/{codigo_recurso}/estado")
+def cambiar_estado_recurso(
+    codigo_recurso: str,
+    datos: EstadoRecursoUpdate,
+    usuario: Usuario = Depends(requiere_admin_o_visualizador),
+):
+    """Marcar Fuera de servicio (6-9) / Disponible (6-0) -- a diferencia de
+    PATCH /resources/{..}/position (que tambien mueve el vehiculo durante
+    el despacho y sigue siendo solo-admin), este endpoint NO toca
+    latitud/longitud y por eso puede abrirse tambien a visualizador sin
+    permitirle mover ni asignar unidades."""
+    conexion = obtener_conexion()
+    try:
+        with conexion.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE emergencia.recurso
+                SET estado_radio = %s
+                WHERE codigo_recurso = %s
+                RETURNING id_recurso, codigo_recurso, estado_radio
+                """,
+                (datos.estado, codigo_recurso),
+            )
+            fila = cursor.fetchone()
+            if fila is None:
+                raise HTTPException(status_code=404, detail=f"No existe el recurso {codigo_recurso}")
+        conexion.commit()
+        return {"ok": True, "id_recurso": fila[0], "codigo_recurso": fila[1], "estado": fila[2]}
+    except Exception:
+        conexion.rollback()
+        raise
     finally:
         conexion.close()
 

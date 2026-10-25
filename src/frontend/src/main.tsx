@@ -3,7 +3,7 @@ import {createRoot} from 'react-dom/client';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
-import {AlertTriangle, BarChart3, Building2, CheckCircle2, Clock3, Crosshair, Download, Droplet, Eye, Flame, HardHat, History, Info, LifeBuoy, Lightbulb, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Paperclip, Phone, Radio, Send, Settings, ShieldCheck, Sun, Ticket, Truck, TreePine, Users, XCircle, Zap, Bug} from 'lucide-react';
+import {AlertTriangle, BarChart3, Building2, CheckCircle2, Clock3, Crosshair, Download, Droplet, Eye, FilePlus2, Flame, HardHat, History, Info, LifeBuoy, Lightbulb, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Paperclip, Phone, Radio, Send, Settings, ShieldCheck, Sun, Ticket, Truck, TreePine, Users, XCircle, Zap, Bug} from 'lucide-react';
 import logoDark from "./assets/logo-alerta360-dark.png";
 import logoLight from "./assets/logo-alerta360-light.png";
 
@@ -761,6 +761,275 @@ function fixMapSize(map:L.Map):()=>void{
   };
 }
 
+// Mapa minimo y propio del formulario de "Nueva emergencia" -- a diferencia
+// de MapPanel (cuarteles, unidades animadas, asignacion), aca solo importa
+// una cosa: donde hace clic el operador. El click pone/mueve un marcador y
+// entrega lat/lng en crudo; el operador NUNCA digita coordenadas a mano,
+// tal como pide la especificacion del formulario CAD.
+function MapaSeleccionUbicacion({lat, lng, onSeleccionar}:{lat:number|null; lng:number|null; onSeleccionar:(lat:number, lng:number)=>void}){
+  const mapRef=useRef<L.Map|null>(null);
+  const markerRef=useRef<L.Marker|null>(null);
+  const onSeleccionarRef=useRef(onSeleccionar);
+  onSeleccionarRef.current=onSeleccionar;
+
+  useEffect(()=>{
+    const map=L.map('form-map',{zoomControl:true}).setView(
+      [lat??VALPARAISO_CENTER.lat, lng??VALPARAISO_CENTER.lng], 13
+    );
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors'}).addTo(map);
+    map.on('click',(e:L.LeafletMouseEvent)=>{ onSeleccionarRef.current(e.latlng.lat, e.latlng.lng); });
+    mapRef.current=map;
+    const cleanupResize=fixMapSize(map);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return()=>{ cleanupResize(); map.remove(); mapRef.current=null; markerRef.current=null; };
+  },[]);
+
+  // El marcador se mueve/crea por separado del mapa (que solo se crea una
+  // vez) -- asi un punto elegido por el buscador de direcciones tambien
+  // actualiza el pin sin tener que recrear el mapa entero.
+  useEffect(()=>{
+    const map=mapRef.current;
+    if(!map) return;
+    if(lat==null || lng==null){
+      markerRef.current?.remove();
+      markerRef.current=null;
+      return;
+    }
+    if(markerRef.current){
+      markerRef.current.setLatLng([lat,lng]);
+    }else{
+      markerRef.current=L.marker([lat,lng]).addTo(map);
+    }
+    map.setView([lat,lng], map.getZoom());
+  },[lat,lng]);
+
+  return <div id="form-map" className="formMapaUbicacion"/>;
+}
+
+// Combobox con filtrado dinamico de claves radiales (10-0, 10-1, ...) --
+// reutiliza el mismo catalogo real (`claves`, desde GET /catalog/claves)
+// que ya usa el resto del dashboard, no una lista propia que se pueda
+// desincronizar de la base de datos.
+function ComboCodigoEmergencia({claves, onElegir}:{claves:Record<string,Clave>; onElegir:(codigo:string)=>void}){
+  const [texto,setTexto]=useState('');
+  const [abierto,setAbierto]=useState(false);
+  const [indiceActivo,setIndiceActivo]=useState(0);
+
+  // Orden NUMERICO, no alfabetico -- "10-10".localeCompare("10-2") los
+  // ordenaba como texto (1 < 2, asi que 10-10 quedaba antes que 10-2).
+  // Se extrae el ultimo segmento numerico de cada codigo para comparar.
+  const numeroClave=(codigo:string)=>Number(codigo.split('-').pop());
+  const listaClaves=useMemo(
+    ()=>Object.values(claves).sort((a,b)=>numeroClave(a.codigo)-numeroClave(b.codigo)),
+    [claves]
+  );
+  const filtradas=useMemo(()=>{
+    const q=texto.trim().toLowerCase();
+    if(!q) return listaClaves;
+    return listaClaves.filter(c=>c.codigo.toLowerCase().includes(q) || c.nombre.toLowerCase().includes(q));
+  },[listaClaves, texto]);
+
+  const elegir=(c:Clave)=>{
+    setTexto(`${c.codigo} · ${c.nombre}`);
+    onElegir(c.codigo);
+    setAbierto(false);
+  };
+
+  return (
+    <div className="comboClave">
+      <input
+        type="text"
+        value={texto}
+        onChange={e=>{ setTexto(e.target.value); setAbierto(true); setIndiceActivo(0); }}
+        onFocus={()=>setAbierto(true)}
+        onBlur={()=>window.setTimeout(()=>setAbierto(false),150)}
+        onKeyDown={e=>{
+          if(e.key==='ArrowDown'){ e.preventDefault(); setIndiceActivo(i=>Math.min(i+1, filtradas.length-1)); }
+          else if(e.key==='ArrowUp'){ e.preventDefault(); setIndiceActivo(i=>Math.max(i-1,0)); }
+          else if(e.key==='Enter'){ e.preventDefault(); if(filtradas[indiceActivo]) elegir(filtradas[indiceActivo]); }
+        }}
+        placeholder="Buscar clave (ej: 10-0 o incendio)"
+      />
+      {abierto && filtradas.length>0 && (
+        <ul className="comboClaveLista">
+          {filtradas.map((c,i)=>(
+            <li
+              key={c.codigo}
+              className={i===indiceActivo?'activo':''}
+              onMouseDown={()=>elegir(c)}
+            >
+              <strong>{c.codigo}</strong> {c.nombre}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// Busqueda de direcciones contra Nominatim (API publica de OpenStreetMap,
+// sin API key). No hay geocodificacion propia en el proyecto -- OSRM solo
+// calcula rutas, no busca direcciones. Debounce de 500ms para no pasarse
+// del limite de uso de Nominatim (1 solicitud/seg) mientras el operador
+// sigue escribiendo.
+function useBuscadorDirecciones(){
+  const [sugerencias,setSugerencias]=useState<{display_name:string; lat:string; lon:string}[]>([]);
+  // Estado visible del buscador -- antes, mientras no habia resultados, no
+  // se mostraba nada y parecia que el autocompletado no hacia nada (aunque
+  // si estaba funcionando, solo que en silencio).
+  const [estado,setEstado]=useState<'inactivo'|'buscando'|'sin_resultados'|'error'>('inactivo');
+  const temporizadorRef=useRef<number|null>(null);
+
+  const buscar=(texto:string)=>{
+    if(temporizadorRef.current) window.clearTimeout(temporizadorRef.current);
+    const q=texto.trim();
+    if(q.length<3){ setSugerencias([]); setEstado('inactivo'); return; }
+    setEstado('buscando');
+    temporizadorRef.current=window.setTimeout(async()=>{
+      try{
+        const params=new URLSearchParams({
+          format:'json',
+          q,
+          countrycodes:'cl',
+          // Caja aproximada de la Region de Valparaiso, para priorizar
+          // resultados locales (formato Nominatim: min_lon,max_lat,max_lon,min_lat).
+          viewbox:'-71.75,-32.60,-71.30,-33.30',
+          bounded:'1',
+          limit:'5',
+        });
+        const resp=await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`);
+        if(!resp.ok) throw new Error('Nominatim no respondió');
+        const datos=await resp.json();
+        setSugerencias(datos);
+        setEstado(datos.length?'inactivo':'sin_resultados');
+      }catch(error){
+        console.error('No se pudo buscar la dirección en Nominatim:', error);
+        setSugerencias([]);
+        setEstado('error');
+      }
+    },500);
+  };
+
+  return {sugerencias, estado, buscar, limpiar:()=>{ setSugerencias([]); setEstado('inactivo'); }};
+}
+
+// Formulario "Nueva emergencia" (CAD) -- solo visible para admin (ver nav
+// del sidebar). Codigo (typeahead sobre el catalogo real), direccion (texto
+// + autocompletado Nominatim) y georreferenciacion (clic en el mapa, nunca
+// coordenadas digitadas a mano). La prioridad ya no se pide ni se muestra
+// como campo: se calcula sola desde el codigo elegido y se envia asi nomas.
+function NuevaEmergenciaView({claves, onCrear}:{
+  claves:Record<string,Clave>;
+  onCrear:(payload:{codigo_emergencia:string; direccion_emergencia:string; latitud_emergencia:number; longitud_emergencia:number; prioridad_emergencia:number})=>Promise<{id_emergencia:number; codigo_emergencia:string}>;
+}){
+  const [codigo,setCodigo]=useState('');
+  const [direccion,setDireccion]=useState('');
+  const [lat,setLat]=useState<number|null>(null);
+  const [lng,setLng]=useState<number|null>(null);
+  // La prioridad ya NO la elige el operador: se detecta sola a partir del
+  // código de emergencia (catalogo real, GET /catalog/claves). Sin código
+  // elegido todavia no hay prioridad que mostrar.
+  const [prioridad,setPrioridad]=useState<number|null>(null);
+  const [enviando,setEnviando]=useState(false);
+  const {sugerencias, estado:estadoBusquedaDireccion, buscar, limpiar}=useBuscadorDirecciones();
+
+  const elegirCodigo=(cod:string)=>{
+    setCodigo(cod);
+    const clave=claves[cod];
+    setPrioridad(clave?Number(clave.prioridad):null);
+  };
+
+  const elegirDireccionSugerida=(s:{display_name:string; lat:string; lon:string})=>{
+    setDireccion(s.display_name.toUpperCase());
+    setLat(Number(s.lat));
+    setLng(Number(s.lon));
+    limpiar();
+  };
+
+  // Geocodificacion INVERSA: al marcar un punto directo en el mapa (sin
+  // pasar por el buscador de texto), se completa sola la direccion con lo
+  // que haya en ese punto segun OpenStreetMap -- el operador puede seguir
+  // editandola a mano despues si el nombre no calza exacto.
+  const seleccionarEnMapa=async(la:number, lo:number)=>{
+    setLat(la);
+    setLng(lo);
+    try{
+      const params=new URLSearchParams({format:'json', lat:String(la), lon:String(lo)});
+      const resp=await fetch(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`);
+      if(!resp.ok) return;
+      const datos=await resp.json();
+      if(datos?.display_name) setDireccion(String(datos.display_name).toUpperCase());
+    }catch(error){
+      console.error('No se pudo obtener la dirección del punto marcado:', error);
+    }
+  };
+
+  const crear=async()=>{
+    if(!codigo || prioridad==null){ alert('Selecciona un código de emergencia.'); return; }
+    if(!direccion.trim()){ alert('Ingresa la dirección.'); return; }
+    if(lat==null || lng==null){ alert('Marca la ubicación en el mapa (clic sobre el punto real).'); return; }
+    setEnviando(true);
+    try{
+      await onCrear({
+        codigo_emergencia:codigo,
+        direccion_emergencia:direccion.trim(),
+        latitud_emergencia:lat,
+        longitud_emergencia:lng,
+        prioridad_emergencia:prioridad,
+      });
+      setCodigo(''); setDireccion(''); setLat(null); setLng(null); setPrioridad(null);
+    }catch(error){
+      alert(error instanceof Error?error.message:'No se pudo crear la emergencia.');
+    }finally{
+      setEnviando(false);
+    }
+  };
+
+  return (
+    <div className="card sectionCard nuevaEmergenciaCard">
+      <div className="cardHead"><div><b>Nueva emergencia</b><span>Ingreso rápido para despacho (CAD)</span></div></div>
+
+      <div className="nuevaEmergenciaGrid">
+
+        <label className="nuevaEmergenciaCampo">
+          1. Código de emergencia
+          <ComboCodigoEmergencia claves={claves} onElegir={elegirCodigo}/>
+        </label>
+
+        <label className="nuevaEmergenciaCampo">
+          2. Dirección / ubicación
+          <input
+            type="text"
+            value={direccion}
+            onChange={e=>{ const v=e.target.value.toUpperCase(); setDireccion(v); buscar(v); }}
+            placeholder="AV. ARGENTINA, BARRIO ALMENDRAL, VALPARAÍSO"
+          />
+          {sugerencias.length>0 && (
+            <ul className="comboDireccionLista">
+              {sugerencias.map((s,i)=>(
+                <li key={i} onMouseDown={()=>elegirDireccionSugerida(s)}>{s.display_name}</li>
+              ))}
+            </ul>
+          )}
+          {estadoBusquedaDireccion==='buscando' && <small className="estadoBusquedaDireccion">Buscando direcciones…</small>}
+          {estadoBusquedaDireccion==='sin_resultados' && <small className="estadoBusquedaDireccion">Sin resultados para esa búsqueda. Prueba solo con el nombre de la calle (ej. "Pedro Montt").</small>}
+          {estadoBusquedaDireccion==='error' && <small className="estadoBusquedaDireccion error">No se pudo conectar al buscador de direcciones. Puedes seguir marcando el punto directo en el mapa.</small>}
+        </label>
+
+        <div className="nuevaEmergenciaCampo nuevaEmergenciaCampoMapa">
+          3. Georreferenciación (toca el mapa para marcar el punto)
+          <MapaSeleccionUbicacion lat={lat} lng={lng} onSeleccionar={seleccionarEnMapa}/>
+          {lat!=null && lng!=null && <small className="nuevaEmergenciaCoords">Lat {lat.toFixed(5)}, Lng {lng.toFixed(5)}</small>}
+          <button className="nuevaEmergenciaCrearBtn" onClick={crear} disabled={enviando}>
+            {enviando?'Creando…':'Crear y generar recomendación'}
+          </button>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
 // Icono de vehiculo EN MOVIMIENTO: una silueta orientada segun el rumbo
 // real de viaje (rumboGrados), en un contenedor que NO rota (para que la
 // insignia con el tipo de unidad se mantenga siempre legible), con un
@@ -844,6 +1113,13 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
   emergenciesRef.current=emergencies;
   const isAdminRef=useRef(isAdmin);
   isAdminRef.current=isAdmin;
+  // Que popup de emergencia esta abierto ahora mismo (si hay uno). La capa
+  // de emergencias/cuarteles se destruye y reconstruye entera cada vez que
+  // cambian los datos (p.ej. el refresco automatico de la cola cada 10s),
+  // lo que cierra cualquier popup abierto sobre ella -- esto deja registro
+  // de cual estaba abierta para volver a abrirla justo despues de recrear
+  // los marcadores, en vez de que se cierre sola sin que el operador la cerrara.
+  const emergenciaPopupAbiertaRef=useRef<number|null>(null);
   // Capa "estatica": emergencias, marcador de emergencia asignada y el
   // trazado de ruta -- se redibuja solo cuando cambian los datos (no en
   // cada tick), porque nada de esto se mueve cuadro a cuadro.
@@ -914,6 +1190,11 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
   useEffect(()=>{
     const layer=layerRef.current;
     if(!layer) return;
+    // Se congela ANTES de clearLayers(): si clearLayers() dispara
+    // "popupclose" sobre el marcador que se esta destruyendo, el ref ya
+    // quedaria en null antes de llegar al forEach de abajo, y el marcador
+    // nuevo de esa misma emergencia nunca se reabriria.
+    const idPopupAbiertaAntes=emergenciaPopupAbiertaRef.current;
     layer.clearLayers();
     // Marcador de cuartel: FIJO, uno por compañía (varias unidades pueden
     // compartir el mismo cuartel), nunca se mueve -- independiente del
@@ -939,10 +1220,13 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
       }).addTo(layer).bindTooltip(`${compania} · ${sector}`).bindPopup(()=>popupCuartel(compania, sector, unidades, emergenciesRef.current.length>0, isAdminRef.current));
     });
     emergencies.forEach(e=>{
-      L.marker([e.lat,e.lng],{icon:L.divIcon({className:'emergency-marker',html:'<div>!</div>',iconSize:[36,36],iconAnchor:[18,18]})})
+      const marker=L.marker([e.lat,e.lng],{icon:L.divIcon({className:'emergency-marker',html:'<div>!</div>',iconSize:[36,36],iconAnchor:[18,18]})})
         .addTo(layer)
         .bindPopup(`<b>Emergencia #${e.id}</b><br/>Clave ${e.codigo}<br/>${e.address}`)
-        .on('click', ()=>onSelectEmergenciaRef.current?.(e.id));
+        .on('click', ()=>onSelectEmergenciaRef.current?.(e.id))
+        .on('popupopen', ()=>{ emergenciaPopupAbiertaRef.current=e.id; })
+        .on('popupclose', ()=>{ if(emergenciaPopupAbiertaRef.current===e.id) emergenciaPopupAbiertaRef.current=null; });
+      if(idPopupAbiertaAntes===e.id) marker.openPopup();
     });
     // Emergencias ya asignadas (fuera de la cola) pero que aun tienen una unidad
     // en camino o trabajando: se mantienen marcadas para que la ruta apunte a
@@ -952,10 +1236,13 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
       if(r.destino && (r.radioState==='6-3'||r.radioState==='6-7') && !destinosMostrados.has(r.destino.emergenciaId)){
         destinosMostrados.add(r.destino.emergenciaId);
         const idEmergenciaDestino=r.destino.emergenciaId;
-        L.marker([r.destino.lat,r.destino.lng],{icon:L.divIcon({className:'emergency-marker emergency-marker-asignada',html:'<div>✓</div>',iconSize:[34,34],iconAnchor:[17,17]})})
+        const markerAsignada=L.marker([r.destino.lat,r.destino.lng],{icon:L.divIcon({className:'emergency-marker emergency-marker-asignada',html:'<div>✓</div>',iconSize:[34,34],iconAnchor:[17,17]})})
           .addTo(layer)
           .bindPopup(`<b>Emergencia #${idEmergenciaDestino}</b><br/>${r.destino.address}<br/><i>Asignada</i>`)
-          .on('click', ()=>onSelectEmergenciaRef.current?.(idEmergenciaDestino));
+          .on('click', ()=>onSelectEmergenciaRef.current?.(idEmergenciaDestino))
+          .on('popupopen', ()=>{ emergenciaPopupAbiertaRef.current=idEmergenciaDestino; })
+          .on('popupclose', ()=>{ if(emergenciaPopupAbiertaRef.current===idEmergenciaDestino) emergenciaPopupAbiertaRef.current=null; });
+        if(idPopupAbiertaAntes===idEmergenciaDestino) markerAsignada.openPopup();
       }
     });
     resources.forEach(r=>{
@@ -1161,7 +1448,7 @@ function EmergenciasView({queue,claves,now,onAtender,onVerUbicacion,isAdmin}:{qu
 }
 
 const TODOS='todos' as const;
-function RecursosView({resources,alertaTimeoutIds,onVerCuartelEnMapa,isAdmin,onCambiarFueraDeServicio}:{resources:Resource[];alertaTimeoutIds:Set<string>;onVerCuartelEnMapa:(lat:number,lng:number)=>void;isAdmin:boolean;onCambiarFueraDeServicio:(resource:Resource, nuevoEstado:'6-0'|'6-9')=>void}){
+function RecursosView({resources,alertaTimeoutIds,onVerCuartelEnMapa,isAdmin,puedeCambiarEstado,onCambiarFueraDeServicio}:{resources:Resource[];alertaTimeoutIds:Set<string>;onVerCuartelEnMapa:(lat:number,lng:number)=>void;isAdmin:boolean;puedeCambiarEstado:boolean;onCambiarFueraDeServicio:(resource:Resource, nuevoEstado:'6-0'|'6-9')=>void}){
   const [busqueda,setBusqueda]=useState('');
   const [filtroTipo,setFiltroTipo]=useState<typeof TODOS|ResourceType>(TODOS);
   const [filtroEstado,setFiltroEstado]=useState<typeof TODOS|RadioState>(TODOS);
@@ -1186,7 +1473,7 @@ function RecursosView({resources,alertaTimeoutIds,onVerCuartelEnMapa,isAdmin,onC
       </select>
     </div>
     <div className="tableWrap"><table className="dataTable">
-      <thead><tr><th></th><th>Unidad</th><th>Compañía</th><th>Sector</th><th>Tipo</th><th>Dotación</th><th>Distancia</th><th>ETA</th><th>Estado</th>{isAdmin && <th></th>}</tr></thead>
+      <thead><tr><th></th><th>Unidad</th><th>Compañía</th><th>Sector</th><th>Tipo</th><th>Dotación</th><th>Distancia</th><th>ETA</th><th>Estado</th>{puedeCambiarEstado && <th></th>}</tr></thead>
       <tbody>{filtrados.length?filtrados.map(r=><tr key={r.id}>
         <td className="resIconCell">{resourceIcon(r.type)}</td>
         <td className="wrap resNombreCell">{r.name}</td>
@@ -1197,14 +1484,14 @@ function RecursosView({resources,alertaTimeoutIds,onVerCuartelEnMapa,isAdmin,onC
         <td>{r.distance} km</td>
         <td>{r.eta} min</td>
         <td className="wrap resEstadoCell"><span className={`estado estado-${r.radioState.replace('6-','')}`}>{r.radioState} · {RADIO_LABELS[r.radioState]}</span>{alertaTimeoutIds.has(r.id)&&<span className="timeoutBadge" title="Sin transmisión de estado dentro del umbral configurado"><AlertTriangle size={11}/> sin transmisión</span>}</td>
-        {isAdmin && <td>
+        {puedeCambiarEstado && <td>
           {r.radioState==='6-9'
             ?<button className="reactivarBtn" onClick={()=>onCambiarFueraDeServicio(r,'6-0')}>Reactivar</button>
             :r.radioState==='6-0'
               ?<button className="fueraServicioBtn" onClick={()=>onCambiarFueraDeServicio(r,'6-9')}>Fuera de servicio</button>
               :null}
         </td>}
-      </tr>):<tr><td colSpan={isAdmin?10:9}><p className="emptyState">Ninguna unidad coincide con el filtro.</p></td></tr>}</tbody>
+      </tr>):<tr><td colSpan={puedeCambiarEstado?10:9}><p className="emptyState">Ninguna unidad coincide con el filtro.</p></td></tr>}</tbody>
     </table></div>
   </div>;
 }
@@ -2168,7 +2455,9 @@ const handleLogin=(
   rol:UserRole
 )=>{
   setAuth({token,nombre,email,rol});
-  setSection(rol==='soporte'?'Tickets':'Dashboard');
+  // Admin entra directo al formulario de ingreso rapido de emergencias
+  // (CAD) -- visualizador y soporte mantienen su landing de siempre.
+  setSection(rol==='soporte'?'Tickets':rol==='admin'?'Formulario':'Dashboard');
 };
 
  const handleLogout=()=>{
@@ -3006,7 +3295,15 @@ const intentarPatrullaje = async () => {
  // Filtro global por cuartel (solo Dashboard): lista de companias reales
  // disponibles y el subconjunto de recursos de la compañia elegida. Con
  // 'todos' no se filtra nada -- se usa el listado completo de siempre.
- const companiasDisponibles=useMemo(()=>Array.from(new Set(resources.map(r=>r.compania))).sort(),[resources]);
+ // Orden NUMERICO por el numero de compañia ("1ª Cía...", "2ª Cía...",
+ // "10ª Cía..."), no alfabetico -- .sort() por defecto compara como texto
+ // y dejaba "10ª" antes que "1ª" (el caracter despues del "1" en "10ª" es
+ // "0", que es menor que "ª" en "1ª").
+ const numeroCompania=(nombre:string)=>Number(nombre.match(/^(\d+)/)?.[1] ?? Infinity);
+ const companiasDisponibles=useMemo(
+   ()=>Array.from(new Set(resources.map(r=>r.compania))).sort((a,b)=>numeroCompania(a)-numeroCompania(b)),
+   [resources]
+ );
  const resourcesFiltrados=useMemo(
    ()=>filtroCuartel==='todos'?resources:resources.filter(r=>r.compania===filtroCuartel),
    [resources, filtroCuartel]
@@ -3574,6 +3871,14 @@ const spawnEmergencia = (): Emergency => {
     await cambiarEstadoEmergenciaBD(emergenciaSnap.id, 'ASIGNADA');
     setQueue(q => q.map(e => e.id === emergenciaSnap.id ? {...e, status: 'Asignada'} : e));
 
+    // Si esta era la emergencia elegida a mano (clic en el mapa o recien
+    // creada desde el formulario), se suelta esa seleccion manual apenas
+    // se le asigna un recurso -- si no, "RECURSO RECOMENDADO" se quedaba
+    // pegado en ella mostrando "ya tiene una unidad respondiendo" para
+    // siempre, en vez de pasar sola a la siguiente emergencia Activa que
+    // todavia necesita despacho (ver currentEmergencia).
+    setEmergenciaSeleccionadaId(id => id === emergenciaSnap.id ? null : id);
+
     // Solo ahora comienza el desplazamiento.
     clearResourceTimers(resourceId);
     enPatrullajeRef.current.delete(resourceId);
@@ -3704,13 +4009,17 @@ const spawnEmergencia = (): Emergency => {
  // tiene sentido sacar de servicio a un carro a mitad de un despacho real.
  // Reusa el mismo PATCH de posicion que ya usa el resto del despacho, sin
  // mover al vehiculo (mismas coordenadas), solo cambia el estado_radio.
+ // Fuera de servicio/Reactivar: abierto a admin Y visualizador (a
+ // diferencia del resto del despacho/asignacion, que sigue siendo solo de
+ // admin) -- por eso usa /estado, no /position, que ademas mueve el
+ // vehiculo y se mantiene exclusivo de admin en el backend.
  const cambiarFueraDeServicio=async(resource:Resource, nuevoEstado:'6-0'|'6-9')=>{
-   if(!isAdmin) return;
+   if(isAdminSoporte) return;
    try{
-     const respuesta=await fetch(`${API_BASE}/resources/${encodeURIComponent(resource.codigo ?? resource.id)}/position`,{
+     const respuesta=await fetch(`${API_BASE}/resources/${encodeURIComponent(resource.codigo ?? resource.id)}/estado`,{
        method:'PATCH', credentials:'include',
        headers:{'Content-Type':'application/json', ...authHeaders()},
-       body:JSON.stringify({lat:resource.lat, lng:resource.lng, estado:nuevoEstado}),
+       body:JSON.stringify({estado:nuevoEstado}),
      });
      if(!respuesta.ok) throw new Error(`HTTP ${respuesta.status}: ${await respuesta.text()}`);
      setResources(rs=>{
@@ -3724,6 +4033,37 @@ const spawnEmergencia = (): Emergency => {
      console.error('No se pudo cambiar el estado del recurso:', error);
      notify(error instanceof Error?error.message:'No se pudo cambiar el estado del recurso.');
    }
+ };
+
+ // Formulario "Nueva emergencia" (admin) -- POST /emergencies ya existia en
+ // el backend sin usar desde el frontend; esto lo conecta. Tras crearla se
+ // refresca `queue` de inmediato (sin esperar el poll de 10s), se manda al
+ // operador al Dashboard, y se fuerza esa emergencia como la seleccionada
+ // (mismo mecanismo que tocar su marcador en el mapa) para que la
+ // recomendacion de recurso aparezca de inmediato sobre la que acaba de crear.
+ const recargarEmergenciasAhora=async()=>{
+   try{
+     const emergencias=await obtenerEmergenciasBD();
+     setQueue(emergencias);
+     setApiError(null);
+   }catch(error){
+     console.error('No se pudieron recargar las emergencias:', error);
+   }
+ };
+
+ const crearEmergenciaBD=async(payload:{codigo_emergencia:string; direccion_emergencia:string; latitud_emergencia:number; longitud_emergencia:number; prioridad_emergencia:number})=>{
+   const respuesta=await fetch(`${API_BASE}/emergencies`,{
+     method:'POST', credentials:'include',
+     headers:{'Content-Type':'application/json', ...authHeaders()},
+     body:JSON.stringify(payload),
+   });
+   if(!respuesta.ok) throw new Error(`HTTP ${respuesta.status}: ${await respuesta.text()}`);
+   const creada=await respuesta.json();
+   await recargarEmergenciasAhora();
+   setSection('Dashboard');
+   setEmergenciaSeleccionadaId(creada.id_emergencia);
+   pushHistorial('nueva_emergencia', `Emergencia #${creada.id_emergencia} (${creada.codigo_emergencia}) creada manualmente desde el formulario`);
+   return creada;
  };
 
  // Tickets de Soporte contra Postgres real (ticket/respuesta_ticket/
@@ -3931,6 +4271,10 @@ const spawnEmergencia = (): Emergency => {
   ) : (
     <>
       {[
+        // "Formulario" (ingreso rapido de emergencias, CAD) solo para admin
+        // -- cambia el orden y el flujo de navegacion unicamente en esa
+        // vista; visualizador mantiene exactamente el menu de siempre.
+        ...(isAdmin ? [['Formulario',FilePlus2]] : []),
         ['Dashboard',BarChart3],
         ['Emergencias',AlertTriangle],
         ['Recursos',Truck],
@@ -3957,9 +4301,10 @@ const spawnEmergencia = (): Emergency => {
     ? 'Gestión de tickets de soporte'
     : <>Central de coordinación · Valparaíso{!isAdmin?' · Acceso de solo lectura':''}{!isAdmin && esperandoEstadoRemoto?' · Esperando datos en vivo del operador…':''}{!isAdmin && estadoRemoto?` · En vivo (operador: ${estadoRemoto.publicadoPor})`:''}</>
   }
-</p></div><div className="headerActions">{!isAdmin && !isAdminSoporte && <div className="readOnlyBadge" title="Tu cuenta solo puede visualizar, no asignar recursos"><Eye size={13}/> Solo lectura</div>}<button onClick={()=>setTheme(t=>t==='dark'?'light':'dark')} title={theme==='dark'?'Cambiar a tema claro':'Cambiar a tema oscuro'}>{theme==='dark'?<Sun size={17}/>:<Moon size={17}/>}</button><div className="live"><span/> EN VIVO</div><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
+</p></div><div className="headerActions">{!isAdmin && !isAdminSoporte && <div className="readOnlyBadge" title="Tu cuenta solo puede visualizar, no asignar recursos"><Eye size={13}/> Solo lectura</div>}{isAdmin && <div className="readOnlyBadge" title="Tu cuenta puede asignar recursos y despachar"><Eye size={13}/> Admin</div>}<button onClick={()=>setTheme(t=>t==='dark'?'light':'dark')} title={theme==='dark'?'Cambiar a tema claro':'Cambiar a tema oscuro'}>{theme==='dark'?<Sun size={17}/>:<Moon size={17}/>}</button><div className="live"><span/> EN VIVO</div><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
+    {section==='Formulario' && isAdmin && <NuevaEmergenciaView claves={claves} onCrear={crearEmergenciaBD}/>}
     {section==='Emergencias' && !isAdminSoporte && <EmergenciasView queue={queue} claves={claves} now={now} onAtender={atenderEmergencia} onVerUbicacion={verEmergenciaEnMapa} isAdmin={isAdmin}/>}
-    {section==='Recursos' && !isAdminSoporte && <RecursosView resources={resources} alertaTimeoutIds={unidadesConAlertaTimeout} onVerCuartelEnMapa={verCuartelEnMapa} isAdmin={isAdmin} onCambiarFueraDeServicio={cambiarFueraDeServicio}/>}
+    {section==='Recursos' && !isAdminSoporte && <RecursosView resources={resources} alertaTimeoutIds={unidadesConAlertaTimeout} onVerCuartelEnMapa={verCuartelEnMapa} isAdmin={isAdmin} puedeCambiarEstado={!isAdminSoporte} onCambiarFueraDeServicio={cambiarFueraDeServicio}/>}
     {section==='Historial' && !isAdminSoporte && <HistorialView historial={historial} now={now}/>}
     {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} onNotify={notify} auth={auth} onLogout={handleLogout} isAdmin={isAdmin} timeoutMinutos={timeoutMinutos} onChangeTimeout={setTimeoutMinutos}/>}
     {section==='Soporte' && (

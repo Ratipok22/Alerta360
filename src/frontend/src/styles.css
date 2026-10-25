@@ -2155,3 +2155,196 @@ html[data-theme="light"] .adminTicketExistingResponse{
 html[data-theme="light"] .adminTicketResponse textarea{
   background:var(--fondo-pagina);
 }
+
+
+/* =========================================================
+   NUEVA EMERGENCIA (FORMULARIO CAD, SOLO ADMIN)
+   ========================================================= */
+
+/* El encabezado ("Nueva emergencia") se centra igual que el grid de abajo
+   (mismo max-width/margin:0 auto) -- si no, su texto quedaba pegado al
+   borde izquierdo de la tarjeta completa mientras el contenido del
+   formulario (mas angosto y centrado) empezaba mas adentro. */
+.nuevaEmergenciaCard > .cardHead{
+  max-width:1200px;
+  margin:0 auto;
+}
+
+.nuevaEmergenciaCard > .cardHead b{
+  font-size:22px;
+}
+
+.nuevaEmergenciaCard > .cardHead span{
+  font-size:14px;
+}
+
+/* Responsive: crece con la ventana en vez de quedar pegado a un ancho fijo
+   chico con todo el resto de la tarjeta vacio -- hasta un tope razonable
+   (1200px) para que el texto no quede ilegible en pantallas ultra anchas,
+   y centrado dentro de la tarjeta (que ya ocupa todo el ancho disponible). */
+.nuevaEmergenciaGrid{
+  display:grid;
+  grid-template-columns:1fr;
+  gap:22px;
+  padding:20px;
+  max-width:1200px;
+  margin:0 auto;
+}
+
+.nuevaEmergenciaCampo:not(.nuevaEmergenciaCampoMapa){
+  max-width:900px;
+}
+
+.nuevaEmergenciaCampo{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  position:relative;
+
+  font-size:16px;
+  font-weight:700;
+  color:var(--gris-texto);
+}
+
+/* El desplegable de un campo (codigo/direccion) se extiende HACIA ABAJO,
+   por encima del campo siguiente -- nunca al reves. Con el mismo z-index
+   en los 3 campos, un empate no garantiza que el de arriba gane sobre el
+   de abajo (al reves, en un grid el ultimo en el DOM suele ganar), y el
+   campo 2 tapaba el desplegable del campo 1. Por eso el orden baja en
+   cascada: 1 (codigo) > 2 (direccion) > 3 (mapa).  */
+.nuevaEmergenciaGrid > *:nth-child(1){ z-index:3; }
+.nuevaEmergenciaGrid > *:nth-child(2){ z-index:2; }
+.nuevaEmergenciaCampoMapa{ z-index:1; }
+
+.estadoBusquedaDireccion{
+  color:var(--gris-tenue);
+  font-weight:500;
+  font-size:14px;
+  text-transform:none;
+}
+
+.estadoBusquedaDireccion.error{
+  color:var(--rojo-alerta);
+}
+
+.nuevaEmergenciaCampo input[type="text"]{
+  width:100%;
+  box-sizing:border-box;
+  padding:13px 16px;
+  border:1px solid var(--borde-sutil);
+  border-radius:8px;
+  background:var(--negro-panel);
+  color:var(--blanco);
+  font-size:17px;
+  font-family:inherit;
+  text-transform:uppercase;
+}
+
+.nuevaEmergenciaCampoMapa{
+  grid-column:1 / -1;
+  /* Mismo ancho que el mapa (.formMapaUbicacion), si no el margin-left:auto
+     del boton lo alineaba con el borde de toda la tarjeta en vez de con el
+     borde real del mapa, que es mas angosto. */
+  max-width:1100px;
+}
+
+.nuevaEmergenciaCoords{
+  color:var(--gris-tenue);
+  font-weight:500;
+  font-size:14px;
+  font-variant-numeric:tabular-nums;
+}
+
+.formMapaUbicacion{
+  width:100%;
+  max-width:1100px;
+  height:600px;
+  border-radius:10px;
+  overflow:hidden;
+  border:1px solid var(--borde-sutil);
+  cursor:crosshair;
+}
+
+/* "Crear y generar recomendacion" va debajo del mapa (no encima, no
+   flotando sobre el) pero pegado a su mismo costado derecho y sin la fila
+   extra con padding que antes dejaba un espacio en blanco de mas. */
+.nuevaEmergenciaCrearBtn{
+  display:block;
+  margin:14px 0 0 auto;
+  max-width:1100px;
+  width:fit-content;
+
+  padding:15px 26px;
+  border:none;
+  border-radius:8px;
+
+  background:var(--acento);
+  color:#fff;
+  font-size:16px;
+  font-weight:700;
+  font-family:inherit;
+  cursor:pointer;
+}
+
+.nuevaEmergenciaCrearBtn:disabled{
+  opacity:.6;
+  cursor:default;
+}
+
+/* Combobox de codigo de emergencia (typeahead) */
+.comboClave{
+  position:relative;
+}
+
+.comboClave input{
+  text-transform:none;
+}
+
+.comboClaveLista, .comboDireccionLista{
+  position:absolute;
+  z-index:20;
+  top:calc(100% + 4px);
+  left:0;
+  right:0;
+
+  max-height:240px;
+  overflow-y:auto;
+  margin:0;
+  padding:6px;
+  list-style:none;
+
+  background:var(--negro-panel);
+  border:1px solid var(--borde-sutil);
+  border-radius:8px;
+  box-shadow:0 8px 24px rgba(0,0,0,.35);
+}
+
+.comboClaveLista li, .comboDireccionLista li{
+  padding:11px 12px;
+  border-radius:6px;
+  font-size:15px;
+  font-weight:500;
+  text-transform:none;
+  color:var(--blanco);
+  cursor:pointer;
+}
+
+.comboClaveLista li strong{
+  margin-right:6px;
+  color:var(--acento);
+}
+
+.comboClaveLista li:hover, .comboClaveLista li.activo,
+.comboDireccionLista li:hover{
+  background:color-mix(in srgb, var(--acento) 14%, transparent);
+}
+
+/* La prioridad operacional ya no se muestra como campo del formulario --
+   se calcula y se envia sola a partir del codigo de emergencia elegido
+   (ver elegirCodigo en NuevaEmergenciaView), sin UI propia. */
+
+@media (max-width: 860px){
+  .nuevaEmergenciaGrid{
+    grid-template-columns:1fr;
+  }
+}
