@@ -2436,13 +2436,31 @@ function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRef
   </div>;
 }
 
+// Sesion persistida en localStorage para que F5/recargar la pagina no pida
+// login de nuevo. La version anterior de esto validaba el token guardado
+// de forma ASINCRONA al montar la app (un fetch a /auth/me antes de fijar
+// `auth`), y esa espera causaba una carrera real con el patrullaje: varios
+// efectos que dependen de `auth` arrancaban con `auth` todavia en null,
+// disparando llamadas (p.ej. /route) sin el header Authorization y
+// recibiendo 401 sueltos justo al reiniciar. La solucion aca es NO validar
+// nada de forma asincrona: el token guardado se confia de entrada (se lee
+// de forma SINCRONA en el useState inicial, antes de que corra ningun
+// efecto), y si en realidad ya vencio (dura 12h, ver EXPIRACION_HORAS en
+// core/auth.py), el primer fetch real que haga la app devuelve 401 y el
+// usuario simplemente tiene que loguearse de nuevo -- no distinto a lo que
+// ya pasaba antes si alguien dejaba la sesion abierta mas de 12 horas.
+const SESION_KEY='alerta360-sesion';
+const SECCION_KEY='alerta360-seccion';
+type Auth={token:string; nombre:string; email:string; rol:UserRole};
+function leerSesionGuardada():Auth|null{
+  try{
+    const raw=localStorage.getItem(SESION_KEY);
+    return raw?JSON.parse(raw):null;
+  }catch{ return null; }
+}
+
 function App(){
- // La sesion vive SOLO en memoria (no en localStorage a proposito): cada
- // vez que se recarga la pagina o se reinicia el servidor de desarrollo,
- // se pide login de nuevo. De paso, esto elimina la validacion asincrona
- // de un token guardado al montar la app -- que era la causa de una
- // carrera con el patrullaje (401 sueltos en /route justo al reiniciar).
- const [auth,setAuth]=useState<{token:string; nombre:string; email:string; rol:UserRole}|null>(null);
+ const [auth,setAuth]=useState<Auth|null>(leerSesionGuardada);
 
  // currentToken (variable de modulo) es lo que leen las funciones sueltas
  // fuera de React (obtenerRutaReal) para mandar el header Authorization.
@@ -2454,7 +2472,9 @@ const handleLogin=(
   email:string,
   rol:UserRole
 )=>{
-  setAuth({token,nombre,email,rol});
+  const sesion={token,nombre,email,rol};
+  setAuth(sesion);
+  try{ localStorage.setItem(SESION_KEY, JSON.stringify(sesion)); }catch{ /* localStorage no disponible (modo incognito, etc.) -- la sesion sigue funcionando, solo no sobrevive a un F5 */ }
   // Admin entra directo al formulario de ingreso rapido de emergencias
   // (CAD) -- visualizador y soporte mantienen su landing de siempre.
   setSection(rol==='soporte'?'Tickets':rol==='admin'?'Formulario':'Dashboard');
@@ -2462,6 +2482,7 @@ const handleLogin=(
 
  const handleLogout=()=>{
    setAuth(null);
+   try{ localStorage.removeItem(SESION_KEY); localStorage.removeItem(SECCION_KEY); }catch{ /* ignorar */ }
  };
  // RBAC: "admin" (coordinacion/despacho, puede asignar/rechazar y editar
  // configuracion administrativa) vs "visualizador" (solo lectura -- puede
@@ -2607,7 +2628,16 @@ useEffect(()=>{
 
  //--------------------------------------------
 
- const [section,setSection]=useState('Dashboard');
+ // Tambien se restaura el apartado que se estaba viendo (no solo la
+ // sesion): si no, un F5 dejaba logueado pero igual "interrumpia" saltando
+ // siempre de vuelta al Dashboard/Formulario por defecto en vez de seguir
+ // donde estaba el operador.
+ const [section,setSection]=useState<string>(()=>{
+   try{ return localStorage.getItem(SECCION_KEY) || 'Dashboard'; }catch{ return 'Dashboard'; }
+ });
+ useEffect(()=>{
+   try{ localStorage.setItem(SECCION_KEY, section); }catch{ /* ignorar */ }
+ },[section]);
  const [toast,setToast]=useState('');
  const [refresh,setRefresh]=useState(0);
  const [operationalCenter,setOperationalCenter]=useState(VALPARAISO_CENTER);
@@ -3689,18 +3719,24 @@ const spawnEmergencia = (): Emergency => {
       // Puede ya estar finalizada (otro intento, otra pestana) -- no es fatal.
       console.warn(`Emergencia #${registro.emergenciaId}: no se pudo finalizar al reanudar (puede que ya lo estuviera):`, error);
     }
-    // Sin ruta OSRM real que animar, el icono del vehiculo no se mueve solo
-    // (ver posicionActual: sin r.tramo.puntos se queda fijo en el origen) --
-    // si se dejara en las coordenadas de la emergencia durante todo el
-    // regreso simulado, se veria como un marcador pegado sobre una alerta
-    // que ya esta finalizada. Se lo ubica de una vez en su cuartel (sigue
-    // etiquetado "Regresando" en el popup via destino) en vez de dejarlo
-    // esperando sobre el punto del incidente.
+    // Se pide una ruta OSRM nueva (origen=emergencia, destino=cuartel) para
+    // el tiempo que falte -- antes se dejaba tramo:undefined y, sin ruta
+    // que animar, posicionActual() devolvia la ultima posicion conocida sin
+    // moverse: con un F5 a mitad de regreso, el vehiculo parecia ya haber
+    // llegado (o seguir pegado en el incidente) en vez de seguir viajando.
+    const msRestantes = Math.max(1000, msHastaRegreso);
     setResources(rs => rs.map(r => r.id === resourceId
-      ? { ...r, radioState: '6-8' as RadioState, lat: home.lat, lng: home.lng,
-          destino, tramo: undefined, ultimaActualizacion: Date.now() }
+      ? { ...r, radioState: '6-8' as RadioState, destino, ultimaActualizacion: Date.now() }
       : r));
-    const t = window.setTimeout(() => { void volverACuartel(); }, Math.max(0, msHastaRegreso));
+    try {
+      const tramoVuelta = await prepararTramoOSRM(resourceId, destino, home, msRestantes);
+      setResources(rs => rs.map(r => r.id === resourceId && r.radioState === '6-8'
+        ? { ...r, tramo: tramoVuelta }
+        : r));
+    } catch (error) {
+      console.error(`No se pudo recalcular la ruta de vuelta de ${resourceId} al reanudar:`, error);
+    }
+    const t = window.setTimeout(() => { void volverACuartel(); }, msRestantes);
     registerResourceTimer(resourceId, t);
   };
 
@@ -3741,10 +3777,26 @@ const spawnEmergencia = (): Emergency => {
     return;
   }
 
-  // Todavia deberia estar en camino.
+  // Todavia deberia estar en camino -- se pide una ruta OSRM nueva
+  // (cuartel -> emergencia) para el tiempo que falte hasta llegaEn, por la
+  // misma razon que en finalizarYRegresar: sin tramo, el vehiculo quedaba
+  // congelado en su ultima posicion conocida (normalmente el cuartel, que
+  // es como ya habia salido pero sin moverse, o a veces se leia como si ya
+  // hubiera llegado).
+  const msRestantesIda = Math.max(1000, registro.llegaEn - ahora);
   setResources(rs => rs.map(r => r.id === resourceId
-    ? { ...r, radioState: '6-3' as RadioState, destino, tramo: undefined, ultimaActualizacion: Date.now() }
+    ? { ...r, radioState: '6-3' as RadioState, destino, ultimaActualizacion: Date.now() }
     : r));
+  void (async () => {
+    try {
+      const tramoIda = await prepararTramoOSRM(resourceId, home, destino, msRestantesIda);
+      setResources(rs => rs.map(r => r.id === resourceId && r.radioState === '6-3'
+        ? { ...r, tramo: tramoIda }
+        : r));
+    } catch (error) {
+      console.error(`No se pudo recalcular la ruta de ida de ${resourceId} al reanudar:`, error);
+    }
+  })();
   const tLlegadaReanudado = window.setTimeout(() => {
     setResources(rs => rs.map(r => r.id === resourceId
       ? { ...r, radioState: '6-7' as RadioState, lat: destino.lat, lng: destino.lng,
@@ -3756,7 +3808,7 @@ const spawnEmergencia = (): Emergency => {
       Math.max(0, registro.finalizaEn - registro.llegaEn)
     );
     registerResourceTimer(resourceId, tTrabajoReanudado);
-  }, Math.max(0, registro.llegaEn - ahora));
+  }, msRestantesIda);
   registerResourceTimer(resourceId, tLlegadaReanudado);
  };
 
