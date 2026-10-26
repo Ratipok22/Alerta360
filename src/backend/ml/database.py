@@ -6,8 +6,6 @@ fuente de datos para entrenar, no el Excel local.
 from __future__ import annotations
 
 import json
-import re
-from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -69,6 +67,7 @@ def guardar_modelo(artefacto: dict, ruta_artefacto: str, n_registros: int,
     conexion = obtener_conexion()
     try:
         with conexion.cursor() as cursor:
+
             cursor.execute("UPDATE emergencia.modelo_demanda SET activo = FALSE WHERE activo = TRUE")
             cursor.execute(
                 """
@@ -104,100 +103,10 @@ def guardar_modelo(artefacto: dict, ruta_artefacto: str, n_registros: int,
         conexion.close()
 
 
-def _normalizar_nombre(valor: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", str(valor).lower())
-
-
 def guardar_predicciones(resultado: dict) -> dict:
-    """Persiste el desglose por zona y código de emergencia en prediccion.
-
-    Relaciona zonas primero por ID y, si los IDs del modelo no existen en la
-    tabla, intenta por nombre. Si no puede relacionar una zona, falla con un
-    error explícito en vez de insertar una relación incorrecta.
-    """
-    conexion = obtener_conexion()
-    insertadas = 0
-    try:
-        with conexion.cursor() as cursor:
-            # id_zona ahora son codigos INE reales (texto, ej.
-            # "INE24-05101-01"), ya no numeros correlativos -- y la columna
-            # "actividad" ya no existe (reemplazada por las 281 zonas
-            # reales, ver migracion_segundo_mapa.sql).
-            cursor.execute("""
-                SELECT id_zona, nombre_zona
-                FROM emergencia.zona
-            """)
-            zonas_db = cursor.fetchall()
-            por_id = {str(z[0]): (z[0], z[1]) for z in zonas_db}
-            por_nombre = {_normalizar_nombre(z[1]): (z[0], z[1]) for z in zonas_db}
-
-            cursor.execute("""
-                SELECT id_modelo
-                FROM emergencia.modelo_demanda
-                WHERE activo = TRUE
-                ORDER BY entrenado_en DESC
-                LIMIT 1
-            """)
-            modelo = cursor.fetchone()
-            if not modelo:
-                raise ValueError("No hay un modelo activo en emergencia.modelo_demanda.")
-            id_modelo = modelo[0]
-
-            generado_en = resultado.get("generado_en")
-            if generado_en:
-                generado_en = datetime.fromisoformat(generado_en.replace("Z", "+00:00")).replace(tzinfo=None)
-            else:
-                generado_en = datetime.now()
-
-            periodos = resultado.get("periodos", [])
-            periodos_inicio = [str(p["periodo_inicio"]) for p in periodos]
-            if periodos_inicio:
-                # GET puede llamarse repetidamente desde el frontend: reemplazar
-                # esos mismos periodos evita duplicados en cada refresco.
-                cursor.execute(
-                    """
-                    DELETE FROM emergencia.prediccion
-                    WHERE id_modelo = %s AND periodo_inicio = ANY(%s)
-                    """,
-                    (id_modelo, periodos_inicio),
-                )
-
-            for periodo in periodos:
-                periodo_inicio = str(periodo["periodo_inicio"])
-                for zona in periodo.get("zonas", []):
-                    zona_id_modelo = str(zona["zona_id"])
-                    zona_db = por_nombre.get(_normalizar_nombre(zona.get("nombre", "")))
-                    if not zona_db:
-                        zona_db = por_id.get(zona_id_modelo)
-                    if not zona_db:
-                        raise ValueError(
-                            f"No se pudo relacionar la zona del modelo "
-                            f"(id={zona_id_modelo}, nombre={zona.get('nombre')!r}) "
-                            "con emergencia.zona."
-                        )
-                    id_zona = zona_db[0]
-                    for codigo, cantidad in zona.get("desglose", {}).items():
-                        cursor.execute(
-                            """
-                            INSERT INTO emergencia.prediccion (
-                                id_modelo, id_zona, codigo_emergencia,
-                                periodo_inicio, generado_en, casos_esperados
-                            )
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                            """,
-                            (
-                                id_modelo, id_zona, str(codigo), periodo_inicio,
-                                generado_en, max(0.0, float(cantidad)),
-                            ),
-                        )
-                        insertadas += 1
-        conexion.commit()
-        return {"id_modelo": id_modelo, "predicciones_guardadas": insertadas}
-    except Exception:
-        conexion.rollback()
-        raise
-    finally:
-        conexion.close()
+    """Compatibilidad: todas las escrituras usan la misma implementación."""
+    from .persistencia_ml import guardar
+    return guardar(resultado)
 
 
 def ejemplo_consulta():

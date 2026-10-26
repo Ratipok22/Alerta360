@@ -751,6 +751,13 @@ function fixMapSize(map:L.Map):()=>void{
   const invalidate=()=>map.invalidateSize();
   const t=window.setTimeout(invalidate,0);
   window.addEventListener('resize',invalidate);
+  return()=>{window.clearTimeout(t); window.removeEventListener('resize',invalidate);};
+}
+
+function fixOperationalMapSize(map:L.Map):()=>void{
+  const invalidate=()=>map.invalidateSize();
+  const t=window.setTimeout(invalidate,0);
+  window.addEventListener('resize',invalidate);
   const container=map.getContainer();
   const observer=new ResizeObserver(invalidate);
   observer.observe(container);
@@ -779,7 +786,7 @@ function MapaSeleccionUbicacion({lat, lng, onSeleccionar}:{lat:number|null; lng:
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors'}).addTo(map);
     map.on('click',(e:L.LeafletMouseEvent)=>{ onSeleccionarRef.current(e.latlng.lat, e.latlng.lng); });
     mapRef.current=map;
-    const cleanupResize=fixMapSize(map);
+    const cleanupResize=fixOperationalMapSize(map);
     // eslint-disable-next-line react-hooks/exhaustive-deps
     return()=>{ cleanupResize(); map.remove(); mapRef.current=null; markerRef.current=null; };
   },[]);
@@ -1180,7 +1187,7 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
         }, {once:true});
       });
     });
-    const cleanupResize=fixMapSize(map);
+    const cleanupResize=fixOperationalMapSize(map);
     return()=>{cleanupResize(); map.remove(); mapRef.current=null; layerRef.current=null; highlightLayerRef.current=null;};
   },[center]);
 
@@ -1405,7 +1412,8 @@ function HeatMapPanel({zonas, seleccionadaId, onSelectZona, focus}:{zonas:ZoneDe
     const zoneLayer=zoneLayerRef.current;
     if(!zoneLayer) return;
     zoneLayer.clearLayers();
-    zonas.forEach(z=>{
+    // Ocultar las zonas cuyo valor visible, con un decimal, es 0.0.
+    zonas.filter(z=>Number.isFinite(z.demanda_total) && Number(z.demanda_total.toFixed(1))>0).forEach(z=>{
       const seleccionada=seleccionadaId===z.zona_id;
       const radioMetros=(z.bounds.lat_max-z.bounds.lat_min)/2*111320*0.5;
       const rect=L.circle(
