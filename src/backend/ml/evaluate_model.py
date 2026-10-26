@@ -34,6 +34,7 @@ def evaluate() -> dict:
         raise RuntimeError("No se encontro el modelo entrenado. Ejecuta 'python -m ml.train_model' primero.")
     artifact = joblib.load(ARTIFACT_PATH)
     pipeline = artifact["pipeline"]
+    artefacto_id = artifact.get('id_modelo')
 
     if artifact.get("modelo_ganador"):
         print(f"Familia de modelo en produccion: {artifact['modelo_ganador']}")
@@ -43,6 +44,15 @@ def evaluate() -> dict:
         print()
 
     df = generate_validation()
+    # El Excel usa codigos VAL-CEN / VIN-REN; el modelo entrenado desde BD
+    # usa los id_zona numericos. La validacion DEBE usar el mismo vocabulario.
+    from database.database import obtener_conexion
+    with obtener_conexion() as conexion, conexion.cursor() as cur:
+        cur.execute('SELECT codigo_zona,id_zona FROM emergencia.zona WHERE codigo_zona IS NOT NULL')
+        mapa_zonas = {str(codigo):str(id_zona) for codigo,id_zona in cur.fetchall()}
+    if not set(df['zona_id']).issubset(mapa_zonas):
+        raise ValueError('Hay zonas de validacion sin equivalencia en PostgreSQL')
+    df['zona_id'] = df['zona_id'].map(mapa_zonas)
     df = add_rolling_features(df)
 
     X = df[FEATURE_COLUMNS]
@@ -78,6 +88,13 @@ def evaluate() -> dict:
         "mejora_vs_baseline_pct": round(mejora_pct, 1),
         "exactitud_nivel_riesgo_pct": round(exactitud_nivel_pct, 1),
     }
+
+    # Almacenar las metricas externas en PostgreSQL asociadas a ESTA version.
+    from .persistencia_ml import guardar_validacion
+    if not artefacto_id:
+        raise RuntimeError('El artefacto no contiene id_modelo. Reentrena desde PostgreSQL.')
+    guardar_validacion(artefacto_id, resultado)
+    print(f"Evaluacion independiente guardada en PostgreSQL, id_modelo={artefacto_id}")
 
     print(f"Registros de validacion (zona x periodo x clave): {resultado['registros_validacion']}")
     print(f"Periodo de validacion: {df['fecha'].min()} a {df['fecha'].max()} (no visto en entrenamiento)")

@@ -3,7 +3,7 @@ import {createRoot} from 'react-dom/client';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
-import {AlertTriangle, BarChart3, Building2, CheckCircle2, Clock3, Crosshair, Download, Droplet, Eye, FilePlus2, Flame, HardHat, History, Info, LifeBuoy, Lightbulb, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Paperclip, Phone, Radio, Send, Settings, ShieldCheck, Sun, Ticket, Truck, TreePine, Users, XCircle, Zap, Bug} from 'lucide-react';
+import {AlertTriangle, BarChart3, Building2, CheckCircle2, Clock3, Crosshair, Download, Droplet, Eye, FilePlus2, Flame, HardHat, History, Info, Layers3, LifeBuoy, Lightbulb, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Paperclip, Phone, Radio, Send, Settings, ShieldCheck, Sun, Ticket, Truck, TreePine, Users, XCircle, Zap, Bug} from 'lucide-react';
 import logoDark from "./assets/logo-alerta360-dark.png";
 import logoLight from "./assets/logo-alerta360-light.png";
 
@@ -751,6 +751,13 @@ function fixMapSize(map:L.Map):()=>void{
   const invalidate=()=>map.invalidateSize();
   const t=window.setTimeout(invalidate,0);
   window.addEventListener('resize',invalidate);
+  return()=>{window.clearTimeout(t); window.removeEventListener('resize',invalidate);};
+}
+
+function fixOperationalMapSize(map:L.Map):()=>void{
+  const invalidate=()=>map.invalidateSize();
+  const t=window.setTimeout(invalidate,0);
+  window.addEventListener('resize',invalidate);
   const container=map.getContainer();
   const observer=new ResizeObserver(invalidate);
   observer.observe(container);
@@ -779,7 +786,7 @@ function MapaSeleccionUbicacion({lat, lng, onSeleccionar}:{lat:number|null; lng:
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors'}).addTo(map);
     map.on('click',(e:L.LeafletMouseEvent)=>{ onSeleccionarRef.current(e.latlng.lat, e.latlng.lng); });
     mapRef.current=map;
-    const cleanupResize=fixMapSize(map);
+    const cleanupResize=fixOperationalMapSize(map);
     // eslint-disable-next-line react-hooks/exhaustive-deps
     return()=>{ cleanupResize(); map.remove(); mapRef.current=null; markerRef.current=null; };
   },[]);
@@ -1180,7 +1187,7 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
         }, {once:true});
       });
     });
-    const cleanupResize=fixMapSize(map);
+    const cleanupResize=fixOperationalMapSize(map);
     return()=>{cleanupResize(); map.remove(); mapRef.current=null; layerRef.current=null; highlightLayerRef.current=null;};
   },[center]);
 
@@ -1405,7 +1412,8 @@ function HeatMapPanel({zonas, seleccionadaId, onSelectZona, focus}:{zonas:ZoneDe
     const zoneLayer=zoneLayerRef.current;
     if(!zoneLayer) return;
     zoneLayer.clearLayers();
-    zonas.forEach(z=>{
+    // Ocultar las zonas cuyo valor visible, con un decimal, es 0.0.
+    zonas.filter(z=>Number.isFinite(z.demanda_total) && Number(z.demanda_total.toFixed(1))>0).forEach(z=>{
       const seleccionada=seleccionadaId===z.zona_id;
       const radioMetros=(z.bounds.lat_max-z.bounds.lat_min)/2*111320*0.5;
       const rect=L.circle(
@@ -1582,6 +1590,21 @@ function LoginView({onLogin,theme,onToggleTheme}:{onLogin:(token:string, nombre:
     </div>
   </div>;
 }
+
+function ReportesView({historial}:{historial:HistorialEntry[]}){
+  const asignaciones=historial.filter(h=>h.tipo==='asignacion').length;
+  const rechazos=historial.filter(h=>h.tipo==='rechazo').length;
+  const liberaciones=historial.filter(h=>h.tipo==='liberacion').length;
+  return <div className="sectionGrid">
+    <div className="kpis">
+      <Kpi icon={<Navigation/>} label="Asignaciones realizadas" value={String(asignaciones)} meta="esta sesión" tone="acento"/>
+      <Kpi icon={<XCircle/>} label="Recomendaciones rechazadas" value={String(rechazos)} meta="esta sesión" tone="azul"/>
+      <Kpi icon={<Truck/>} label="Unidades liberadas" value={String(liberaciones)} meta="regresaron a cuartel" tone="acento"/>
+    </div>
+    <div className="card sectionCard"><div className="cardHead"><div><b>Nota</b></div></div><p className="emptyState">Estos indicadores se calculan en vivo a partir de las acciones tomadas en esta sesión (asignar/rechazar recomendaciones). Al recargar la página el historial se reinicia, ya que aún no hay persistencia en base de datos.</p></div>
+  </div>;
+}
+
 
 function prioridadClase(p:'Sin asignar'|'Baja'|'Media'|'Alta'):string{
   return p==='Alta' ? 'ticketPrioridad-alta'
@@ -2210,6 +2233,7 @@ function SoporteView({
               <input
                 type="text"
                 value={titulo}
+                maxLength={100}
                 onChange={e=>setTitulo(e.target.value)}
                 placeholder="Ej: No se muestran las unidades disponibles"
               />
@@ -2233,7 +2257,7 @@ function SoporteView({
 
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/png,image/jpeg,image/gif,image/webp"
                   onChange={e=>seleccionarArchivo(e.target.files?.[0])}
                 />
               </label>
@@ -4331,6 +4355,7 @@ const spawnEmergencia = (): Emergency => {
         ['Emergencias',AlertTriangle],
         ['Recursos',Truck],
         ['Historial',History],
+        ['Reportes',Layers3],
         ['Soporte',LifeBuoy],
         ['Configuración',Settings]
       ].map(([label,Icon]:any)=>(
@@ -4358,6 +4383,7 @@ const spawnEmergencia = (): Emergency => {
     {section==='Emergencias' && !isAdminSoporte && <EmergenciasView queue={queue} claves={claves} now={now} onAtender={atenderEmergencia} onVerUbicacion={verEmergenciaEnMapa} isAdmin={isAdmin}/>}
     {section==='Recursos' && !isAdminSoporte && <RecursosView resources={resources} alertaTimeoutIds={unidadesConAlertaTimeout} onVerCuartelEnMapa={verCuartelEnMapa} isAdmin={isAdmin} puedeCambiarEstado={!isAdminSoporte} onCambiarFueraDeServicio={cambiarFueraDeServicio}/>}
     {section==='Historial' && !isAdminSoporte && <HistorialView historial={historial} now={now}/>}
+    {section==='Reportes' && !isAdminSoporte && <ReportesView historial={historial}/>}
     {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} onNotify={notify} auth={auth} onLogout={handleLogout} isAdmin={isAdmin} timeoutMinutos={timeoutMinutos} onChangeTimeout={setTimeoutMinutos}/>}
     {section==='Soporte' && (
       <SoporteView

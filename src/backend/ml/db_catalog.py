@@ -8,7 +8,7 @@ def obtener_zonas():
     with obtener_conexion() as conn, conn.cursor() as cur:
         cur.execute("""SELECT id_zona, nombre_zona, latitud_minima, latitud_maxima,
                        longitud_minima, longitud_maxima FROM emergencia.zona
-                       WHERE actividad = TRUE ORDER BY id_zona""")
+                       ORDER BY id_zona""")
         filas = cur.fetchall()
     salida = []
     for ident, nombre, latmin, latmax, lngmin, lngmax in filas:

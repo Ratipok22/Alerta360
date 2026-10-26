@@ -19,7 +19,9 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from uuid import uuid4
+from core.adjuntos_ticket import validar as validar_adjunto, guardar as guardar_adjunto, leer as leer_adjunto, descartar as descartar_adjunto
 
 # Carga variables desde .env (JWT_SECRET_KEY, etc.) cuando se corre
 # directo con uvicorn; docker-compose ya las inyecta por su cuenta, pero
@@ -35,7 +37,7 @@ from core.vehicle_types import TIPOS_CARRO
 from ml.predict import predict_demand
 
 from database.database import obtener_conexion
-from ml.database import guardar_predicciones
+from ml.persistencia_ml import obtener_o_generar, listado_modelos
 from ml.db_catalog import obtener_zonas, obtener_tipos, obtener_recursos
 
 
@@ -117,7 +119,7 @@ class EmergencyCreate(BaseModel):
     latitud_emergencia: float
     longitud_emergencia: float
     prioridad_emergencia: int
-    id_zona: int | None = None
+    id_zona: str | None = None
     # estado_emergencia NO viene del cliente: el formulario de ingreso
     # rapido (CAD) solo crea emergencias nuevas, siempre "Activa" -- se
     # fuerza server-side en vez de confiar en lo que mande el frontend.
@@ -168,6 +170,12 @@ def crear_emergencia(datos: EmergencyCreate, usuario: Usuario = Depends(requiere
         conexion = obtener_conexion()
 
         with conexion.cursor() as cursor:
+            from core.zonificacion import resolver_zona
+            try:
+                id_zona = resolver_zona(cursor, datos.latitud_emergencia,
+                                       datos.longitud_emergencia, datos.id_zona)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
             cursor.execute(
                 """
                 INSERT INTO emergencia.emergencia (
@@ -194,7 +202,7 @@ def crear_emergencia(datos: EmergencyCreate, usuario: Usuario = Depends(requiere
                     datos.latitud_emergencia,
                     datos.longitud_emergencia,
                     datos.prioridad_emergencia,
-                    datos.id_zona,
+                    id_zona,
                 ),
             )
 
@@ -214,6 +222,10 @@ def crear_emergencia(datos: EmergencyCreate, usuario: Usuario = Depends(requiere
             "id_zona": emergencia[8],
         }
 
+    except HTTPException:
+        if conexion:
+            conexion.rollback()
+        raise
     except Exception as e:
         if conexion:
             conexion.rollback()
@@ -466,6 +478,12 @@ def cambiar_estado_recurso(
     conexion = obtener_conexion()
     try:
         with conexion.cursor() as cursor:
+            cursor.execute("SELECT estado_radio FROM emergencia.recurso WHERE codigo_recurso=%s FOR UPDATE", (codigo_recurso,))
+            actual = cursor.fetchone()
+            if actual is None:
+                raise HTTPException(status_code=404, detail="Recurso inexistente")
+            if actual[0] not in ('6-0', '6-9', 'Disponible'):
+                raise HTTPException(status_code=409, detail="El recurso está en misión o regresando; no se puede cambiar su disponibilidad.")
             cursor.execute(
                 """
                 UPDATE emergencia.recurso
@@ -501,7 +519,7 @@ def zones(usuario: Usuario = Depends(usuario_actual)):
         raise HTTPException(status_code=503, detail=f"No se pudieron consultar las zonas: {exc}")
 
 @app.get("/prediction/demand")
-def prediction_demand(horizon: int = 4, fecha: str | None = None, usuario: Usuario = Depends(usuario_actual)):
+def prediction_demand(horizon: int = 4, fecha: str | None = None, recalcular: bool = False, usuario: Usuario = Depends(usuario_actual)):
     """Prediccion de demanda esperada por zona/periodo/tipo (modelo ML).
 
     `fecha` (opcional) permite simular una fecha/hora distinta a la actual,
@@ -516,9 +534,11 @@ def prediction_demand(horizon: int = 4, fecha: str | None = None, usuario: Usuar
         except ValueError:
             raise HTTPException(status_code=400, detail="fecha invalida, usa formato ISO: 2026-01-15T15:00:00")
     try:
-        resultado = predict_demand(now=now, horizon=horizon)
-        resultado["persistencia"] = guardar_predicciones(resultado)
-        return resultado
+        return obtener_o_generar(
+            now=now,
+            horizon=horizon,
+            recalcular=recalcular
+        )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
@@ -528,6 +548,24 @@ def prediction_demand(horizon: int = 4, fecha: str | None = None, usuario: Usuar
             status_code=503,
             detail=f"No se pudo guardar la predicción en PostgreSQL: {e}",
         )
+
+
+@app.get("/prediction/models")
+def prediction_models(
+    limite: int = 10,
+    usuario: Usuario = Depends(usuario_actual)
+):
+    """Consulta modelos y métricas almacenadas en PostgreSQL."""
+    try:
+        return {
+            "modelos": listado_modelos(limite)
+        }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"No se pudieron leer los modelos: {exc}"
+        )
+
 
 @app.get("/route")
 def route(origen_lat: float, origen_lng: float, destino_lat: float, destino_lng: float, usuario: Usuario = Depends(usuario_actual)):
@@ -601,11 +639,10 @@ def _leer_historial() -> list[dict[str, Any]]:
 
 def _escribir_historial(entradas: list[dict[str, Any]]) -> None:
     import json
-    try:
-        with HISTORIAL_PATH.open("w", encoding="utf-8") as f:
-            json.dump(entradas, f, ensure_ascii=False)
-    except OSError as exc:
-        print(f"[historial] No se pudo guardar historial_acciones.json: {exc}")
+    temporal = HISTORIAL_PATH.with_name(HISTORIAL_PATH.name + '.tmp')
+    with temporal.open('w', encoding='utf-8') as f:
+        json.dump(entradas, f, ensure_ascii=False)
+    os.replace(temporal, HISTORIAL_PATH)
 
 
 class HistorialCreate(BaseModel):
@@ -910,8 +947,8 @@ def catalogos_tickets(usuario: Usuario = Depends(usuario_actual)):
 class TicketCreate(BaseModel):
     id_tipo: int
     id_apartado: int | None = None
-    titulo_ticket: str
-    descripcion: str
+    titulo_ticket: str = Field(min_length=1, max_length=100)
+    descripcion: str = Field(min_length=1)
     archivo_url: str | None = None
     # Quien reporta el problema NO decide la prioridad -- por eso no hay
     # campo "prioridad" aca. Todo ticket nuevo entra como "Sin asignar" y
@@ -928,19 +965,10 @@ _LIMITE_ADJUNTO_BASE64 = 4 * 1024 * 1024
 
 
 def _validar_archivo_adjunto(archivo_url: str | None) -> None:
-    if not archivo_url:
-        return
-    if archivo_url.startswith("http://") or archivo_url.startswith("https://"):
-        return
-    if archivo_url.startswith("data:"):
-        encabezado, _, datos_base64 = archivo_url.partition(",")
-        tipo_mime = encabezado[len("data:"):].split(";")[0]
-        if tipo_mime not in _TIPOS_IMAGEN_PERMITIDOS:
-            raise HTTPException(status_code=400, detail=f"Tipo de imagen no permitido: {tipo_mime}")
-        if len(datos_base64) > _LIMITE_ADJUNTO_BASE64:
-            raise HTTPException(status_code=400, detail="La imagen adjunta pesa demasiado (máximo 3 MB).")
-        return
-    raise HTTPException(status_code=400, detail="Archivo adjunto inválido: debe ser una URL http(s) o una imagen.")
+    try:
+        validar_adjunto(archivo_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/tickets")
@@ -948,6 +976,7 @@ def crear_ticket(datos: TicketCreate, usuario: Usuario = Depends(usuario_actual)
     _validar_archivo_adjunto(datos.archivo_url)
     id_usuario = _resolver_id_usuario(usuario.email)
     conexion = obtener_conexion()
+    archivo_guardado = None
     try:
         with conexion.cursor() as cursor:
             # Ademas de id_tipo (la relacion real con tipo_ticket), la tabla
@@ -966,14 +995,15 @@ def crear_ticket(datos: TicketCreate, usuario: Usuario = Depends(usuario_actual)
             # codigo_ticket es UNIQUE y NOT NULL -- se inserta un valor
             # temporal y se actualiza ya con el id real asignado (evita
             # depender de secuencias externas a la tabla).
+            archivo_guardado = guardar_adjunto(datos.archivo_url)
             cursor.execute(
                 """
                 INSERT INTO emergencia.ticket
                     (id_usuario, id_tipo, id_apartado, codigo_ticket, titulo_ticket, descripcion, tipo_ticket, archivo_url, prioridad)
-                VALUES (%s, %s, %s, 'TEMP', %s, %s, %s, %s, 'Sin asignar')
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'Sin asignar')
                 RETURNING id_ticket
                 """,
-                (id_usuario, datos.id_tipo, datos.id_apartado, datos.titulo_ticket, datos.descripcion, nombre_tipo, datos.archivo_url),
+                (id_usuario, datos.id_tipo, datos.id_apartado, "TMP-"+uuid4().hex[:16], datos.titulo_ticket, datos.descripcion, nombre_tipo, archivo_guardado),
             )
             id_ticket = cursor.fetchone()[0]
             codigo = f"SOP-{id_ticket:04d}"
@@ -991,6 +1021,8 @@ def crear_ticket(datos: TicketCreate, usuario: Usuario = Depends(usuario_actual)
         }
     except Exception:
         conexion.rollback()
+        if archivo_guardado:
+            descartar_adjunto(archivo_guardado)
         raise
     finally:
         conexion.close()
@@ -1068,7 +1100,7 @@ def listar_tickets(usuario: Usuario = Depends(usuario_actual)):
             "titulo_ticket": titulo,
             "descripcion": descripcion,
             "estado_ticket": estado,
-            "archivo_url": archivo_url,
+            "archivo_url": leer_adjunto(archivo_url),
             "fecha_creacion": fecha_creacion.isoformat(),
             "fecha_actualizacion": fecha_actualizacion.isoformat(),
             "tipo": nombre_tipo,
@@ -1091,7 +1123,7 @@ def requiere_soporte(usuario: Usuario = Depends(usuario_actual)) -> Usuario:
 
 
 class RespuestaCreate(BaseModel):
-    mensaje: str
+    mensaje: str = Field(min_length=1)
     tipo_respuesta: Literal["Respuesta", "Usuario"] = "Respuesta"
 
 
@@ -1111,12 +1143,12 @@ def responder_ticket(id_ticket: int, datos: RespuestaCreate, usuario: Usuario = 
             # resolverse, le corresponde abrir un ticket nuevo). Soporte si
             # puede seguir escribiendo (p.ej. para aclarar algo despues de
             # cerrarlo), por eso el check es solo para tipo_respuesta='Usuario'.
+            cursor.execute("SELECT estado_ticket, id_usuario FROM emergencia.ticket WHERE id_ticket = %s FOR UPDATE", (id_ticket,))
+            fila_ticket = cursor.fetchone()
+            if not fila_ticket:
+                raise HTTPException(status_code=404, detail="Ticket no encontrado")
+            estado_actual, id_usuario_creador = fila_ticket
             if datos.tipo_respuesta == "Usuario":
-                cursor.execute("SELECT estado_ticket, id_usuario FROM emergencia.ticket WHERE id_ticket = %s", (id_ticket,))
-                fila_ticket = cursor.fetchone()
-                if not fila_ticket:
-                    raise HTTPException(status_code=404, detail="Ticket no encontrado")
-                estado_actual, id_usuario_creador = fila_ticket
                 if estado_actual == "Resuelto":
                     raise HTTPException(status_code=409, detail="Este ticket ya fue marcado como Resuelto, no se pueden agregar más respuestas.")
                 # El apartado de Tickets es individual: solo quien creo el
@@ -1164,6 +1196,8 @@ def cambiar_estado_ticket(id_ticket: int, datos: TicketEstadoUpdate, usuario: Us
                 "UPDATE emergencia.ticket SET estado_ticket = %s, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id_ticket = %s",
                 (datos.estado, id_ticket),
             )
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Ticket no encontrado")
         conexion.commit()
         return {"ok": True, "estado": datos.estado}
     except Exception:
@@ -1189,6 +1223,8 @@ def cambiar_prioridad_ticket(id_ticket: int, datos: TicketPrioridadUpdate, usuar
                 "UPDATE emergencia.ticket SET prioridad = %s, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id_ticket = %s",
                 (datos.prioridad, id_ticket),
             )
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Ticket no encontrado")
         conexion.commit()
         return {"ok": True, "prioridad": datos.prioridad}
     except Exception:

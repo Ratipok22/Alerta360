@@ -69,9 +69,6 @@ BASE_RATE = {  # promedio de casos por zona y bloque de 3h en condiciones neutra
     # cerca de la cifra real de CONAF.
     "10-2": 0.0088,
 
-    # supuesto razonado, no viene de CONAF.
-    "10-2": 0.0113,
-
     "10-3": 0.04,
     "10-4": 0.10,
     "10-5": 0.02,
