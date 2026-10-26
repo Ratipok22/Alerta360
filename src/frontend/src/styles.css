@@ -1,0 +1,2350 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+:root{
+  /* Fondos y estructura */
+  --fondo-pagina:#F1F2F4;
+  --negro-panel:#0B0C0E;
+  --negro-tarjeta:#17181B;
+  --borde-sutil:#2B2D31;
+  /* Tipografia y texto */
+  --blanco:#FFFFFF;
+  --gris-texto:#C7C9CE;
+  --gris-tenue:#8B8D93;
+  /* Acentos operativos */
+  --rojo-alerta:#FF3B30;
+  --rojo-hover:#D7261E;
+  --azul-operativo:#2C9AF6;
+  --amarillo-precaucion:#FFCC00;
+  --verde-disponible:#34C759;
+  /* Texto SIEMPRE blanco sobre insignias/botones de color solido (avatar,
+     ASIGNAR, login), sin importar el tema -- a diferencia de --blanco, que
+     se invierte en tema claro (ver mas abajo) porque ahi se usa para texto
+     de alto contraste sobre fondos de panel, no sobre color solido. */
+  --on-accent:#FFFFFF;
+  /* Acento de marca para resaltados (item de menu activo, iconos de KPI,
+     enlaces, foco de formularios): en oscuro es el mismo azul operativo de
+     siempre; en tema claro (ver mas abajo) se vuelve el rojo institucional,
+     que es el color que bomberos.cl usa para todo lo destacado/CTA. Los
+     estados operativos (prioridad, radioState) siguen usando
+     --azul-operativo directo, no este, para no confundir semantica. */
+  --acento:var(--azul-operativo);
+  /* Barra lateral: variables propias (no las genericas de panel/texto) para
+     que en tema claro pueda tener su propio color institucional sin
+     afectar el resto de las tarjetas/superficies del sistema. En oscuro
+     son iguales a como se veia siempre. */
+  --sidebar-bg:var(--negro-panel);
+  --sidebar-borde:var(--borde-sutil);
+  --sidebar-texto:var(--gris-texto);
+  --sidebar-texto-fuerte:var(--blanco);
+  --sidebar-hover-bg:var(--negro-tarjeta);
+
+  font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  color:var(--gris-texto);
+  background:var(--fondo-pagina);
+  font-synthesis:none;
+  text-rendering:optimizeLegibility;
+}
+
+/* ============ TEMA CLARO (paleta institucional Bomberos de Chile) ============
+   Se activa con [data-theme="light"] en .app (ver toggle en el header). Solo
+   redefine las mismas variables que ya usa todo el sistema oscuro -- ningun
+   componente necesita saber en que tema esta. */
+html[data-theme="light"]{
+  /* Notoriamente mas gris que las tarjetas (blancas) para que se les
+     distinga del fondo -- si quedan casi del mismo tono, los contenedores
+     "desaparecen" y todo se ve como una sola superficie blanca. */
+  --fondo-pagina:#E7ECEF;
+  --negro-panel:#FFFFFF;
+  --negro-tarjeta:#FFFFFF;
+  --borde-sutil:#E2E5E8;
+  --blanco:#1C2833;
+  --gris-texto:#3B4652;
+  --gris-tenue:#67727D;
+  --rojo-alerta:#C8102E;
+  --rojo-hover:#A50D26;
+  --azul-operativo:#1C2833;
+  --amarillo-precaucion:#B8860B;
+  --verde-disponible:#1E8449;
+  --acento:#C8102E;
+  /* Barra lateral blanca (igual que el resto de superficies) con acentos
+     rojos -- se probo navy solido primero, pero se prefirio blanca. */
+  --sidebar-bg:#FFFFFF;
+  --sidebar-borde:#E2E5E8;
+  --sidebar-texto:#3B4652;
+  --sidebar-texto-fuerte:#1C2833;
+  --sidebar-hover-bg:#F4F6F7;
+}
+/* En tema claro el mapa usa las tiles normales de OpenStreetMap (sin el
+   filtro oscuro de mas abajo). */
+html[data-theme="light"] #map .leaflet-tile-pane{filter:none}
+html[data-theme="light"] #heatmap .leaflet-tile-pane{filter:none}
+/* Botones tipo pildora en tema claro, como los CTA de bomberos.cl (rojo
+   institucional, esquinas muy redondeadas). En oscuro se mantiene el
+   estilo mas cuadrado de siempre. */
+html[data-theme="light"] .loginSubmit,html[data-theme="light"] .actions button{border-radius:999px}
+/* Los campos de login se notan mas: fondo gris (en vez del mismo blanco de
+   la tarjeta) y borde mas marcado, para que se vea claramente donde hay
+   que escribir. Al enfocar, se ponen blancos con borde rojo (ya definido
+   en .loginInput:focus). */
+html[data-theme="light"] .loginInput{background:var(--fondo-pagina);border-color:#C7D0D8}
+html[data-theme="light"] .loginInput:focus{background:var(--negro-panel);border-color:var(--acento)}
+/* Todo contenedor "cuadrado" (tarjetas, KPIs, mapa, emergencia activa,
+   recomendacion) lleva un marco COMPLETO en color institucional y una
+   sombra suave, para que se distingan del fondo de pagina en vez de
+   perderse en blanco sobre blanco. overflow:hidden para que la barra de
+   titulo (.cardHead, ver mas abajo) quede recortada a las esquinas
+   redondeadas del contenedor en vez de sobresalir en punta. */
+html[data-theme="light"] .card,
+html[data-theme="light"] .mapCard,
+html[data-theme="light"] .emergencyCard,
+html[data-theme="light"] .recommend{
+  border:2px solid var(--acento);
+  overflow:hidden;
+  box-shadow:0 1px 3px rgba(28,40,51,.09), 0 1px 2px rgba(28,40,51,.06);
+}
+/* El titulo de cada tarjeta (".cardHead": "Mapa operacional", "Alertas
+   predictivas", "Recursos disponibles", etc.) es una barra solida en rojo
+   institucional con texto blanco, para separar visualmente titulo de
+   cuerpo -- el cuerpo de la tarjeta se mantiene blanco/legible. */
+html[data-theme="light"] .cardHead{background:var(--acento)}
+html[data-theme="light"] .cardHead b{color:var(--on-accent)}
+html[data-theme="light"] .cardHead span{color:rgba(255,255,255,.82)}
+html[data-theme="light"] .cardHead .linkBtn{color:var(--on-accent);text-decoration:underline}
+html[data-theme="light"] .cardHead .mlBadge{background:rgba(255,255,255,.25);color:var(--on-accent)!important}
+html[data-theme="light"] .cardHead .liveText{color:var(--on-accent)!important}
+*{box-sizing:border-box}
+body{margin:0;background:var(--fondo-pagina)}
+
+.app{min-height:100vh;display:flex;background:var(--negro-panel)}
+
+/* ============ SIDEBAR ============ */
+.sidebar{width:240px;background:var(--sidebar-bg);border-right:1px solid var(--sidebar-borde);padding:20px 14px;display:flex;flex-direction:column;position:fixed;inset:0 auto 0 0;z-index:40;transition:transform .25s}
+.brand{display:flex;gap:10px;align-items:center;padding:4px 8px 24px}
+.brandIcon{
+  width:35px;
+  height:35px;
+  border-radius:8px;
+  background:transparent;
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+  flex-shrink:0;
+}
+
+.brandIcon img{
+  width:100%;
+  height:100%;
+  object-fit:contain;
+  display:block;
+}
+/* .brand aparece en dos contextos con fondos distintos -- el sidebar
+   (fondo navy propio) y la tarjeta de login (fondo de tarjeta normal) --
+   por eso el color del texto se define por separado para cada uno, en vez
+   de una regla generica .brand que asumiria un solo fondo. */
+.sidebar .brand b{display:block;font-size:13px;font-weight:700;color:var(--sidebar-texto-fuerte);letter-spacing:1.3px}
+.sidebar .brand span{display:block;font-size:9px;color:var(--sidebar-texto);letter-spacing:1.5px;margin-top:3px;text-transform:uppercase}
+.loginCard .brand b{display:block;font-size:13px;font-weight:700;color:var(--blanco);letter-spacing:1.3px}
+.loginCard .brand span{display:block;font-size:9px;color:var(--gris-tenue);letter-spacing:1.5px;margin-top:3px;text-transform:uppercase}
+nav{display:flex;flex-direction:column;gap:4px}
+nav button{border:0;background:transparent;color:var(--sidebar-texto);padding:11px 13px;border-radius:6px;display:flex;gap:12px;align-items:center;font-size:13px;font-weight:500;cursor:pointer;text-align:left;transition:background .15s}
+nav button:hover{background:var(--sidebar-hover-bg);color:var(--sidebar-texto-fuerte)}
+nav button.active{background:color-mix(in srgb, var(--acento) 16%, transparent);color:var(--acento);font-weight:600;box-shadow:inset 3px 0 var(--acento)}
+.sidebarBottom{margin-top:auto;border-top:1px solid var(--sidebar-borde);padding:16px 8px;color:var(--sidebar-texto);font-size:11px}
+.online{color:var(--verde-disponible);margin-bottom:10px;font-weight:600}
+.online span,.live span,.liveText span{display:inline-block;width:7px;height:7px;background:var(--verde-disponible);border-radius:50%;margin-right:7px;box-shadow:0 0 8px #34c75988}
+
+/* En tema claro el logo se ve en rojo institucional (no navy) para que
+   resalte sobre el fondo azul marino de la barra lateral -- rojo + navy
+   juntos, el mismo par de colores que usa bomberos.cl. */
+html[data-theme="light"] .brandIcon img.logoDark{
+  display:none;
+}
+
+html[data-theme="dark"] .brandIcon img.logoLight{
+  display:none;
+}
+
+/* Menu lateral colapsable: en modo colapsado se angosta a solo iconos.
+   El boton para expandir/colapsar es un icono tipo "hamburguesa" solo,
+   sin texto, arriba a la izquierda del sidebar (encima del logo). */
+.sidebarToggleBtn{width:36px;height:36px;display:grid;place-items:center;border:1px solid var(--sidebar-borde);background:transparent;color:var(--sidebar-texto);border-radius:6px;cursor:pointer;margin:0 0 14px;flex-shrink:0}
+.sidebarToggleBtn:hover{color:var(--sidebar-texto-fuerte);border-color:var(--acento)}
+.sidebar.collapsed{width:72px}
+.sidebar.collapsed .sidebarToggleBtn{margin-left:auto;margin-right:auto}
+.sidebar.collapsed .brand{justify-content:center;padding:4px 0 24px}
+.sidebar.collapsed nav button{justify-content:center;padding:11px}
+
+/* ============ HEADER / LAYOUT ============ */
+.main{margin-left:240px;width:calc(100% - 240px);padding:24px 26px 40px;transition:margin-left .2s,width .2s}
+.main.sidebarCollapsed{margin-left:72px;width:calc(100% - 72px)}
+header{height:55px;display:flex;align-items:center;margin-bottom:20px}
+h1{font-size:22px;font-weight:700;margin:0;color:var(--blanco)}
+header p{font-size:12px;color:var(--gris-tenue);margin:5px 0 0}
+.headerActions{display:flex;align-items:center;gap:9px;margin-left:auto}
+.headerActions button{border:1px solid var(--borde-sutil);background:var(--negro-tarjeta);color:var(--gris-texto);width:34px;height:34px;border-radius:6px;display:grid;place-items:center;cursor:pointer}
+.headerActions button:hover{border-color:var(--acento);color:var(--acento)}
+.live{font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--verde-disponible);background:rgba(52,199,89,.12);border:1px solid var(--verde-disponible);border-radius:20px;padding:8px 11px}
+.avatar{width:34px;height:34px;border-radius:50%;background:var(--azul-operativo);color:var(--on-accent);display:grid;place-items:center;font-size:11px;font-weight:700;border:0;cursor:pointer;font-family:inherit;transition:filter .15s}
+.avatar:hover{filter:brightness(1.15)}
+
+/* ============ FILTRO GLOBAL POR CUARTEL (Dashboard) ============ */
+.cuartelFilterRow{display:flex;align-items:center;gap:14px;margin-bottom:16px;background:var(--negro-tarjeta);border:1px solid var(--borde-sutil);border-radius:10px;padding:13px 18px}
+.cuartelFilterRow label{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--gris-texto);font-weight:700}
+.cuartelFilterRow select{background:var(--negro-panel);color:var(--gris-texto);border:1px solid var(--borde-sutil);border-radius:6px;padding:9px 12px;font-size:13px;font-weight:600;font-family:inherit;min-width:260px}
+/* En tema claro esta caja lleva el mismo lenguaje visual que el resto de
+   contenedores destacados (borde institucional + sombra), y la etiqueta
+   se pinta de rojo -- si no, en fondo blanco quedaba casi invisible. */
+html[data-theme="light"] .cuartelFilterRow{border:2px solid var(--acento);box-shadow:0 1px 3px rgba(28,40,51,.09), 0 1px 2px rgba(28,40,51,.06)}
+html[data-theme="light"] .cuartelFilterRow label{color:var(--acento)}
+/* "Ver en el mapa" con contorno rojo bien marcado, en vez del borde gris
+   casi invisible de siempre. */
+html[data-theme="light"] .locateBtn{border-color:var(--acento)}
+/* Mismo problema que el login: los filtros de busqueda/tipo/estado (en
+   Recursos, Historial, etc.) quedaban blancos sobre blanco. Tambien se le
+   da un tinte visible al pasar el mouse sobre una fila de tabla, y una
+   franja de fondo para separar el encabezado del cuerpo. */
+html[data-theme="light"] .filterRow input,html[data-theme="light"] .filterRow select{background:var(--fondo-pagina);border-color:#C7D0D8}
+html[data-theme="light"] .filterRow input:focus,html[data-theme="light"] .filterRow select:focus{background:var(--negro-panel);border-color:var(--acento);outline:none}
+html[data-theme="light"] .dataTable th{background:var(--fondo-pagina)}
+html[data-theme="light"] .dataTable tr:hover td{background:color-mix(in srgb, var(--acento) 6%, var(--negro-panel))}
+html[data-theme="light"] .configRow select,html[data-theme="light"] .configRow input:not([type="checkbox"]){background:var(--fondo-pagina);border-color:#C7D0D8}
+html[data-theme="light"] .configRow select:focus,html[data-theme="light"] .configRow input:focus{background:var(--negro-panel);border-color:var(--acento);outline:none}
+
+/* ============ RBAC (rol de solo lectura) ============ */
+.readOnlyBadge{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--amarillo-precaucion);background:rgba(255,204,0,.12);border:1px solid var(--amarillo-precaucion);border-radius:20px;padding:8px 11px}
+.readOnlyNote{display:flex;align-items:center;gap:6px;color:var(--gris-tenue)}
+
+/* ============ TIMEOUT OPERACIONAL ============ */
+.timeoutBadge{display:inline-flex;align-items:center;gap:4px;margin-left:8px;font-size:10px;font-weight:700;color:var(--amarillo-precaucion);background:rgba(255,204,0,.12);border:1px solid var(--amarillo-precaucion);border-radius:20px;padding:3px 7px;white-space:nowrap}
+
+/* ============ KPIs (ficha informativa) ============ */
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+.kpi{background:var(--negro-panel);border:1px solid var(--borde-sutil);border-radius:8px;padding:16px;display:flex;gap:13px;align-items:center}
+.kpiIcon{width:37px;height:37px;border-radius:8px;background:color-mix(in srgb, var(--acento) 15%, transparent);color:var(--acento);display:grid;place-items:center;flex-shrink:0}
+/* En tema claro los cuadrados de icono son solidos (rojo institucional
+   con icono blanco), como los bloques de bomberos.cl -- en oscuro se
+   mantiene el estilo de insignia suave de siempre. */
+html[data-theme="light"] .kpiIcon,html[data-theme="light"] .activityIcon{background:var(--acento);color:var(--on-accent)}
+/* Variedad de color en los cuadrados de KPI: alternando rojo y azul marino
+   institucional (el mismo par que usa bomberos.cl en su grilla de bloques),
+   en vez de que todos queden del mismo rojo -- se nota mas la diferencia
+   entre cada indicador y se distingue mejor del fondo. */
+html[data-theme="light"] .kpiIcon-azul{background:var(--azul-operativo)}
+.kpiIcon svg{width:19px}
+.kpi span{display:block;color:var(--gris-tenue);font-size:11px;text-transform:uppercase;letter-spacing:.5px;font-weight:600}
+.kpi strong{display:block;font-size:23px;font-weight:700;color:var(--blanco);margin:3px 0}
+.kpi small{display:block;color:var(--verde-disponible);font-size:12px}
+
+/* ============ CARDS / PANELES ============ */
+.card{background:var(--negro-tarjeta);border:1px solid var(--borde-sutil);border-radius:12px}
+.cardHead{padding:16px 20px;display:flex;justify-content:space-between;align-items:center}
+.cardHead b{font-size:15px;font-weight:600;display:block;color:var(--blanco)}
+.cardHead span{font-size:12px;color:var(--gris-tenue);display:block;margin-top:4px}
+
+.workspace{display:grid;grid-template-columns:minmax(0,2fr) minmax(330px,.82fr);gap:16px;margin-top:16px}
+.mapCard{position:relative;overflow:hidden;background:var(--negro-panel);border:1px solid var(--borde-sutil);border-radius:12px;min-height:465px;display:flex;flex-direction:column}
+.mapCard .cardHead{flex-shrink:0}
+.mapControls{display:flex;gap:6px}
+.mapControls button{background:var(--negro-tarjeta);color:var(--gris-texto);border:1px solid var(--borde-sutil);border-radius:6px;width:31px;height:29px;display:grid;place-items:center;cursor:pointer}
+.mapControls button:hover{border-color:var(--acento);color:var(--acento)}
+.mapCard #map{flex:1;min-height:300px}
+/* OSM estandar no tiene una variante oscura gratuita sin API key (se
+   probo CARTO Dark Matter, ahora la exige). El filtro se aplica SOLO al
+   pane de tiles de Leaflet (#map .leaflet-tile-pane), no a #map completo:
+   asi el invert()+hue-rotate() que da el tono oscuro no le llega a los
+   marcadores (estan en un pane hermano, .leaflet-marker-pane), y sus
+   colores reales (verde=disponible, rojo=alerta, etc.) quedan intactos. */
+#map .leaflet-tile-pane{filter:invert(1) hue-rotate(200deg) brightness(.92) contrast(.92) saturate(.85)}
+/* Mismo truco que #map de arriba, aplicado al mapa de calor: antes tenia
+   un filtro plano (brightness/contrast) sobre todo #heatmap que solo lo
+   atenuaba un poco, sin verse realmente oscuro como el mapa principal. */
+#heatmap .leaflet-tile-pane{filter:invert(1) hue-rotate(200deg) brightness(.92) contrast(.92) saturate(.85)}
+.legend{position:absolute;bottom:11px;left:15px;background:#0b0c0ee6;border:1px solid var(--borde-sutil);border-radius:6px;padding:7px 9px;display:flex;gap:14px;font-size:10px;color:var(--gris-tenue)}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:5px}
+.green{background:var(--verde-disponible)}
+.red{background:var(--rojo-alerta)}
+.blue{background:var(--azul-operativo)}
+.yellow{background:var(--amarillo-precaucion)}
+
+.sideCards{display:flex;flex-direction:column;gap:16px}
+.emergencyCard,.recommend{border:1px solid var(--borde-sutil);border-radius:8px;background:var(--negro-tarjeta);padding:18px}
+/* La etiqueta de prioridad iba con position:absolute a una distancia fija
+   del borde -- si el titulo de la emergencia (ej. "Emergencia #124") ocupaba
+   mas ancho del esperado, la etiqueta quedaba flotando ENCIMA del texto en
+   vez de correrse, superponiendose. Ahora es un hijo mas del flex con wrap,
+   asi en pantallas angostas cae a su propia linea en vez de pisar el texto. */
+.emergencyHeadRow{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.emergencyHeadRow .tag{flex-shrink:0}
+.emergencyTitle{display:flex;gap:12px}
+.danger{width:44px;height:44px;background:rgba(255,59,48,.12);color:var(--rojo-alerta);border-radius:8px;display:grid;place-items:center;flex-shrink:0}
+.emergencyTitle b{display:block;font-size:18px;font-weight:700;color:var(--blanco)}
+.emergencyTitle span{display:block;color:var(--gris-tenue);font-size:15px;margin-top:4px}
+.details{border-top:1px solid var(--borde-sutil);padding-top:12px}
+.details p{font-size:15px;color:var(--gris-texto);display:flex;gap:9px;align-items:flex-start;margin:10px 0;line-height:1.6}
+.details p svg{flex-shrink:0;margin-top:2px}
+.details p span{flex:1;min-width:0}
+.details b{color:var(--blanco);font-weight:600}
+.recHead{display:flex;justify-content:space-between;align-items:start}
+.recHead span{display:block;color:var(--acento);font-size:14px;font-weight:700;letter-spacing:1px;text-transform:uppercase}
+.recHead small{display:block;color:var(--gris-tenue);font-size:13px;margin-top:3px}
+.score{font-size:27px;font-weight:700}
+.score small{display:inline;color:var(--gris-tenue);font-weight:400;font-size:15px}
+.recBody{display:flex;gap:14px;margin:16px 0}
+.vehicleIcon{width:50px;height:50px;border-radius:8px;background:rgba(52,199,89,.14);border:1px solid var(--verde-disponible);color:var(--verde-disponible);display:grid;place-items:center;flex-shrink:0}
+.vehicleIcon svg{width:28px}
+.recBody b{font-size:18px;font-weight:700;color:var(--blanco)}
+.recBodyCia{display:block;font-size:13px;color:var(--gris-tenue);margin-top:3px}
+/* Icono de informacion con tooltip -- reemplaza los parrafos largos que
+   antes quedaban siempre visibles. Vive en su propia fila, abajo a la
+   derecha de la tarjeta (arriba del boton "Ver en el mapa", nunca encima
+   de ningun boton), como una insignia grande y notoria. El detalle SOLO
+   aparece al posicionar el mouse (o el foco de teclado) sobre el icono
+   mismo, no en el resto de la tarjeta. */
+.infoTipRow{display:flex;justify-content:flex-end;padding:2px 0 2px}
+.infoTip{position:relative;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;border:1.5px solid var(--acento);color:var(--acento);background:color-mix(in srgb, var(--acento) 12%, transparent);cursor:help;outline:none;transition:background .15s}
+.infoTip:hover,.infoTip:focus-visible{background:color-mix(in srgb, var(--acento) 22%, transparent)}
+.infoTipBubble{position:absolute;bottom:calc(100% + 10px);right:0;width:340px;max-width:min(340px,calc(100vw - 24px));background:var(--negro-panel);border:1px solid var(--borde-sutil);border-radius:10px;padding:16px 18px;font-size:17px;font-weight:400;line-height:1.65;color:var(--gris-texto);box-shadow:0 8px 24px rgba(0,0,0,.45);opacity:0;visibility:hidden;transition:opacity .15s;z-index:60;pointer-events:none;text-align:left;white-space:normal}
+.infoTip:hover .infoTipBubble,.infoTip:focus-visible .infoTipBubble{opacity:1;visibility:visible}
+.recBody p{font-size:15px;color:var(--gris-texto);margin:7px 0;display:flex;gap:7px;align-items:flex-start;line-height:1.6}
+.recBody p svg{flex-shrink:0;margin-top:2px}
+.recBody p span{flex:1;min-width:0}
+.recBody strong{color:var(--blanco);font-weight:600}
+
+/* ============ BOTONES ============ */
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.actions button{border-radius:6px;padding:13px;border:0;font-size:14px;font-weight:700;letter-spacing:.3px;cursor:pointer;transition:background .15s,border-color .15s,color .15s,transform .15s}
+
+.assign{background:var(--rojo-alerta);color:#FFFFFF}
+.assign:hover{background:var(--rojo-hover)}
+
+html[data-theme="dark"] .assign{background:var(--azul-operativo);color:#FFFFFF}
+html[data-theme="dark"] .assign:hover{background:#1B7FCF}
+
+.reject{background:var(--negro-panel);color:var(--gris-texto);border:1px solid var(--borde-sutil)!important}
+
+/* ============ RECHAZAR · MODO CLARO ============ */
+html[data-theme="light"] .reject{background:#FFFFFF;color:#3B4652;border-color:#D5DDE4!important}
+html[data-theme="light"] .reject:hover{background:color-mix(in srgb, var(--acento) 8%, transparent);border-color:var(--acento)!important;color:var(--acento)}
+
+/* ============ RECHAZAR · MODO OSCURO ============ */
+html[data-theme="dark"] .reject{background:#111214;color:#D5DCE3;border-color:#30343A!important}
+html[data-theme="dark"] .reject:hover{background:color-mix(in srgb, var(--rojo-alerta) 8%, transparent);border-color:var(--rojo-alerta)!important;color:var(--rojo-alerta)}
+
+/* ============ ESTADO ACTIVO ============ */
+.reject:active,.assign:active{transform:translateY(1px)}
+
+.linkBtn{border:0;background:none;color:var(--acento);font-size:13px;font-weight:600;cursor:pointer}
+
+/* Fila de la tabla de Emergencias: ademas del boton "Ver ubicacion", toda
+   la fila es clickeable para ubicar la alerta en el mapa sin tener que
+   apuntarle al boton exacto. */
+.emergenciaRow{cursor:pointer}
+.emergenciaRow:hover{background:var(--fondo-hover,rgba(127,127,127,.08))}
+
+/* Boton de accion dentro de la tabla de Emergencias: antes era un link de
+   texto plano (misma pinta que "Quitar filtro"), poco notorio para la
+   accion mas importante de esa vista. Reusa la misma paleta de .assign
+   (rojo en claro, azul en oscuro) para que se note como un CTA real. */
+.atenderBtn{
+  border:0;
+  border-radius:6px;
+  background:var(--rojo-alerta);
+  color:#FFFFFF;
+  font-size:12px;
+  font-weight:700;
+  letter-spacing:.3px;
+  padding:7px 14px;
+  cursor:pointer;
+  transition:background .15s,transform .15s;
+}
+.atenderBtn:hover{background:var(--rojo-hover)}
+.atenderBtn:active{transform:translateY(1px)}
+html[data-theme="dark"] .atenderBtn{background:var(--azul-operativo)}
+html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
+
+/* Botones de Recursos: a diferencia de .atenderBtn (rojo/azul segun tema,
+   es un CTA de marca), aca el color codifica el ESTADO resultante y debe
+   ser el mismo siempre, sin importar el tema -- rojo porque deja la unidad
+   fuera de servicio (igual que el badge .estado-9), verde porque la vuelve
+   a dejar disponible (igual que el badge .estado-0). */
+/* Mismo min-width en los dos (el texto "Fuera de servicio" es mas largo que
+   "Reactivar") para que ninguno de los dos quede viéndose mas chico que el
+   otro solo por tener menos texto -- ambos deben ocupar el mismo espacio. */
+.fueraServicioBtn{
+  border:0;
+  border-radius:6px;
+  background:var(--rojo-alerta);
+  color:#FFFFFF;
+  font-size:12px;
+  font-weight:700;
+  letter-spacing:.3px;
+  padding:7px 14px;
+  min-width:124px;
+  cursor:pointer;
+  transition:background .15s,transform .15s;
+}
+.fueraServicioBtn:hover{background:var(--rojo-hover)}
+.fueraServicioBtn:active{transform:translateY(1px)}
+
+.reactivarBtn{
+  border:0;
+  border-radius:6px;
+  background:var(--verde-disponible);
+  color:#FFFFFF;
+  font-size:12px;
+  font-weight:700;
+  letter-spacing:.3px;
+  padding:7px 14px;
+  min-width:124px;
+  cursor:pointer;
+  transition:filter .15s,transform .15s;
+}
+.reactivarBtn:hover{filter:brightness(.9)}
+.reactivarBtn:active{transform:translateY(1px)}
+
+.locateBtn{margin:12px 0 10px;display:flex;align-items:center;gap:7px;border:1px solid var(--borde-sutil);background:var(--negro-panel);color:var(--acento);border-radius:6px;padding:10px 12px;font-size:13px;font-weight:700;cursor:pointer}
+.locateBtn:hover{border-color:var(--acento);background:color-mix(in srgb, var(--acento) 8%, transparent)}
+
+/* ============ RECURSOS ============ */
+.resourcesCard,.activity{padding-bottom:14px}
+.resourceGrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:8px 20px 20px}
+.resource{display:flex;gap:9px;border:1px solid var(--borde-sutil);border-radius:8px;padding:12px;background:var(--negro-panel)}
+.resIcon{color:var(--verde-disponible);background:rgba(52,199,89,.12);border:1px solid var(--verde-disponible);width:32px;height:32px;border-radius:6px;display:grid;place-items:center;flex-shrink:0}
+.resIcon svg{width:17px}
+.resource b{font-size:12px;font-weight:600;display:block;color:var(--blanco)}
+.resource span,.resource small{display:block;font-size:11px;color:var(--gris-tenue);margin-top:3px}
+.resource .available{color:var(--verde-disponible);font-weight:600}
+.busy .resIcon{color:var(--amarillo-precaucion);background:rgba(255,204,0,.12);border-color:var(--amarillo-precaucion)}
+.busyText{color:var(--amarillo-precaucion)!important;font-weight:600}
+
+/* ============ MAPA DE CALOR / PREDICCION ============ */
+.mlBadge{background:rgba(44,154,246,.15);color:var(--azul-operativo)!important;padding:5px 8px;border-radius:4px;font-weight:700;font-size:11px}
+#heatmap{flex:1;min-height:300px}
+.alertsCard{height:465px;display:flex;flex-direction:column}
+.alertsBody{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column}
+.singleRow{margin-top:16px}
+.alertsList{padding:10px 14px 2px;display:flex;flex-direction:column;gap:8px}
+.alertRow{display:flex;gap:7px;align-items:flex-start;font-size:11px;color:var(--gris-texto);line-height:1.5;border-radius:6px;padding:5px}
+.alertRow svg{color:var(--amarillo-precaucion);flex-shrink:0;margin-top:1px}
+.alertRowClickable{cursor:pointer}
+.alertRowClickable:hover{background:var(--negro-panel)}
+.importanciaBox{margin:4px 14px 14px;padding-top:10px;border-top:1px solid var(--borde-sutil)}
+.importanciaTitle{font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--gris-tenue);margin-bottom:8px}
+.importanciaRow{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:8px;font-size:10px;color:var(--gris-texto);margin:6px 0}
+.importanciaRow span{white-space:nowrap}
+.importanciaRow b{color:var(--blanco);width:32px;text-align:right}
+.importanciaBarWrap{background:var(--negro-panel);border-radius:4px;height:6px;overflow:hidden}
+.importanciaBar{height:100%;background:var(--azul-operativo);border-radius:4px}
+.apiErrorBox{margin:14px 14px 0;padding:10px 12px;border:1px solid var(--rojo-alerta);background:rgba(255,59,48,.1);color:#ffb4ae;border-radius:6px;font-size:11px;line-height:1.5;display:flex;gap:8px;align-items:flex-start}
+.apiErrorBox svg{flex-shrink:0;margin-top:1px;color:var(--rojo-alerta)}
+.resumenText{padding:14px 14px 4px;font-size:12px;color:var(--gris-texto);line-height:1.55}
+.zonaDetalle{padding:14px}
+.zonaDetalleHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px}
+.zonaDetalleHead b{font-size:14px;color:var(--blanco);font-weight:700}
+.zonaDetalleResumen{font-size:12px;color:var(--gris-texto);line-height:1.5;margin:0 0 9px}
+.zonaRazones{margin:0 0 12px;padding-left:16px;font-size:11px;color:var(--gris-tenue);line-height:1.6}
+.zonaDesglose{display:flex;flex-direction:column;gap:5px}
+.zonaDesgloseRow{display:flex;justify-content:space-between;font-size:11px;color:var(--gris-tenue);border-top:1px solid var(--borde-sutil);padding-top:5px}
+.zonaDesgloseRow b{color:var(--blanco)}
+
+/* ============ ACTIVIDAD / HISTORIAL ============ */
+.activity{margin-top:16px}
+.liveText{
+    color:var(--verde-disponible)!important;
+    font-size:13px;
+    display:inline-flex;
+    align-items:center;
+    gap:7px;
+    line-height:1.2;
+}
+
+.liveText span{
+    display:inline-block;
+    width:7px;
+    height:7px;
+    margin:0;
+    flex-shrink:0;
+}
+.activityRows{padding:0 20px}
+.activityRow{display:flex;align-items:center;gap:11px;padding:12px 2px;border-top:1px solid var(--borde-sutil)}
+.activityIcon{width:29px;height:29px;border-radius:6px;background:color-mix(in srgb, var(--acento) 12%, transparent);color:var(--acento);display:grid;place-items:center;flex-shrink:0}
+.activityIcon svg{width:15px}
+.activityRow b{display:block;font-size:12px;color:var(--blanco);font-weight:600}
+.activityRow span{display:block;color:var(--gris-tenue);font-size:11px;margin-top:3px}
+.activityRow time{margin-left:auto;color:var(--gris-tenue);font-size:11px}
+/* Badge de estado por evento del historial: de un vistazo, si la emergencia
+   que menciona ese evento sigue activa ahora mismo o ya se cerro (ver
+   estadoEmergenciaDeEvento en HistorialView). display:inline-block anula el
+   display:block de ".activityRow span" generico (el detalle del evento). */
+.activityRow span.historialEstado{display:inline-block;flex-shrink:0;margin:0 0 0 12px;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+.historialEstado-activa{background:color-mix(in srgb, var(--rojo-alerta) 16%, transparent);color:var(--rojo-alerta)}
+.historialEstado-finalizada{background:color-mix(in srgb, var(--verde-disponible) 16%, transparent);color:var(--verde-disponible)}
+
+.toast{position:fixed;right:24px;bottom:22px;background:var(--negro-tarjeta);border:1px solid var(--verde-disponible);color:var(--verde-disponible);padding:12px 15px;border-radius:8px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px;box-shadow:0 10px 30px #0008}
+
+.placeholder{min-height:500px;display:grid;place-content:center;text-align:center;padding:40px}
+.placeholderIcon{margin:auto;width:60px;height:60px;border-radius:12px;background:rgba(44,154,246,.12);color:var(--azul-operativo);display:grid;place-items:center}
+.placeholder h2{margin:18px 0 5px;color:var(--blanco)}
+.placeholder p{max-width:500px;color:var(--gris-tenue);font-size:13px}
+
+/* ============ VISTAS DE SECCION (tablas) ============ */
+.sectionCard{margin-bottom:16px}
+.sectionGrid{display:flex;flex-direction:column;gap:16px}
+.emptyState{padding:16px 4px;color:var(--gris-tenue);font-size:12px}
+.filterRow{display:flex;flex-wrap:wrap;gap:8px;padding:10px 20px 14px}
+.filterRow input,.filterRow select{background:var(--negro-panel);color:var(--gris-texto);border:1px solid var(--borde-sutil);border-radius:6px;padding:7px 10px;font-size:12px;font-family:inherit}
+.filterRow input{flex:1;min-width:160px}
+.tableWrap{overflow-x:auto;padding:0 20px 16px}
+.dataTable{width:100%;border-collapse:collapse;font-size:12px}
+.dataTable th{text-align:left;color:var(--gris-tenue);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:1px;padding:9px 10px;border-bottom:1px solid var(--borde-sutil);white-space:nowrap}
+.dataTable td{padding:10px;border-bottom:1px solid var(--borde-sutil);color:var(--gris-texto);white-space:nowrap}
+.dataTable td.wrap{white-space:normal;max-width:260px}
+.dataTable tr:last-child td{border-bottom:none}
+.dataTable tr:hover td{background:var(--negro-panel)}
+.resIconCell{color:var(--acento)}
+/* Flota de Bomberos (RecursosView): "Compañía" y "Sector" traen nombres
+   largos (ej. 9ª Cía. "Brigada Reñaca Alto" (Bomberos Viña del Mar)) -- sin
+   .wrap, el white-space:nowrap de arriba forzaba a toda la tabla a estirarse
+   mas alla del ancho disponible, generando la barra de scroll horizontal.
+   Topes mas angostos que el .wrap generico (260px) para las columnas que
+   realmente no necesitan tanto espacio. */
+.resNombreCell{max-width:170px}
+.resEstadoCell{max-width:200px}
+
+/* Pastillas: clave radial (10-0, 10-4...) y estado 6-X */
+.prio,.estado{padding:5px 10px;border-radius:6px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;background:var(--negro-panel);border:1px solid}
+.prio-1{color:var(--rojo-alerta);border-color:var(--rojo-alerta)}
+.prio-2{color:var(--amarillo-precaucion);border-color:var(--amarillo-precaucion)}
+.prio-3{color:var(--azul-operativo);border-color:var(--azul-operativo)}
+.prio-4{color:var(--gris-tenue);border-color:var(--borde-sutil)}
+.estado-0{color:var(--verde-disponible);border-color:var(--verde-disponible)}
+.estado-3{color:var(--azul-operativo);border-color:var(--azul-operativo)}
+.estado-7{color:var(--amarillo-precaucion);border-color:var(--amarillo-precaucion)}
+.estado-8{color:var(--azul-operativo);border-color:var(--azul-operativo)}
+.estado-9{color:var(--rojo-alerta);border-color:var(--rojo-alerta)}
+
+/* Leaflet trae sus propios z-index internos (200-800 para tiles, marcadores,
+   controles, popups) que por defecto quedan MAS ALTOS que el menu movil
+   (.sidebar z-index:40) y su fondo oscuro (.navBackdrop z-index:35) -- sin
+   esto, al abrir el menu en una pantalla chica, el mapa se dibuja encima
+   del menu en vez de quedar debajo. Al ponerle su propio z-index bajo al
+   contenedor, todos esos valores internos de Leaflet quedan "atrapados"
+   dentro de este contexto de apilamiento, sin poder pasar por encima de
+   nada que este afuera con un z-index mayor. */
+#map,#heatmap{position:relative;z-index:1}
+
+/* ============ CONFIGURACION ============ */
+.configBody{padding:10px 20px 20px;display:flex;flex-direction:column;gap:16px}
+.configRow{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--gris-texto)}
+.configRow select,.configRow input:not([type="checkbox"]){background:var(--negro-panel);color:var(--gris-texto);border:1px solid var(--borde-sutil);border-radius:6px;padding:7px 9px;font-size:12px;font-family:inherit}
+.configRow input:not([type="checkbox"]){flex:1;min-width:0}
+.configRow input[type="checkbox"]{accent-color:var(--acento)}
+.configNote{font-size:12px;color:var(--gris-tenue)}
+.logoutBtn{color:var(--rojo-alerta);border-color:#ff3b3055}
+.logoutBtn:hover{background:#ff3b3015}
+
+.mobileMenu{display:none;border:0;background:transparent;color:var(--blanco);cursor:pointer;padding:0}
+.navBackdrop{display:none}
+
+/* ============ LOGIN ============ */
+.loginPage{min-height:100vh;width:100%;display:flex;align-items:center;justify-content:center;background:var(--negro-panel)}
+.themeToggleLogin{position:absolute;top:14px;right:14px;width:34px;height:34px;border:1px solid var(--borde-sutil);background:var(--negro-panel);color:var(--gris-texto);border-radius:6px;display:grid;place-items:center;cursor:pointer}
+.themeToggleLogin:hover{border-color:var(--acento);color:var(--acento)}
+.loginCard{position:relative;width:100%;max-width:360px;background:var(--negro-tarjeta);border:1px solid var(--borde-sutil);border-radius:12px;padding:32px 28px;box-shadow:0 20px 60px #0008}
+.loginCard .brand{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-bottom:1px;
+}
+.loginCard .brandIcon{
+  width:57px;
+  height:57px;
+}
+
+.loginCard .brandIcon img{
+  width:57px;
+  height:57px;
+}
+
+.loginCard .brand b{
+  font-size:21px;
+}
+
+.loginCard .brand span{
+  font-size:11px;
+}
+.loginSubtitle{color:var(--blanco);font-size:15px;font-weight:700;margin:0 0 20px}
+.loginLabel{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gris-tenue);font-weight:600;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.4px}
+.loginInput{width:100%;box-sizing:border-box;background:var(--negro-panel);border:1px solid var(--borde-sutil);border-radius:7px;padding:10px 12px;color:var(--blanco);font-size:13px;font-family:inherit}
+.loginInput:focus{outline:none;border-color:var(--acento)}
+.loginError{color:var(--rojo-alerta);font-size:12px;margin:12px 0 0;line-height:1.4}
+.loginSubmit{width:100%;margin-top:20px;padding:11px;border:0;border-radius:7px;background:var(--acento);color:var(--on-accent);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit}
+.loginSubmit:disabled{opacity:.6;cursor:default}
+.loginSubmit:not(:disabled):hover{filter:brightness(1.1)}
+.loginFooter{margin:20px 0 0;font-size:11px;color:var(--gris-tenue);line-height:1.5;text-align:center}
+
+/* ============ MARCADORES DE MAPA ============ */
+.emergency-marker div{width:40px;height:40px;border-radius:50%;background:var(--rojo-alerta);color:var(--on-accent);display:grid;place-items:center;font-size:23px;font-weight:800;border:3px solid #ff9995;box-shadow:0 0 0 12px #ff3b3025,0 0 0 25px #ff3b3012;animation:pulso-alerta 1.8s ease-in-out infinite}
+.emergency-marker-asignada div{width:34px;height:34px;font-size:17px;background:var(--azul-operativo);border-color:#8fc7fb;box-shadow:0 0 0 10px #2c9af625,0 0 0 20px #2c9af612;animation:none}
+@keyframes pulso-alerta{0%,100%{box-shadow:0 0 0 12px #ff3b3025,0 0 0 25px #ff3b3012}50%{box-shadow:0 0 0 16px #ff3b3038,0 0 0 32px #ff3b3018}}
+/* Vehiculo: el icono en si (SVG + insignia) ya dibuja su propia forma y
+   borde -- aca solo se agrega la sombra de profundidad y la transicion de
+   posicion, para que marker.setLatLng() se vea deslizar en vez de saltar
+   (Leaflet mueve el marcador cambiando su transform; al animar esa misma
+   propiedad, el navegador interpola el movimiento). */
+.resource-marker{filter:drop-shadow(0 2px 4px #0009)}
+.leaflet-marker-icon.resource-marker{transition:transform .3s linear}
+/* Anillo de enfoque temporal: se dibuja sobre el punto exacto al usar
+   "Ver en el mapa"/"Atender"/tocar una compañia en Recursos, para
+   distinguirlo de otros marcadores cercanos (varios cuarteles juntos,
+   por ejemplo) que el simple centrado del mapa no alcanza a diferenciar.
+   Dos anillos desfasados en el tiempo para un efecto de "sonar" continuo;
+   se quita solo a los 4s (ver MapPanel). */
+.focus-ping{position:relative;pointer-events:none}
+.focus-ping span{position:absolute;top:-20px;left:-20px;width:40px;height:40px;border-radius:50%;border:3px solid var(--rojo-alerta);opacity:0;animation:focus-ping-anim 1.6s ease-out infinite}
+.focus-ping span:nth-child(2){animation-delay:.8s}
+@keyframes focus-ping-anim{0%{transform:scale(.3);opacity:.9}80%{opacity:0}100%{transform:scale(2.2);opacity:0}}
+/* Ruta activa: guiones "fluyendo" en la direccion de avance, para que se
+   sienta una ruta viva y no una linea estatica. */
+.ruta-viva{animation:flujo-ruta 1s linear infinite}
+@keyframes flujo-ruta{to{stroke-dashoffset:-18}}
+
+@media(max-width:1050px){
+  .sidebar{width:205px}
+  .main{margin-left:205px;width:calc(100% - 205px)}
+  .workspace{grid-template-columns:1fr}
+  .sideCards{display:grid;grid-template-columns:1fr 1fr}
+  .kpis{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:720px){
+  .sidebar{display:flex;transform:translateX(-100%);box-shadow:8px 0 30px #0008}
+  .sidebar.open{transform:translateX(0)}
+  .main,.main.sidebarCollapsed{margin-left:0;width:100%;padding:16px}
+  .cuartelFilterRow{flex-wrap:wrap}
+  .cuartelFilterRow select{min-width:0;flex:1}
+  .mobileMenu{display:grid;place-items:center;margin-right:10px;width:32px;height:32px;flex-shrink:0}
+  .navBackdrop{display:block;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:35}
+  .headerActions .live{display:none}
+  header{flex-wrap:wrap;height:auto;gap:10px 0}
+  header>div:first-child{display:flex}
+  h1{font-size:19px}
+  .kpis{grid-template-columns:1fr 1fr}
+  .sideCards{grid-template-columns:1fr}
+  .resourceGrid{grid-template-columns:1fr}
+  .kpi{padding:12px}
+  .kpi strong{font-size:19px}
+  .cardHead{padding:14px 16px;flex-wrap:wrap;gap:8px}
+  .tableWrap,.resourceGrid,.activityRows{padding-left:14px;padding-right:14px}
+}
+@media(max-width:420px){
+  .kpis{grid-template-columns:1fr}
+  .actions{grid-template-columns:1fr}
+}
+
+/* AJUSTE INDICADOR ACTUALIZACIÓN */
+.cardHead .liveText{
+    display:inline-flex !important;
+    align-items:center !important;
+    gap:7px !important;
+    font-size:13px !important;
+    line-height:1.2 !important;
+    color:var(--verde-disponible) !important;
+}
+
+.cardHead .liveText span{
+    display:inline-block !important;
+    width:7px !important;
+    height:7px !important;
+    margin:0 !important;
+    flex-shrink:0 !important;
+}
+
+/* AJUSTE PREDICTIVA ACTUALIZACIÓN */
+.predictiveMainAlert{
+  margin:-35px 14px 0;
+  padding:13px;
+  border:1px solid #ff3b3070;
+  border-radius:10px;
+  background:linear-gradient(
+    135deg,
+    rgba(255,59,48,.15),
+    rgba(255,59,48,.04)
+  );
+}
+
+.predictiveMainAlertHeader{
+  display:flex;
+  align-items:flex-start;
+  gap:9px;
+  color:var(--rojo-alerta);
+}
+
+.predictiveMainAlertHeader svg{
+  flex-shrink:0;
+  margin-top:2px;
+}
+
+.predictiveMainAlertHeader div{
+  display:flex;
+  flex-direction:column;
+  gap:3px;
+}
+
+.predictiveMainAlertHeader strong{
+  color:#ff817a;
+  font-size:12px;
+  text-transform:uppercase;
+  letter-spacing:.4px;
+}
+
+.predictiveMainAlertHeader span{
+  color:var(--blanco);
+  font-size:13px;
+  font-weight:700;
+}
+
+.predictiveMainAlertInfo{
+  display:flex;
+  flex-direction:column;
+  gap:5px;
+  margin:12px 0;
+  color:var(--gris-texto);
+  font-size:11px;
+}
+
+.predictiveMainAlertInfo span{
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+}
+
+.predictiveMainAlertInfo strong{
+  color:var(--blanco);
+}
+
+.predictiveMapButton{
+  width:100%;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:7px;
+  padding:9px 12px;
+  border:1px solid var(--azul-operativo);
+  border-radius:7px;
+  background:rgba(44,154,246,.12);
+  color:var(--azul-operativo);
+  font-size:11px;
+  font-weight:700;
+  cursor:pointer;
+  transition:background .2s, transform .2s;
+}
+
+.predictiveMapButton:hover{
+  background:rgba(44,154,246,.24);
+  transform:translateY(-1px);
+}
+
+.predictiveMapButton:active{
+  transform:translateY(0);
+}
+
+/* Estilo general de las prioridades */
+.prioridad-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+/* Prioridad crítica */
+.prioridad-critica {
+  color: #ef4444;
+  border-color: #ef4444;
+  background-color: rgba(239, 68, 68, 0.1);
+}
+
+/* Prioridad alta */
+.prioridad-alta {
+  color: #f59e0b;
+  border-color: #f59e0b;
+  background-color: rgba(245, 158, 11, 0.1);
+}
+
+/* Prioridad media */
+.prioridad-media {
+  color: #38bdf8;
+  border-color: #38bdf8;
+  background-color: rgba(56, 189, 248, 0.1);
+}
+
+/* Prioridad baja */
+.prioridad-baja {
+  color: #4ade80;
+  border-color: #4ade80;
+  background-color: rgba(74, 222, 128, 0.1);
+}
+
+/* =========================================================
+   SOPORTE - ESTILO GENERAL DEL SISTEMA
+   ========================================================= */
+
+.supportSection{
+  display:flex;
+  flex-direction:column;
+  gap:22px;
+}
+
+
+/* =========================================================
+   CASILLAS PRINCIPALES
+   ========================================================= */
+
+.supportPanel{
+  padding:0 !important;
+  overflow:hidden;
+
+  border:2px solid var(--acento);
+  border-radius:14px;
+
+  background:var(--negro-panel);
+}
+
+
+/* =========================================================
+   ENCABEZADO
+   ========================================================= */
+
+.supportPanelHead{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+
+  min-height:60px;
+  padding:14px 24px;
+
+  background:var(--acento);
+  color:var(--on-accent);
+}
+
+.supportPanelHead h2{
+  margin:0 0 4px;
+
+  color:var(--on-accent);
+  font-size:17px;
+  font-weight:700;
+}
+
+.supportPanelHead p{
+  margin:0;
+
+  color:var(--on-accent);
+  font-size:13px;
+  opacity:.9;
+}
+
+.supportPanelHead svg{
+  color:var(--on-accent);
+  flex-shrink:0;
+}
+
+
+/* =========================================================
+   CONTENIDO
+   ========================================================= */
+
+.supportPanelBody{
+  padding:22px 24px 24px;
+  background:var(--negro-panel);
+}
+
+
+/* =========================================================
+   CONTACTO
+   ========================================================= */
+
+.supportContactGrid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:16px;
+}
+
+.supportContactCard{
+  display:flex;
+  align-items:center;
+  gap:14px;
+
+  padding:12px 4px;
+
+  background:transparent;
+  border:0;
+}
+
+.supportContactIcon{
+  width:40px;
+  height:40px;
+
+  display:grid;
+  place-items:center;
+
+  flex-shrink:0;
+
+  border-radius:7px;
+
+  background:var(--acento);
+  color:var(--on-accent);
+}
+
+.supportContactCard div:last-child{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+
+.supportContactCard span{
+  color:var(--gris-tenue);
+  font-size:13px;
+}
+
+.supportContactCard strong{
+  color:var(--blanco);
+  font-size:14px;
+}
+
+
+/* =========================================================
+   FORMULARIO
+   ========================================================= */
+
+.supportForm{
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+}
+
+
+/* =========================================================
+   CAMPOS DEL FORMULARIO
+   ========================================================= */
+
+.supportForm label{
+  display:flex;
+  flex-direction:column;
+  gap:9px;
+
+  padding:13px;
+
+  border:1px solid var(--borde-sutil);
+  border-radius:8px;
+
+  background:var(--negro-panel);
+
+  color:var(--gris-texto);
+
+  font-size:14px;
+  font-weight:600;
+}
+
+
+/* =========================================================
+   FILAS DE DOS COLUMNAS
+   ========================================================= */
+
+.supportForm .formGrid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:14px;
+
+  width:100%;
+}
+
+
+/* =========================================================
+   INPUTS / SELECTS / TEXTAREA
+   ========================================================= */
+
+.supportForm input,
+.supportForm select,
+.supportForm textarea{
+  width:100%;
+  box-sizing:border-box;
+
+  border:1px solid #c7d0d9;
+  border-radius:7px;
+
+  background:#e9eef2;
+  color:#24364d;
+
+  font-family:inherit;
+  font-size:15px;
+
+  outline:none;
+
+  transition:
+    border-color .15s,
+    box-shadow .15s,
+    background .15s;
+}
+
+
+/* =========================================================
+   INPUTS Y SELECTS
+   ========================================================= */
+
+.supportForm input:not([type="file"]),
+.supportForm select{
+  min-height:44px;
+  padding:10px 12px;
+}
+
+.supportForm select{
+  cursor:pointer;
+}
+
+
+/* =========================================================
+   ÁREA DE DESCRIPCIÓN
+   ========================================================= */
+
+.supportForm textarea{
+  min-height:125px;
+  padding:11px 12px;
+
+  line-height:1.5;
+  resize:vertical;
+}
+
+
+/* =========================================================
+   PLACEHOLDERS
+   ========================================================= */
+
+.supportForm input::placeholder,
+.supportForm textarea::placeholder{
+  color:#64748b;
+  font-size:14px;
+}
+
+
+/* =========================================================
+   FOCO
+   ========================================================= */
+
+.supportForm input:focus,
+.supportForm select:focus,
+.supportForm textarea:focus{
+  border-color:var(--acento);
+
+  box-shadow:
+    0 0 0 2px color-mix(
+      in srgb,
+      var(--acento) 15%,
+      transparent
+    );
+}
+
+
+/* =========================================================
+   ARCHIVO ADJUNTO
+   ========================================================= */
+
+.supportForm input[type="file"]{
+  min-height:44px;
+  padding:7px 9px;
+
+  cursor:pointer;
+
+  font-size:14px;
+
+  border:1px solid #c7d0d9;
+  background:#e9eef2;
+}
+
+.supportForm input[type="file"]::file-selector-button{
+  margin-right:10px;
+
+  padding:8px 13px;
+
+  border:1px solid #c0cad4;
+  border-radius:6px;
+
+  background:#f7f9fb;
+  color:#24364d;
+
+  font-family:inherit;
+  font-size:14px;
+
+  cursor:pointer;
+}
+
+.supportForm input[type="file"]::file-selector-button:hover{
+  border-color:var(--acento);
+}
+
+
+/* =========================================================
+   ARCHIVO SELECCIONADO
+   ========================================================= */
+
+.supportFile{
+  display:flex;
+  align-items:center;
+  gap:8px;
+
+  padding:9px 11px;
+
+  border:1px dashed #b8c3ce;
+  border-radius:7px;
+
+  background:#f1f4f7;
+
+  color:#526579;
+  font-size:14px;
+}
+
+.supportFile svg{
+  color:var(--acento);
+}
+
+.supportFilePreview{
+  max-width:160px;
+  max-height:120px;
+  border-radius:6px;
+  object-fit:cover;
+}
+
+.supportFileRemove{
+  border:1px solid currentColor;
+  background:transparent;
+  color:inherit;
+  border-radius:6px;
+  padding:5px 10px;
+  font-size:12px;
+  cursor:pointer;
+}
+
+.supportFileError{
+  color:var(--rojo-alerta);
+  font-size:12px;
+  font-weight:600;
+}
+
+.ticketAdjuntoImagenLink{
+  display:inline-block;
+  border:none;
+  background:none;
+  padding:0;
+  cursor:zoom-in;
+}
+
+.ticketAdjuntoImagenBtn{
+  display:block;
+  border:none;
+  background:none;
+  padding:0;
+  cursor:zoom-in;
+}
+
+.ticketImagenLightbox{
+  position:fixed;
+  inset:0;
+  z-index:1000;
+
+  display:flex;
+  align-items:center;
+  justify-content:center;
+
+  padding:40px;
+  background:rgba(0,0,0,.85);
+  cursor:zoom-out;
+}
+
+.ticketImagenLightbox img{
+  max-width:100%;
+  max-height:100%;
+  border-radius:8px;
+  object-fit:contain;
+}
+
+.ticketAdjuntoImagen{
+  max-width:200px;
+  max-height:150px;
+  border-radius:7px;
+  object-fit:cover;
+  display:block;
+  margin-top:4px;
+}
+
+.ticketAdjuntoBox{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  gap:10px;
+
+  padding:14px;
+  margin:4px 0 14px;
+
+  border:1px solid var(--borde-sutil);
+  border-radius:9px;
+  background:var(--negro-panel);
+}
+
+.ticketAdjuntoLabel{
+  display:flex;
+  align-items:center;
+  gap:6px;
+
+  font-size:11px;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:.3px;
+  color:var(--gris-tenue);
+}
+
+.ticketAdjuntoImagenGrande{
+  max-width:100%;
+  max-height:340px;
+  border-radius:8px;
+  object-fit:contain;
+  display:block;
+  cursor:zoom-in;
+}
+
+.ticketAdjuntoDescargar{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+
+  padding:7px 14px;
+  border:1px solid var(--acento);
+  border-radius:7px;
+
+  color:var(--acento);
+  font-size:12px;
+  font-weight:700;
+  text-decoration:none;
+}
+
+.ticketAdjuntoDescargar:hover{
+  background:var(--acento);
+  color:#fff;
+}
+
+
+/* =========================================================
+   BOTÓN GENERAR TICKET
+   ========================================================= */
+
+.supportActions{
+  display:flex;
+  justify-content:flex-end;
+
+  margin-top:2px;
+}
+
+.supportSubmit{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+
+  min-width:175px;
+
+  padding:11px 20px;
+
+  border:0;
+  border-radius:7px;
+
+  background:var(--acento);
+  color:var(--on-accent);
+
+  font-family:inherit;
+  font-size:14px;
+  font-weight:700;
+
+  cursor:pointer;
+
+  transition:
+    opacity .2s,
+    transform .15s;
+}
+
+.supportSubmit:hover{
+  opacity:.9;
+}
+
+.supportSubmit:active{
+  transform:translateY(1px);
+}
+
+
+/* =========================================================
+   SIN TICKETS
+   ========================================================= */
+
+.emptyState{
+  min-height:130px;
+
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+
+  gap:8px;
+
+  border:1px dashed var(--borde-sutil);
+  border-radius:7px;
+
+  text-align:center;
+
+  color:var(--gris-tenue);
+}
+
+.emptyState svg{
+  color:var(--acento);
+}
+
+.emptyState strong{
+  color:var(--blanco);
+  font-size:15px;
+}
+
+.emptyState span{
+  font-size:13px;
+}
+
+
+/* =========================================================
+   TICKETS GENERADOS
+   ========================================================= */
+
+.ticketList{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+
+.ticketCard{
+  padding:15px 16px;
+
+  border:1px solid var(--borde-sutil);
+  border-radius:7px;
+
+  background:var(--negro-tarjeta);
+}
+
+.ticketTop{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+
+  gap:10px;
+
+  margin-bottom:9px;
+}
+
+.ticketTop strong{
+  color:var(--acento);
+  font-size:14px;
+}
+
+.ticketTop span{
+  padding:5px 9px;
+
+  border:1px solid var(--borde-sutil);
+  border-radius:999px;
+
+  color:var(--gris-tenue);
+
+  font-size:11px;
+  font-weight:700;
+  text-transform:uppercase;
+}
+
+.ticketCard h3{
+  margin:0 0 7px;
+
+  color:var(--blanco);
+  font-size:15px;
+}
+
+.ticketCard p{
+  margin:0 0 11px;
+
+  color:var(--gris-tenue);
+  font-size:13px;
+  line-height:1.5;
+}
+
+.ticketMeta{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+
+  margin-bottom:8px;
+}
+
+.ticketMeta span{
+  padding:5px 8px;
+
+  border:1px solid var(--borde-sutil);
+  border-radius:5px;
+
+  color:var(--gris-tenue);
+  font-size:11px;
+}
+
+.ticketAttachment{
+  display:flex;
+  align-items:center;
+  gap:5px;
+
+  margin-bottom:7px;
+
+  color:var(--gris-tenue);
+  font-size:12px;
+}
+
+.ticketAttachment svg{
+  color:var(--acento);
+}
+
+.ticketCard small{
+  color:var(--gris-tenue);
+  font-size:11px;
+}
+
+
+/* =========================================================
+   MODO CLARO
+   ========================================================= */
+
+html[data-theme="light"] .supportPanel{
+  background:#fff;
+  border-color:var(--acento);
+}
+
+html[data-theme="light"] .supportPanelBody{
+  background:#fff;
+}
+
+html[data-theme="light"] .supportForm label{
+  background:#fff;
+}
+
+html[data-theme="light"] .supportForm input,
+html[data-theme="light"] .supportForm select,
+html[data-theme="light"] .supportForm textarea{
+  background:#e9eef2;
+  color:#24364d;
+  border-color:#c7d0d9;
+}
+
+html[data-theme="light"] .supportForm input[type="file"]{
+  background:#e9eef2;
+  border-color:#c7d0d9;
+}
+
+html[data-theme="light"] .supportForm input[type="file"]::file-selector-button{
+  background:#f7f9fb;
+  color:#24364d;
+  border-color:#c0cad4;
+}
+
+html[data-theme="light"] .supportFile{
+  background:#f1f4f7;
+  border-color:#b8c3ce;
+  color:#526579;
+}
+
+
+/* =========================================================
+   MODO OSCURO
+   ESTILO ALINEADO CON EL DASHBOARD
+   ========================================================= */
+
+html[data-theme="dark"] .supportPanel{
+  background:#18191c;
+  border-color:var(--borde-sutil);
+}
+
+html[data-theme="dark"] .supportPanelBody{
+  background:#18191c;
+}
+
+html[data-theme="dark"] .supportForm label{
+  background:#18191c;
+  border-color:#2b2f34;
+}
+
+html[data-theme="dark"] .supportForm input,
+html[data-theme="dark"] .supportForm select,
+html[data-theme="dark"] .supportForm textarea{
+  background:#111214;
+  color:#f1f5f9;
+
+  border-color:#30343a;
+}
+
+html[data-theme="dark"] .supportForm input:hover,
+html[data-theme="dark"] .supportForm select:hover,
+html[data-theme="dark"] .supportForm textarea:hover{
+  border-color:#424850;
+}
+
+html[data-theme="dark"] .supportForm input::placeholder,
+html[data-theme="dark"] .supportForm textarea::placeholder{
+  color:#8b949e;
+}
+
+html[data-theme="dark"] .supportForm input[type="file"]{
+  background:#111214;
+  border-color:#30343a;
+  color:#f1f5f9;
+}
+
+html[data-theme="dark"] .supportForm input[type="file"]::file-selector-button{
+  background:#1d2024;
+  color:#f1f5f9;
+  border-color:#383e45;
+}
+
+html[data-theme="dark"] .supportForm input[type="file"]::file-selector-button:hover{
+  border-color:var(--acento);
+}
+
+html[data-theme="dark"] .supportFile{
+  background:#1d2024;
+  border-color:#383e45;
+  color:#aeb8c3;
+}
+
+html[data-theme="dark"] .ticketCard{
+  background:#18191c;
+  border-color:#2b2f34;
+}
+
+html[data-theme="dark"] .emptyState{
+  border-color:#383e45;
+}
+
+
+/* =========================================================
+   RESPONSIVE
+   ========================================================= */
+
+@media(max-width:900px){
+
+  .supportContactGrid,
+  .supportForm .formGrid{
+    grid-template-columns:1fr;
+  }
+
+}
+
+@media(max-width:600px){
+
+  .supportPanelHead{
+    padding:14px 18px;
+  }
+
+  .supportPanelBody{
+    padding:18px;
+  }
+
+  .supportActions{
+    justify-content:stretch;
+  }
+
+  .supportSubmit{
+    width:100%;
+  }
+
+}
+
+/* =========================================================
+   ADMINISTRACION DE TICKETS
+   ========================================================= */
+
+.adminTicketsPage{
+  display:flex;
+  flex-direction:column;
+  gap:16px;
+}
+
+.adminTicketsStats{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:12px;
+}
+
+.adminTicketStat{
+  background:var(--negro-tarjeta);
+  border:1px solid var(--borde-sutil);
+  border-radius:10px;
+  padding:18px;
+}
+
+.adminTicketStat span{
+  display:block;
+  color:var(--gris-tenue);
+  font-size:11px;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.5px;
+}
+
+.adminTicketStat strong{
+  display:block;
+  margin-top:6px;
+  color:var(--blanco);
+  font-size:26px;
+  font-weight:700;
+}
+
+.adminTicketsPanel{
+  overflow:hidden;
+}
+
+.adminTicketsToolbar{
+  display:flex;
+  gap:10px;
+  padding:16px 20px;
+}
+
+.adminTicketsToolbar input,
+.adminTicketsToolbar select{
+  background:var(--negro-panel);
+  color:var(--gris-texto);
+  border:1px solid var(--borde-sutil);
+  border-radius:6px;
+  padding:10px 12px;
+  font-family:inherit;
+  font-size:13px;
+}
+
+.adminTicketsToolbar input{
+  flex:1;
+}
+
+.adminTicketsToolbar select{
+  min-width:190px;
+}
+
+.adminTicketsToolbar input:focus,
+.adminTicketsToolbar select:focus{
+  outline:none;
+  border-color:var(--acento);
+}
+
+.adminTicketsList{
+  display:flex;
+  flex-direction:column;
+}
+
+.adminTicketRow{
+  display:grid;
+  grid-template-columns:135px minmax(0,1fr) 170px;
+  gap:28px;
+  align-items:center;
+  width:100%;
+  padding:24px 28px;
+  border:0;
+  border-top:1px solid var(--borde-sutil);
+  border-radius:0;
+  background:transparent;
+  color:inherit;
+  font:inherit;
+  text-align:left;
+  cursor:pointer;
+  transition:background .15s;
+}
+
+.adminTicketRow:hover{
+  background:color-mix(in srgb,var(--acento) 5%,transparent);
+}
+
+.adminTicketId strong{
+  display:block;
+  color:var(--blanco);
+  font-size:15px;
+}
+
+.adminTicketId span{
+  display:block;
+  margin-top:7px;
+  color:var(--gris-tenue);
+  font-size:12px;
+}
+
+.adminTicketInfo{
+  min-width:0;
+}
+
+.adminTicketInfo strong{
+  display:block;
+  color:var(--blanco);
+  font-size:16px;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.adminTicketInfo span{
+  display:block;
+  margin-top:8px;
+  color:var(--gris-tenue);
+  font-size:13px;
+}
+
+/* Fila de metadatos (tipo/apartado + prioridad) debajo del titulo -- en
+   flex con gap para que la pastilla de prioridad quede separada del texto
+   en vez de pegada despues del ultimo "·", como pedido. Especificidad mas
+   alta que ".adminTicketInfo span" (misma regla de arriba) para cancelar
+   su display:block/margin-top en los dos <span> hijos de esta fila. */
+.adminTicketMetaRow{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  margin-top:8px;
+}
+
+.adminTicketMetaRow span{
+  display:inline-flex;
+  margin-top:0;
+}
+
+/* Ancho fijo e igual para los 3 estados (Abierto/En proceso/Resuelto) --
+   antes cada uno media distinto segun el largo de su texto. */
+.adminTicketStatus{
+  justify-self:end;
+  width:140px;
+  padding:9px 12px;
+  border-radius:20px;
+  border:2px solid currentColor;
+  font-size:13px;
+  font-weight:800;
+  text-transform:uppercase;
+  letter-spacing:.3px;
+  text-align:center;
+  white-space:nowrap;
+}
+
+.status-pendiente{
+  color:var(--rojo-alerta);
+  background:color-mix(in srgb,var(--rojo-alerta) 10%,transparent);
+}
+
+.status-en-proceso{
+  color:var(--azul-operativo);
+  background:color-mix(in srgb,var(--azul-operativo) 10%,transparent);
+}
+
+.status-resuelto{
+  color:var(--verde-disponible);
+  background:color-mix(in srgb,var(--verde-disponible) 10%,transparent);
+}
+
+html[data-theme="light"] .adminTicketStat{
+  border:2px solid var(--acento);
+  box-shadow:0 1px 3px rgba(28,40,51,.09),0 1px 2px rgba(28,40,51,.06);
+}
+
+html[data-theme="light"] .adminTicketsPanel{
+  border:2px solid var(--acento);
+  box-shadow:0 1px 3px rgba(28,40,51,.09),0 1px 2px rgba(28,40,51,.06);
+}
+
+html[data-theme="light"] .adminTicketsToolbar input,
+html[data-theme="light"] .adminTicketsToolbar select{
+  background:var(--fondo-pagina);
+  border-color:#C7D0D8;
+}
+
+html[data-theme="light"] .adminTicketsToolbar input:focus,
+html[data-theme="light"] .adminTicketsToolbar select:focus{
+  background:var(--negro-panel);
+  border-color:var(--acento);
+}
+
+@media(max-width:800px){
+
+  .adminTicketsStats{
+    grid-template-columns:1fr;
+  }
+
+  .adminTicketsToolbar{
+    flex-direction:column;
+  }
+
+  .adminTicketsToolbar select{
+    width:100%;
+  }
+
+  .adminTicketRow{
+    grid-template-columns:1fr;
+    gap:8px;
+  }
+
+  .adminTicketStatus{
+    justify-self:start;
+  }
+
+}
+
+/* =========================================================
+   CONVERSACIÓN DE SOPORTE
+   ========================================================= */
+
+.ticketSupportResponse{
+  margin-top:14px;
+  padding:13px 14px;
+  border-left:3px solid var(--acento);
+  background:var(--negro-panel);
+  border-radius:7px;
+}
+
+.ticketSupportResponse strong{
+  display:block;
+  color:var(--acento);
+  font-size:11px;
+  font-weight:700;
+  text-transform:uppercase;
+  margin-bottom:6px;
+}
+
+.ticketSupportResponse p{
+  margin:0;
+  color:var(--gris-texto);
+  font-size:12px;
+  line-height:1.5;
+}
+
+/* Hilo completo de la conversacion (ver TicketThread): antes solo se veia
+   la ULTIMA respuesta de cada lado y se perdia el resto del intercambio.
+   Mismo lenguaje visual que .ticketSupportResponse, un mensaje por burbuja
+   en orden cronologico, con el borde de color segun quien escribio. */
+.ticketThread{display:flex; flex-direction:column; gap:10px; margin-top:14px}
+.ticketThreadMsg{padding:13px 14px; border-left:3px solid var(--acento); background:var(--negro-panel); border-radius:7px}
+.ticketThreadMsg.esUsuario{border-left-color:var(--verde-disponible)}
+.ticketThreadMsg strong{display:block; font-size:11px; font-weight:700; text-transform:uppercase; margin-bottom:6px; color:var(--acento)}
+.ticketThreadMsg.esUsuario strong{color:var(--verde-disponible)}
+.ticketThreadMsg p{margin:0 0 6px; color:var(--gris-texto); font-size:12px; line-height:1.5}
+.ticketThreadMsg small{color:var(--gris-tenue); font-size:10px}
+
+/* Pastilla de prioridad del ticket (Baja/Media/Alta). display:inline-flex
+   + width:fit-content anulan ".adminTicketInfo span{display:block}" (una
+   regla mas general que, sin esto, estiraba la pastilla a todo el ancho de
+   la fila en vez de dejarla como una etiqueta chica).
+   Fondo SOLIDO (no transparente) + letras blancas con contorno negro: el
+   detalle del ticket (.cardHead) tiene fondo rojo en modo claro, y un texto
+   rojo-sobre-fondo-rojo-transparente se volvia invisible en "Alta" -- el
+   contorno garantiza que se lea sin importar el fondo (rojo del header,
+   blanco de la fila, oscuro del tema dark). Tamaño mas grande y llamativo,
+   como se pidio ("se haga ver").
+*/
+/* Paleta propia para prioridad de tickets -- deliberadamente distinta de
+   los colores semaforo (--rojo-alerta/--amarillo-precaucion/--verde-
+   disponible) que usa el resto de la app para alertas de emergencias
+   reales. Esos son brillantes/tipo iOS (alarma); para un sistema interno
+   de tickets se pidio algo mas corporativo y sobrio, y ademas asi un
+   cambio aca no afecta ningun otro indicador de la app. */
+:root{
+  --prioridad-baja:#2F6F4E;
+  --prioridad-media:#9C6B0B;
+  --prioridad-alta:#8E2436;
+}
+
+.ticketTopBadges{display:flex; align-items:center; gap:8px}
+.ticketPrioridad{
+  display:inline-flex;
+  width:fit-content;
+  margin-top:0!important;
+  padding:4px 11px;
+  border-radius:6px;
+  font-size:12px;
+  font-weight:800;
+  text-transform:uppercase;
+  letter-spacing:.4px;
+  color:#fff;
+  text-shadow:-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+}
+.ticketPrioridad-baja{background:var(--prioridad-baja)}
+.ticketPrioridad-media{background:var(--prioridad-media)}
+.ticketPrioridad-alta{background:var(--prioridad-alta)}
+
+/* Mismo look que .ticketPrioridad pero como <select> editable -- solo
+   soporte puede ajustar la prioridad (ver onCambiarPrioridad), quien
+   reporta el ticket no la elige. */
+.ticketPrioridadSelect{
+  display:inline-flex;
+  align-items:center;
+  border:2px solid #000;
+  border-radius:20px;
+  padding:4px 12px;
+  font-size:12px;
+  font-weight:800;
+  text-transform:uppercase;
+  letter-spacing:.4px;
+  cursor:pointer;
+  margin-left:4px;
+  color:#fff;
+  text-shadow:-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+}
+.ticketPrioridadSelect.ticketPrioridad-baja{background:var(--prioridad-baja)}
+.ticketPrioridadSelect.ticketPrioridad-media{background:var(--prioridad-media)}
+.ticketPrioridadSelect.ticketPrioridad-alta{background:var(--prioridad-alta)}
+
+/* Las opciones del <select> se ven como texto normal del navegador, no
+   como la pastilla (eso solo aplica al propio control cerrado) -- fondo
+   claro y texto oscuro para que se lean en el menu desplegable. */
+.ticketPrioridadSelect option{
+  color:#000;
+  text-shadow:none;
+  background:#fff;
+}
+
+/* "Sin asignar": un ticket recien creado no trae ninguna urgencia
+   predefinida -- esta pastilla es deliberadamente neutra/apagada (gris,
+   borde punteado) para que no se confunda con una prioridad real ya
+   evaluada por soporte. Va despues de las reglas base .ticketPrioridad/
+   .ticketPrioridadSelect para poder cancelar su color/fondo/contorno. */
+.ticketPrioridad-sinasignar{
+  background:transparent;
+  color:var(--gris-tenue);
+  text-shadow:none;
+  border:1px dashed var(--gris-tenue);
+}
+.ticketPrioridadSelect.ticketPrioridad-sinasignar{
+  background:transparent;
+  color:var(--gris-tenue);
+  text-shadow:none;
+  border:2px dashed var(--gris-tenue);
+}
+
+.ticketUserReply{
+  margin-top:14px;
+  padding:14px;
+  border:1px solid var(--borde-sutil);
+  border-radius:8px;
+  background:var(--negro-panel);
+}
+
+.ticketUserReply strong{
+  display:block;
+  margin-bottom:8px;
+  color:var(--blanco);
+  font-size:12px;
+}
+
+.ticketUserReply textarea{
+  width:100%;
+  box-sizing:border-box;
+  min-height:100px;
+  resize:vertical;
+  padding:10px 12px;
+  background:var(--negro-tarjeta);
+  color:var(--gris-texto);
+  border:1px solid var(--borde-sutil);
+  border-radius:6px;
+  font-family:inherit;
+  font-size:12px;
+  line-height:1.5;
+}
+
+.ticketUserReply textarea:focus{
+  outline:none;
+  border-color:var(--acento);
+}
+
+.ticketUserReply button{
+  margin-top:9px;
+  display:flex;
+  align-items:center;
+  gap:6px;
+  border:1px solid var(--acento);
+  background:var(--acento);
+  color:var(--on-accent);
+  border-radius:6px;
+  padding:9px 12px;
+  font-family:inherit;
+  font-size:12px;
+  font-weight:700;
+  cursor:pointer;
+}
+
+.ticketUserReply button:hover{
+  filter:brightness(1.08);
+}
+
+.adminTicketUserResponse{
+  padding:14px;
+  border:1px solid var(--borde-sutil);
+  border-radius:8px;
+  background:var(--negro-panel);
+}
+
+.adminTicketUserResponse span{
+  display:block;
+  margin-bottom:7px;
+  color:var(--gris-tenue);
+  font-size:11px;
+  font-weight:700;
+  text-transform:uppercase;
+}
+
+.adminTicketUserResponse p{
+  margin:0;
+  color:var(--gris-texto);
+  font-size:13px;
+  line-height:1.6;
+}
+
+html[data-theme="light"] .ticketSupportResponse,
+html[data-theme="light"] .ticketUserReply,
+html[data-theme="light"] .adminTicketUserResponse{
+  background:var(--fondo-pagina);
+}
+
+html[data-theme="light"] .ticketUserReply textarea{
+  background:var(--negro-panel);
+}
+
+/* =========================================================
+   DETALLE Y RESPUESTA DE TICKETS
+   ========================================================= */
+
+.adminTicketDetail{
+  margin-top:16px;
+}
+
+.adminTicketDetailBody{
+  padding:20px;
+  display:flex;
+  flex-direction:column;
+  gap:18px;
+}
+
+.adminTicketMeta{
+  display:flex;
+  flex-wrap:wrap;
+  gap:12px;
+  color:var(--gris-tenue);
+  font-size:12px;
+}
+
+/* Encabezado del detalle de un ticket: quien lo pidio (nombre + correo),
+   tipo y apartado, todo en una sola fila organizada que se parte en varias
+   lineas si no cabe (igual que .adminTicketMeta mas abajo). El !important
+   anula ".cardHead span{display:block}", que de otro modo apilaria cada
+   segmento en su propia linea. */
+.adminTicketHeadMeta{display:flex!important;flex-wrap:wrap;gap:4px 14px;margin-top:6px!important}
+.adminTicketHeadMeta span{display:flex!important;align-items:center;gap:5px}
+
+.adminTicketMeta span{
+  display:flex;
+  align-items:center;
+  gap:5px;
+}
+
+.adminTicketDescription,
+.adminTicketExistingResponse{
+  padding:14px;
+  border:1px solid var(--borde-sutil);
+  border-radius:8px;
+  background:var(--negro-panel);
+}
+
+.adminTicketDescription span,
+.adminTicketExistingResponse span{
+  display:block;
+  margin-bottom:7px;
+  color:var(--gris-tenue);
+  font-size:11px;
+  font-weight:700;
+  text-transform:uppercase;
+}
+
+.adminTicketDescription p,
+.adminTicketExistingResponse p{
+  margin:0;
+  color:var(--gris-texto);
+  font-size:13px;
+  line-height:1.6;
+}
+
+.adminTicketResponse{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  color:var(--gris-texto);
+  font-size:12px;
+  font-weight:600;
+}
+
+.adminTicketResponse textarea{
+  width:100%;
+  box-sizing:border-box;
+  resize:vertical;
+  min-height:120px;
+  padding:12px;
+  background:var(--negro-panel);
+  color:var(--gris-texto);
+  border:1px solid var(--borde-sutil);
+  border-radius:8px;
+  font-family:inherit;
+  font-size:13px;
+  line-height:1.5;
+}
+
+.adminTicketResponse textarea:focus{
+  outline:none;
+  border-color:var(--acento);
+}
+
+.adminTicketActions{
+  display:flex;
+  justify-content:flex-end;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.adminTicketBtn{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:9px 13px;
+  border:1px solid var(--borde-sutil);
+  border-radius:7px;
+  background:var(--negro-panel);
+  color:var(--gris-texto);
+  font-family:inherit;
+  font-size:12px;
+  font-weight:600;
+  cursor:pointer;
+}
+
+.adminTicketBtn:hover{
+  border-color:var(--acento);
+}
+
+.adminTicketBtn.primary{
+  background:var(--acento);
+  border-color:var(--acento);
+  color:#fff;
+}
+
+.adminTicketRow{
+  width:100%;
+  border-left:0;
+  border-right:0;
+  border-bottom:0;
+  text-align:left;
+  font-family:inherit;
+  cursor:pointer;
+}
+
+html[data-theme="light"] .adminTicketDescription,
+html[data-theme="light"] .adminTicketExistingResponse{
+  background:var(--fondo-pagina);
+}
+
+html[data-theme="light"] .adminTicketResponse textarea{
+  background:var(--fondo-pagina);
+}
+
+
+/* =========================================================
+   NUEVA EMERGENCIA (FORMULARIO CAD, SOLO ADMIN)
+   ========================================================= */
+
+/* El encabezado ("Nueva emergencia") se centra igual que el grid de abajo
+   (mismo max-width/margin:0 auto) -- si no, su texto quedaba pegado al
+   borde izquierdo de la tarjeta completa mientras el contenido del
+   formulario (mas angosto y centrado) empezaba mas adentro. */
+.nuevaEmergenciaCard > .cardHead{
+  max-width:1200px;
+  margin:0 auto;
+}
+
+.nuevaEmergenciaCard > .cardHead b{
+  font-size:22px;
+}
+
+.nuevaEmergenciaCard > .cardHead span{
+  font-size:14px;
+}
+
+/* Responsive: crece con la ventana en vez de quedar pegado a un ancho fijo
+   chico con todo el resto de la tarjeta vacio -- hasta un tope razonable
+   (1200px) para que el texto no quede ilegible en pantallas ultra anchas,
+   y centrado dentro de la tarjeta (que ya ocupa todo el ancho disponible). */
+.nuevaEmergenciaGrid{
+  display:grid;
+  grid-template-columns:1fr;
+  gap:22px;
+  padding:20px;
+  max-width:1200px;
+  margin:0 auto;
+}
+
+.nuevaEmergenciaCampo:not(.nuevaEmergenciaCampoMapa){
+  max-width:900px;
+}
+
+.nuevaEmergenciaCampo{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  position:relative;
+
+  font-size:16px;
+  font-weight:700;
+  color:var(--gris-texto);
+}
+
+/* El desplegable de un campo (codigo/direccion) se extiende HACIA ABAJO,
+   por encima del campo siguiente -- nunca al reves. Con el mismo z-index
+   en los 3 campos, un empate no garantiza que el de arriba gane sobre el
+   de abajo (al reves, en un grid el ultimo en el DOM suele ganar), y el
+   campo 2 tapaba el desplegable del campo 1. Por eso el orden baja en
+   cascada: 1 (codigo) > 2 (direccion) > 3 (mapa).  */
+.nuevaEmergenciaGrid > *:nth-child(1){ z-index:3; }
+.nuevaEmergenciaGrid > *:nth-child(2){ z-index:2; }
+.nuevaEmergenciaCampoMapa{ z-index:1; }
+
+.estadoBusquedaDireccion{
+  color:var(--gris-tenue);
+  font-weight:500;
+  font-size:14px;
+  text-transform:none;
+}
+
+.estadoBusquedaDireccion.error{
+  color:var(--rojo-alerta);
+}
+
+.nuevaEmergenciaCampo input[type="text"]{
+  width:100%;
+  box-sizing:border-box;
+  padding:13px 16px;
+  border:1px solid var(--borde-sutil);
+  border-radius:8px;
+  background:var(--negro-panel);
+  color:var(--blanco);
+  font-size:17px;
+  font-family:inherit;
+  text-transform:uppercase;
+}
+
+.nuevaEmergenciaCampoMapa{
+  grid-column:1 / -1;
+  /* Mismo ancho que el mapa (.formMapaUbicacion), si no el margin-left:auto
+     del boton lo alineaba con el borde de toda la tarjeta en vez de con el
+     borde real del mapa, que es mas angosto. */
+  max-width:1100px;
+}
+
+.nuevaEmergenciaCoords{
+  color:var(--gris-tenue);
+  font-weight:500;
+  font-size:14px;
+  font-variant-numeric:tabular-nums;
+}
+
+.formMapaUbicacion{
+  width:100%;
+  max-width:1100px;
+  height:600px;
+  border-radius:10px;
+  overflow:hidden;
+  border:1px solid var(--borde-sutil);
+  cursor:crosshair;
+}
+
+/* "Crear y generar recomendacion" va debajo del mapa (no encima, no
+   flotando sobre el) pero pegado a su mismo costado derecho y sin la fila
+   extra con padding que antes dejaba un espacio en blanco de mas. */
+.nuevaEmergenciaCrearBtn{
+  display:block;
+  margin:14px 0 0 auto;
+  max-width:1100px;
+  width:fit-content;
+
+  padding:15px 26px;
+  border:none;
+  border-radius:8px;
+
+  background:var(--acento);
+  color:#fff;
+  font-size:16px;
+  font-weight:700;
+  font-family:inherit;
+  cursor:pointer;
+}
+
+.nuevaEmergenciaCrearBtn:disabled{
+  opacity:.6;
+  cursor:default;
+}
+
+/* Combobox de codigo de emergencia (typeahead) */
+.comboClave{
+  position:relative;
+}
+
+.comboClave input{
+  text-transform:none;
+}
+
+.comboClaveLista, .comboDireccionLista{
+  position:absolute;
+  z-index:20;
+  top:calc(100% + 4px);
+  left:0;
+  right:0;
+
+  max-height:240px;
+  overflow-y:auto;
+  margin:0;
+  padding:6px;
+  list-style:none;
+
+  background:var(--negro-panel);
+  border:1px solid var(--borde-sutil);
+  border-radius:8px;
+  box-shadow:0 8px 24px rgba(0,0,0,.35);
+}
+
+.comboClaveLista li, .comboDireccionLista li{
+  padding:11px 12px;
+  border-radius:6px;
+  font-size:15px;
+  font-weight:500;
+  text-transform:none;
+  color:var(--blanco);
+  cursor:pointer;
+}
+
+.comboClaveLista li strong{
+  margin-right:6px;
+  color:var(--acento);
+}
+
+.comboClaveLista li:hover, .comboClaveLista li.activo,
+.comboDireccionLista li:hover{
+  background:color-mix(in srgb, var(--acento) 14%, transparent);
+}
+
+/* La prioridad operacional ya no se muestra como campo del formulario --
+   se calcula y se envia sola a partir del codigo de emergencia elegido
+   (ver elegirCodigo en NuevaEmergenciaView), sin UI propia. */
+
+@media (max-width: 860px){
+  .nuevaEmergenciaGrid{
+    grid-template-columns:1fr;
+  }
+}
