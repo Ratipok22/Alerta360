@@ -184,6 +184,12 @@ header p{font-size:12px;color:var(--gris-tenue);margin:5px 0 0}
 .headerActions button{border:1px solid var(--borde-sutil);background:var(--negro-tarjeta);color:var(--gris-texto);width:34px;height:34px;border-radius:6px;display:grid;place-items:center;cursor:pointer}
 .headerActions button:hover{border-color:var(--acento);color:var(--acento)}
 .live{font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--verde-disponible);background:rgba(52,199,89,.12);border:1px solid var(--verde-disponible);border-radius:20px;padding:8px 11px}
+.live.liveToggle{cursor:pointer;user-select:none;transition:filter .15s,transform .1s}
+.live.liveToggle:hover{filter:brightness(1.15)}
+.live.liveToggle:active{transform:scale(.97)}
+.live.liveToggle.liveBusy{opacity:.6;cursor:wait;pointer-events:none}
+.live.liveOff{color:var(--rojo-alerta);background:rgba(255,59,48,.12);border-color:var(--rojo-alerta)}
+.live.liveOff span{background:var(--rojo-alerta);box-shadow:0 0 8px rgba(255,59,48,.53)}
 .avatar{width:34px;height:34px;border-radius:50%;background:var(--azul-operativo);color:var(--on-accent);display:grid;place-items:center;font-size:11px;font-weight:700;border:0;cursor:pointer;font-family:inherit;transition:filter .15s}
 .avatar:hover{filter:brightness(1.15)}
 
@@ -243,6 +249,12 @@ html[data-theme="light"] .kpiIcon-azul{background:var(--azul-operativo)}
 
 .workspace{display:grid;grid-template-columns:minmax(0,2fr) minmax(330px,.82fr);gap:16px;margin-top:16px}
 .mapCard{position:relative;overflow:hidden;background:var(--negro-panel);border:1px solid var(--borde-sutil);border-radius:12px;min-height:465px;display:flex;flex-direction:column}
+/* El mapa operacional se estira al alto de su columna lateral (dinamico,
+   normalmente mas alto que 465px); el mapa de calor comparte columna con
+   .alertsCard, que tiene un alto fijo de 465px. Se le da el mismo piso
+   minimo para que ambos mapas se vean del mismo tamaño. */
+.heatMapCard{min-height:600px}
+.heatMapCard #heatmap{min-height:500px}
 .mapCard .cardHead{flex-shrink:0}
 .mapControls{display:flex;gap:6px}
 .mapControls button{background:var(--negro-tarjeta);color:var(--gris-texto);border:1px solid var(--borde-sutil);border-radius:6px;width:31px;height:29px;display:grid;place-items:center;cursor:pointer}
@@ -421,11 +433,16 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
 .mlBadge{background:rgba(44,154,246,.15);color:var(--azul-operativo)!important;padding:5px 8px;border-radius:4px;font-weight:700;font-size:11px}
 #heatmap{flex:1;min-height:300px}
 .alertsCard{height:465px;display:flex;flex-direction:column}
+.heatMapCard + .sideCards .alertsCard{height:auto;flex:1}
 .alertsBody{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column}
+.heatMapCard + .sideCards .cardHead b{font-size:18px}
+.heatMapCard + .sideCards .cardHead span{font-size:14px}
 .singleRow{margin-top:16px}
 .alertsList{padding:10px 14px 2px;display:flex;flex-direction:column;gap:8px}
 .alertRow{display:flex;gap:7px;align-items:flex-start;font-size:11px;color:var(--gris-texto);line-height:1.5;border-radius:6px;padding:5px}
 .alertRow svg{color:var(--amarillo-precaucion);flex-shrink:0;margin-top:1px}
+.heatMapCard + .sideCards .alertsList{padding:16px 20px 10px;gap:14px}
+.heatMapCard + .sideCards .alertRow{font-size:14px;gap:10px;padding:8px}
 .alertRowClickable{cursor:pointer}
 .alertRowClickable:hover{background:var(--negro-panel)}
 .importanciaBox{margin:4px 14px 14px;padding-top:10px;border-top:1px solid var(--borde-sutil)}
@@ -438,6 +455,7 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
 .apiErrorBox{margin:14px 14px 0;padding:10px 12px;border:1px solid var(--rojo-alerta);background:rgba(255,59,48,.1);color:#ffb4ae;border-radius:6px;font-size:11px;line-height:1.5;display:flex;gap:8px;align-items:flex-start}
 .apiErrorBox svg{flex-shrink:0;margin-top:1px;color:var(--rojo-alerta)}
 .resumenText{padding:14px 14px 4px;font-size:12px;color:var(--gris-texto);line-height:1.55}
+.heatMapCard + .sideCards .resumenText{padding:20px 20px 6px;font-size:14px;line-height:1.7}
 .zonaDetalle{padding:14px}
 .zonaDetalleHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px}
 .zonaDetalleHead b{font-size:14px;color:var(--blanco);font-weight:700}
@@ -673,6 +691,12 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
   );
 }
 
+.heatMapCard + .sideCards .predictiveMainAlert{
+  margin:-35px 20px 0;
+  padding:22px;
+  border-radius:14px;
+}
+
 .predictiveMainAlertHeader{
   display:flex;
   align-items:flex-start;
@@ -683,6 +707,11 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
 .predictiveMainAlertHeader svg{
   flex-shrink:0;
   margin-top:2px;
+}
+
+.heatMapCard + .sideCards .predictiveMainAlertHeader svg{
+  width:22px;
+  height:22px;
 }
 
 .predictiveMainAlertHeader div{
@@ -698,10 +727,19 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
   letter-spacing:.4px;
 }
 
+.heatMapCard + .sideCards .predictiveMainAlertHeader strong{
+  font-size:15px;
+  letter-spacing:.6px;
+}
+
 .predictiveMainAlertHeader span{
   color:var(--blanco);
   font-size:13px;
   font-weight:700;
+}
+
+.heatMapCard + .sideCards .predictiveMainAlertHeader span{
+  font-size:19px;
 }
 
 .predictiveMainAlertInfo{
@@ -711,6 +749,12 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
   margin:12px 0;
   color:var(--gris-texto);
   font-size:11px;
+}
+
+.heatMapCard + .sideCards .predictiveMainAlertInfo{
+  gap:10px;
+  margin:20px 0;
+  font-size:15px;
 }
 
 .predictiveMainAlertInfo span{
@@ -738,6 +782,12 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
   font-weight:700;
   cursor:pointer;
   transition:background .2s, transform .2s;
+}
+
+.heatMapCard + .sideCards .predictiveMapButton{
+  padding:14px 16px;
+  font-size:14px;
+  border-radius:9px;
 }
 
 .predictiveMapButton:hover{

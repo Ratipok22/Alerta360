@@ -5,10 +5,13 @@ from core.eta import calcular_eta
 REF_LAT, REF_LNG = -32.9968, -71.4884
 
 def obtener_zonas():
+    # Las 281 zonas reales (codigos INE) ya no tienen columna "actividad"
+    # -- esa era de las 5 zonas de prueba viejas, reemplazadas por el
+    # modulo de prediccion de demanda (ver migracion_segundo_mapa.sql).
     with obtener_conexion() as conn, conn.cursor() as cur:
         cur.execute("""SELECT id_zona, nombre_zona, latitud_minima, latitud_maxima,
                        longitud_minima, longitud_maxima FROM emergencia.zona
-                       WHERE actividad = TRUE ORDER BY id_zona""")
+                       ORDER BY id_zona""")
         filas = cur.fetchall()
     salida = []
     for ident, nombre, latmin, latmax, lngmin, lngmax in filas:

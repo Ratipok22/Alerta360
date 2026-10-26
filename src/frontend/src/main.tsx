@@ -2392,7 +2392,7 @@ function SoporteView({
   );
 }
 
-function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRefresh,onNotify,auth,onLogout,isAdmin,timeoutMinutos,onChangeTimeout}:{soundOn:boolean;onToggleSound:(v:boolean)=>void;autoRefreshSec:number;onChangeAutoRefresh:(v:number)=>void;onNotify:(s:string)=>void;auth:{nombre:string;email:string;rol:UserRole};onLogout:()=>void;isAdmin:boolean;timeoutMinutos:number;onChangeTimeout:(v:number)=>void}){
+function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRefresh,onNotify,auth,onLogout,isAdmin,timeoutMinutos,onChangeTimeout,companiaDesignada}:{soundOn:boolean;onToggleSound:(v:boolean)=>void;autoRefreshSec:number;onChangeAutoRefresh:(v:number)=>void;onNotify:(s:string)=>void;auth:{nombre:string;email:string;rol:UserRole};onLogout:()=>void;isAdmin:boolean;timeoutMinutos:number;onChangeTimeout:(v:number)=>void;companiaDesignada:string|null}){
   return <div className="sectionGrid">
     <div className="card sectionCard">
       <div className="cardHead"><div><b>Cuenta</b><span>Sesión iniciada</span></div></div>
@@ -2400,6 +2400,7 @@ function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRef
         <label className="configRow">Nombre<input value={auth.nombre} disabled/></label>
         <label className="configRow">Correo<input value={auth.email} disabled/></label>
         <label className="configRow">Rol<input value={isAdmin?'Administrador / Despachador':'Visualizador (solo lectura)'} disabled/></label>
+        {auth.rol==='visualizador' && <label className="configRow">Compañía designada<input value={companiaDesignada ?? 'Sin compañía asignada'} disabled/></label>}
         <div className="configNote">Nombre, correo y rol vienen de la cuenta real verificada por el backend (login con JWT) — no son editables, ni hay registro público: solo los operadores autorizados del equipo pueden entrar.</div>
         <button className="locateBtn logoutBtn" onClick={onLogout}><LogOut size={14}/> Cerrar sesión</button>
       </div>
@@ -2466,6 +2467,47 @@ function App(){
  // fuera de React (obtenerRutaReal) para mandar el header Authorization.
  useEffect(()=>{ currentToken=auth?.token ?? null; },[auth]);
 
+ // Estado real de la sesion segun Postgres (emergencia.usuario.estado_usuario):
+ // "Activo"/"Fuera de servicio" lo decide el propio operador haciendo clic
+ // en el badge del header (ver toggleEstadoServicio), nunca el sistema solo
+ // -- este efecto solo LEE el valor actual (p.ej. si otra pestaña lo cambio)
+ // y lo refleja aca.
+ const [activoDB,setActivoDB]=useState(false);
+ const [cambiandoEstado,setCambiandoEstado]=useState(false);
+ // Compania a la que esta designado el operador (emergencia.usuario.id_compania,
+ // ver docker/migracion_usuario_compania.sql) -- null si no tiene una asignada.
+ const [companiaDesignada,setCompaniaDesignada]=useState<string|null>(null);
+ useEffect(()=>{
+   if(!auth) { setActivoDB(false); setCompaniaDesignada(null); return; }
+   let cancelado=false;
+   const consultar=async()=>{
+     try{
+       const resp=await fetch(`${API_BASE}/auth/me`,{headers:{Authorization:`Bearer ${auth.token}`}});
+       if(!resp.ok) return;
+       const data=await resp.json();
+       if(!cancelado){ setActivoDB(!!data.activo); setCompaniaDesignada(data.compania ?? null); }
+     }catch{ /* red caida: se mantiene el ultimo valor conocido */ }
+   };
+   consultar();
+   const id=window.setInterval(consultar,30000);
+   return ()=>{ cancelado=true; window.clearInterval(id); };
+ },[auth]);
+
+ const toggleEstadoServicio=async()=>{
+   if(!auth || cambiandoEstado) return;
+   const nuevoActivo=!activoDB;
+   setCambiandoEstado(true);
+   try{
+     const resp=await fetch(`${API_BASE}/auth/estado`,{
+       method:'PATCH',
+       headers:{'Content-Type':'application/json',Authorization:`Bearer ${auth.token}`},
+       body:JSON.stringify({activo:nuevoActivo}),
+     });
+     if(resp.ok) setActivoDB(nuevoActivo);
+   }catch{ /* sin red: se mantiene el estado anterior */ }
+   finally{ setCambiandoEstado(false); }
+ };
+
 const handleLogin=(
   token:string,
   nombre:string,
@@ -2481,7 +2523,14 @@ const handleLogin=(
 };
 
  const handleLogout=()=>{
+   // Best-effort: marca la cuenta como inactiva en emergencia.usuario antes
+   // de limpiar la sesion local. Si falla (sin red, token ya vencido) no
+   // bloquea el logout -- el usuario igual sale de la app.
+   if(auth?.token){
+     fetch(`${API_BASE}/auth/logout`,{method:'POST',headers:{Authorization:`Bearer ${auth.token}`}}).catch(()=>{});
+   }
    setAuth(null);
+   setActivoDB(false);
    try{ localStorage.removeItem(SESION_KEY); localStorage.removeItem(SECCION_KEY); }catch{ /* ignorar */ }
  };
  // RBAC: "admin" (coordinacion/despacho, puede asignar/rechazar y editar
@@ -4353,12 +4402,12 @@ const spawnEmergencia = (): Emergency => {
     ? 'Gestión de tickets de soporte'
     : <>Central de coordinación · Valparaíso{!isAdmin?' · Acceso de solo lectura':''}{!isAdmin && esperandoEstadoRemoto?' · Esperando datos en vivo del operador…':''}{!isAdmin && estadoRemoto?` · En vivo (operador: ${estadoRemoto.publicadoPor})`:''}</>
   }
-</p></div><div className="headerActions">{!isAdmin && !isAdminSoporte && <div className="readOnlyBadge" title="Tu cuenta solo puede visualizar, no asignar recursos"><Eye size={13}/> Solo lectura</div>}{isAdmin && <div className="readOnlyBadge" title="Tu cuenta puede asignar recursos y despachar"><Eye size={13}/> Admin</div>}<button onClick={()=>setTheme(t=>t==='dark'?'light':'dark')} title={theme==='dark'?'Cambiar a tema claro':'Cambiar a tema oscuro'}>{theme==='dark'?<Sun size={17}/>:<Moon size={17}/>}</button><div className="live"><span/> EN VIVO</div><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
+</p></div><div className="headerActions">{!isAdmin && !isAdminSoporte && <div className="readOnlyBadge" title="Tu cuenta solo puede visualizar, no asignar recursos"><Eye size={13}/> Solo lectura</div>}{isAdmin && <div className="readOnlyBadge" title="Tu cuenta puede asignar recursos y despachar"><Eye size={13}/> Admin</div>}{isAdminSoporte && <div className="readOnlyBadge" title="Tu cuenta gestiona tickets de soporte"><Eye size={13}/> Soporte</div>}<button onClick={()=>setTheme(t=>t==='dark'?'light':'dark')} title={theme==='dark'?'Cambiar a tema claro':'Cambiar a tema oscuro'}>{theme==='dark'?<Sun size={17}/>:<Moon size={17}/>}</button><div className={`live liveToggle${activoDB?'':' liveOff'}${cambiandoEstado?' liveBusy':''}`} role="button" tabIndex={0} aria-disabled={cambiandoEstado} onClick={toggleEstadoServicio} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();toggleEstadoServicio();}}} title="Toca para cambiar tu estado de servicio (emergencia.usuario.estado_usuario)"><span/> {activoDB?'Activo':'Fuera de servicio'}</div><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
     {section==='Formulario' && isAdmin && <NuevaEmergenciaView claves={claves} onCrear={crearEmergenciaBD}/>}
     {section==='Emergencias' && !isAdminSoporte && <EmergenciasView queue={queue} claves={claves} now={now} onAtender={atenderEmergencia} onVerUbicacion={verEmergenciaEnMapa} isAdmin={isAdmin}/>}
     {section==='Recursos' && !isAdminSoporte && <RecursosView resources={resources} alertaTimeoutIds={unidadesConAlertaTimeout} onVerCuartelEnMapa={verCuartelEnMapa} isAdmin={isAdmin} puedeCambiarEstado={!isAdminSoporte} onCambiarFueraDeServicio={cambiarFueraDeServicio}/>}
     {section==='Historial' && !isAdminSoporte && <HistorialView historial={historial} now={now}/>}
-    {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} onNotify={notify} auth={auth} onLogout={handleLogout} isAdmin={isAdmin} timeoutMinutos={timeoutMinutos} onChangeTimeout={setTimeoutMinutos}/>}
+    {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} onNotify={notify} auth={auth} onLogout={handleLogout} isAdmin={isAdmin} timeoutMinutos={timeoutMinutos} onChangeTimeout={setTimeoutMinutos} companiaDesignada={companiaDesignada}/>}
     {section==='Soporte' && (
       <SoporteView
         tickets={tickets}
@@ -4399,7 +4448,7 @@ const spawnEmergencia = (): Emergency => {
          :<p className="emptyState readOnlyNote"><Lock size={12}/> Tu cuenta es de solo lectura: no puede asignar ni rechazar unidades.</p>}
       </>:<p className="emptyState">{currentEmergencia && currentEmergencia.status!=='Activa'?'Esta emergencia ya tiene una unidad respondiendo.':(filtroCuartel==='todos'?'Sin unidades disponibles para esta emergencia en este momento — todas las compatibles están en misión.':`Sin unidades disponibles de ${filtroCuartel} para esta emergencia en este momento.`)}</p>}
       </div></div></section>
-      <section className="workspace"><div className="mapCard"><div className="cardHead"><div><b>Mapa de calor · Demanda de Bomberos</b><span>Predicción ML · próximas {(periodos.length||4)*3} horas · toca una zona para ver el detalle</span></div><span className="mlBadge">ML</span></div><HeatMapPanel zonas={currentZonas} seleccionadaId={zonaSeleccionada} focus={focusHeatmap} onSelectZona={z=>{setZonaSeleccionada(z.zona_id);setFocusHeatmap(z.centroid);}}/><div className="legend heatLegend"><span><i className="dot green"/> Baja</span><span><i className="dot yellow"/> Media</span><span><i className="dot red"/> Alta</span></div></div>
+      <section className="workspace"><div className="mapCard heatMapCard"><div className="cardHead"><div><b>Mapa de calor · Demanda de Bomberos</b><span>Predicción ML · próximas {(periodos.length||4)*3} horas · toca una zona para ver el detalle</span></div><span className="mlBadge">ML</span></div><HeatMapPanel zonas={currentZonas} seleccionadaId={zonaSeleccionada} focus={focusHeatmap} onSelectZona={z=>{setZonaSeleccionada(z.zona_id);setFocusHeatmap(z.centroid);}}/><div className="legend heatLegend"><span><i className="dot green"/> Baja</span><span><i className="dot yellow"/> Media</span><span><i className="dot red"/> Alta</span></div></div>
       <div className="sideCards"><div className="card alertsCard"><div className="cardHead"><div><b>Alertas predictivas</b><span>Zonas y horarios de mayor riesgo</span></div></div>
       <div className="alertsBody">
       {apiError && <div className="apiErrorBox"><AlertTriangle size={14}/> {apiError}</div>}

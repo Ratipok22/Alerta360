@@ -32,10 +32,9 @@ from core.companies import todas_las_unidades
 from core.eta import calcular_eta
 from core.radio_codes import CLAVES_RADIALES
 from core.vehicle_types import TIPOS_CARRO
-from ml.predict import predict_demand
 
 from database.database import obtener_conexion
-from ml.database import guardar_predicciones
+from ml.persistencia_ml import obtener_o_generar, listado_modelos
 from ml.db_catalog import obtener_zonas, obtener_tipos, obtener_recursos
 
 
@@ -117,7 +116,10 @@ class EmergencyCreate(BaseModel):
     latitud_emergencia: float
     longitud_emergencia: float
     prioridad_emergencia: int
-    id_zona: int | None = None
+    # str, no int: zona.id_zona ahora son codigos INE reales
+    # (ej. "INE24-05101-01"), no numeros correlativos -- ver
+    # migracion_segundo_mapa.sql.
+    id_zona: str | None = None
     # estado_emergencia NO viene del cliente: el formulario de ingreso
     # rapido (CAD) solo crea emergencias nuevas, siempre "Activa" -- se
     # fuerza server-side en vez de confiar en lo que mande el frontend.
@@ -168,6 +170,17 @@ def crear_emergencia(datos: EmergencyCreate, usuario: Usuario = Depends(requiere
         conexion = obtener_conexion()
 
         with conexion.cursor() as cursor:
+            # El formulario de ingreso rapido nunca manda id_zona -- se
+            # resuelve sola a partir de lat/lng con los poligonos reales de
+            # zonificacion (core/zonificacion.py, INE 2024 + sectores),
+            # necesaria para que esa emergencia entre en el mapa de calor
+            # de demanda ML (emergencia.prediccion/registro_historico).
+            from core.zonificacion import resolver_zona
+            try:
+                id_zona = resolver_zona(cursor, datos.latitud_emergencia,
+                                       datos.longitud_emergencia, datos.id_zona)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
             cursor.execute(
                 """
                 INSERT INTO emergencia.emergencia (
@@ -194,7 +207,7 @@ def crear_emergencia(datos: EmergencyCreate, usuario: Usuario = Depends(requiere
                     datos.latitud_emergencia,
                     datos.longitud_emergencia,
                     datos.prioridad_emergencia,
-                    datos.id_zona,
+                    id_zona,
                 ),
             )
 
@@ -213,6 +226,11 @@ def crear_emergencia(datos: EmergencyCreate, usuario: Usuario = Depends(requiere
             "fecha_creacion_emergencia": emergencia[7],
             "id_zona": emergencia[8],
         }
+
+    except HTTPException:
+        if conexion:
+            conexion.rollback()
+        raise
 
     except Exception as e:
         if conexion:
@@ -290,6 +308,20 @@ def obtener_emergencias():
 #-------------------------------
 
 
+def _marcar_estado_usuario(email: str, estado: str) -> None:
+    """Refleja en emergencia.usuario si esta cuenta esta efectivamente
+    logueada en la app ahora mismo (estado_usuario = 'activo'/'inactivo').
+    No todas las cuentas de core/auth.py tienen fila en emergencia.usuario
+    (ver _resolver_id_usuario): si no existe, simplemente no hay nada que
+    marcar -- el login/logout no debe fallar por esto."""
+    with obtener_conexion() as conexion, conexion.cursor() as cursor:
+        cursor.execute(
+            "UPDATE emergencia.usuario SET estado_usuario = %s WHERE email_usuario = %s",
+            (estado, email),
+        )
+        conexion.commit()
+
+
 @app.post("/auth/login", response_model=LoginResponse)
 def login(datos: LoginRequest):
     """Login sin registro: solo los 3 operadores fijos definidos en
@@ -298,7 +330,26 @@ def login(datos: LoginRequest):
     usuario = verificar_credenciales(datos.email, datos.password)
     if not usuario:
         raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
+    with obtener_conexion() as conexion, conexion.cursor() as cursor:
+        # Solo un operador usa la app a la vez en este despliegue de demo (no
+        # hay sesiones concurrentes reales que trackear): al loguearse, esa
+        # es la unica cuenta "activa" -- el resto queda inactiva aunque se
+        # haya quedado pegada en "activo" por un cierre de pestaña anterior
+        # sin logout explicito.
+        cursor.execute("UPDATE emergencia.usuario SET estado_usuario = 'inactivo' WHERE email_usuario != %s", (usuario.email,))
+        cursor.execute("UPDATE emergencia.usuario SET estado_usuario = 'activo' WHERE email_usuario = %s", (usuario.email,))
+        conexion.commit()
     return LoginResponse(token=crear_token(usuario), nombre=usuario.nombre, email=usuario.email, rol=usuario.rol)
+
+
+@app.post("/auth/logout")
+def logout(usuario: Usuario = Depends(usuario_actual)):
+    """Marca la cuenta como inactiva en emergencia.usuario al cerrar
+    sesion, para que el indicador "Activo" del resto de vistas refleje la
+    realidad y no quede pegado en verde con la sesion ya cerrada."""
+    _marcar_estado_usuario(usuario.email, "inactivo")
+    return {"ok": True}
+
 
 # usuario_actual y requiere_admin se definen mas arriba, antes de
 # EmergencyCreate/crear_emergencia (que ahora los necesita para exigir rol
@@ -308,8 +359,42 @@ def login(datos: LoginRequest):
 def auth_me(usuario: Usuario = Depends(usuario_actual)):
     """Permite al frontend validar si el token guardado localmente sigue
     siendo valido (p.ej. al recargar la pagina) sin pedir login de nuevo
-    si no hace falta."""
-    return {"email": usuario.email, "nombre": usuario.nombre, "rol": usuario.rol}
+    si no hace falta. Tambien devuelve el estado_usuario real de Postgres
+    (activo/fuera de servicio) para el badge del header -- SOLO lectura:
+    el estado lo cambia el operador a mano desde ese badge (ver
+    PATCH /auth/estado) o el login/logout, nunca este endpoint. Incluye
+    ademas la compania a la que esta designado (emergencia.usuario.id_compania,
+    ver docker/migracion_usuario_compania.sql), si tiene una asignada."""
+    activo = False
+    compania = None
+    with obtener_conexion() as conexion, conexion.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT u.estado_usuario, c.nombre_compania
+            FROM emergencia.usuario u
+            LEFT JOIN emergencia.compania c ON c.id_compania = u.id_compania
+            WHERE u.email_usuario = %s
+            """,
+            (usuario.email,),
+        )
+        fila = cursor.fetchone()
+        if fila is not None:
+            activo = str(fila[0]).lower() == "activo"
+            compania = fila[1]
+    return {"email": usuario.email, "nombre": usuario.nombre, "rol": usuario.rol, "activo": activo, "compania": compania}
+
+
+class CambioEstadoUsuario(BaseModel):
+    activo: bool
+
+
+@app.patch("/auth/estado")
+def cambiar_estado_usuario(datos: CambioEstadoUsuario, usuario: Usuario = Depends(usuario_actual)):
+    """Permite al operador marcarse manualmente "Activo" o "Fuera de
+    servicio" desde el badge del header -- es una decision explicita suya,
+    no algo que el sistema deba inferir ni sobreescribir solo."""
+    _marcar_estado_usuario(usuario.email, "activo" if datos.activo else "inactivo")
+    return {"activo": datos.activo}
 
 class CambioEstadoEmergencia(BaseModel):
     estado: Literal["ASIGNADA", "EN_ATENCION", "FINALIZADA"]
@@ -501,13 +586,17 @@ def zones(usuario: Usuario = Depends(usuario_actual)):
         raise HTTPException(status_code=503, detail=f"No se pudieron consultar las zonas: {exc}")
 
 @app.get("/prediction/demand")
-def prediction_demand(horizon: int = 4, fecha: str | None = None, usuario: Usuario = Depends(usuario_actual)):
+def prediction_demand(horizon: int = 4, fecha: str | None = None, recalcular: bool = False, usuario: Usuario = Depends(usuario_actual)):
     """Prediccion de demanda esperada por zona/periodo/tipo (modelo ML).
 
     `fecha` (opcional) permite simular una fecha/hora distinta a la actual,
     en formato ISO (p.ej. '2026-01-15T15:00:00'), util para verificar que el
     modelo captura patrones estacionales/horarios (p.ej. mas incendios
     forestales en enero que en junio) sin tener que esperar a esa fecha real.
+
+    Cachea el resultado en PostgreSQL (emergencia.prediccion): si ya hay una
+    prediccion reciente (<60 min) para el mismo bloque horario no se
+    recalcula en cada GET -- `recalcular=true` fuerza un calculo nuevo.
     """
     now = None
     if fecha:
@@ -516,9 +605,7 @@ def prediction_demand(horizon: int = 4, fecha: str | None = None, usuario: Usuar
         except ValueError:
             raise HTTPException(status_code=400, detail="fecha invalida, usa formato ISO: 2026-01-15T15:00:00")
     try:
-        resultado = predict_demand(now=now, horizon=horizon)
-        resultado["persistencia"] = guardar_predicciones(resultado)
-        return resultado
+        return obtener_o_generar(now=now, horizon=horizon, recalcular=recalcular)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
@@ -528,6 +615,15 @@ def prediction_demand(horizon: int = 4, fecha: str | None = None, usuario: Usuar
             status_code=503,
             detail=f"No se pudo guardar la predicción en PostgreSQL: {e}",
         )
+
+
+@app.get("/prediction/models")
+def prediction_models(limite: int = 10, usuario: Usuario = Depends(usuario_actual)):
+    """Consulta modelos y metricas entrenadas almacenadas en PostgreSQL."""
+    try:
+        return {"modelos": listado_modelos(limite)}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"No se pudieron leer los modelos: {exc}")
 
 @app.get("/route")
 def route(origen_lat: float, origen_lng: float, destino_lat: float, destino_lng: float, usuario: Usuario = Depends(usuario_actual)):

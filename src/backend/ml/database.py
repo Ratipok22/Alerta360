@@ -119,14 +119,17 @@ def guardar_predicciones(resultado: dict) -> dict:
     insertadas = 0
     try:
         with conexion.cursor() as cursor:
+            # id_zona ahora son codigos INE reales (texto, ej.
+            # "INE24-05101-01"), ya no numeros correlativos -- y la columna
+            # "actividad" ya no existe (reemplazada por las 281 zonas
+            # reales, ver migracion_segundo_mapa.sql).
             cursor.execute("""
                 SELECT id_zona, nombre_zona
                 FROM emergencia.zona
-                WHERE actividad = TRUE
             """)
             zonas_db = cursor.fetchall()
-            por_id = {int(z[0]): (int(z[0]), z[1]) for z in zonas_db}
-            por_nombre = {_normalizar_nombre(z[1]): (int(z[0]), z[1]) for z in zonas_db}
+            por_id = {str(z[0]): (z[0], z[1]) for z in zonas_db}
+            por_nombre = {_normalizar_nombre(z[1]): (z[0], z[1]) for z in zonas_db}
 
             cursor.execute("""
                 SELECT id_modelo
@@ -162,7 +165,7 @@ def guardar_predicciones(resultado: dict) -> dict:
             for periodo in periodos:
                 periodo_inicio = str(periodo["periodo_inicio"])
                 for zona in periodo.get("zonas", []):
-                    zona_id_modelo = int(zona["zona_id"])
+                    zona_id_modelo = str(zona["zona_id"])
                     zona_db = por_nombre.get(_normalizar_nombre(zona.get("nombre", "")))
                     if not zona_db:
                         zona_db = por_id.get(zona_id_modelo)
