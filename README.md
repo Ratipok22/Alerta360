@@ -134,3 +134,4 @@ Las zonas (`src/backend/ml/zones.py`) corresponden a sectores reales de Valpara√
 2. Incorporar la suite de pruebas automatizadas.
 3. Documentar los resultados finales de la evaluaci√≥n experimental y de Machine Learning.
 4. Consolidar en esta rama principal el trabajo desarrollado en las ramas de cada integrante.
+
