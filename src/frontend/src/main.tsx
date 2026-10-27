@@ -819,6 +819,12 @@ function MapaSeleccionUbicacion({lat, lng, onSeleccionar}:{lat:number|null; lng:
 // desincronizar de la base de datos.
 function ComboCodigoEmergencia({claves, onElegir}:{claves:Record<string,Clave>; onElegir:(codigo:string)=>void}){
   const [texto,setTexto]=useState('');
+  // Ultimo texto que quedo armado tras elegir una clave (ej. "10-1 ·
+  // Incendio de Vehiculo") -- mientras el input siga mostrando exactamente
+  // eso (no se escribio nada nuevo), el filtro se trata como vacio, para
+  // que al volver a enfocar aparezcan TODAS las opciones de nuevo en vez
+  // de una lista vacia (nada calza con ese texto combinado "codigo · nombre").
+  const [ultimoSeleccionado,setUltimoSeleccionado]=useState('');
   const [abierto,setAbierto]=useState(false);
   const [indiceActivo,setIndiceActivo]=useState(0);
 
@@ -831,13 +837,15 @@ function ComboCodigoEmergencia({claves, onElegir}:{claves:Record<string,Clave>; 
     [claves]
   );
   const filtradas=useMemo(()=>{
-    const q=texto.trim().toLowerCase();
+    const q=(texto===ultimoSeleccionado ? '' : texto).trim().toLowerCase();
     if(!q) return listaClaves;
     return listaClaves.filter(c=>c.codigo.toLowerCase().includes(q) || c.nombre.toLowerCase().includes(q));
-  },[listaClaves, texto]);
+  },[listaClaves, texto, ultimoSeleccionado]);
 
   const elegir=(c:Clave)=>{
-    setTexto(`${c.codigo} · ${c.nombre}`);
+    const etiqueta=`${c.codigo} · ${c.nombre}`;
+    setTexto(etiqueta);
+    setUltimoSeleccionado(etiqueta);
     onElegir(c.codigo);
     setAbierto(false);
   };
@@ -848,7 +856,7 @@ function ComboCodigoEmergencia({claves, onElegir}:{claves:Record<string,Clave>; 
         type="text"
         value={texto}
         onChange={e=>{ setTexto(e.target.value); setAbierto(true); setIndiceActivo(0); }}
-        onFocus={()=>setAbierto(true)}
+        onFocus={e=>{ setAbierto(true); e.target.select(); }}
         onBlur={()=>window.setTimeout(()=>setAbierto(false),150)}
         onKeyDown={e=>{
           if(e.key==='ArrowDown'){ e.preventDefault(); setIndiceActivo(i=>Math.min(i+1, filtradas.length-1)); }
@@ -994,42 +1002,48 @@ function NuevaEmergenciaView({claves, onCrear}:{
 
   return (
     <div className="card sectionCard nuevaEmergenciaCard">
-      <div className="cardHead"><div><b>Nueva emergencia</b><span>Ingreso rápido para despacho (CAD)</span></div></div>
+      <div className="nuevaEmergenciaLayout">
 
-      <div className="nuevaEmergenciaGrid">
+        <div className="nuevaEmergenciaSidebar">
+          <div className="cardHead"><div><b>Registro de incidente</b><span>Despacho asistido por computadora (CAD)</span></div></div>
 
-        <label className="nuevaEmergenciaCampo">
-          1. Código de emergencia
-          <ComboCodigoEmergencia claves={claves} onElegir={elegirCodigo}/>
-        </label>
+          <label className="nuevaEmergenciaCampo">
+            1. Clasificación del incidente
+            <ComboCodigoEmergencia claves={claves} onElegir={elegirCodigo}/>
+          </label>
 
-        <label className="nuevaEmergenciaCampo">
-          2. Dirección / ubicación
-          <input
-            type="text"
-            value={direccion}
-            onChange={e=>{ const v=e.target.value.toUpperCase(); setDireccion(v); buscar(v); }}
-            placeholder="AV. ARGENTINA, BARRIO ALMENDRAL, VALPARAÍSO"
-          />
-          {sugerencias.length>0 && (
-            <ul className="comboDireccionLista">
-              {sugerencias.map((s,i)=>(
-                <li key={i} onMouseDown={()=>elegirDireccionSugerida(s)}>{s.display_name}</li>
-              ))}
-            </ul>
-          )}
-          {estadoBusquedaDireccion==='buscando' && <small className="estadoBusquedaDireccion">Buscando direcciones…</small>}
-          {estadoBusquedaDireccion==='sin_resultados' && <small className="estadoBusquedaDireccion">Sin resultados para esa búsqueda. Prueba solo con el nombre de la calle (ej. "Pedro Montt").</small>}
-          {estadoBusquedaDireccion==='error' && <small className="estadoBusquedaDireccion error">No se pudo conectar al buscador de direcciones. Puedes seguir marcando el punto directo en el mapa.</small>}
-        </label>
+          <label className="nuevaEmergenciaCampo">
+            2. Ubicación del incidente
+            <textarea
+              className="nuevaEmergenciaDireccionInput"
+              rows={3}
+              value={direccion}
+              onChange={e=>{ const v=e.target.value.toUpperCase(); setDireccion(v); buscar(v); }}
+              placeholder="AV. ARGENTINA, BARRIO ALMENDRAL, VALPARAÍSO"
+            />
+            {sugerencias.length>0 && (
+              <ul className="comboDireccionLista">
+                {sugerencias.map((s,i)=>(
+                  <li key={i} onMouseDown={()=>elegirDireccionSugerida(s)}>{s.display_name}</li>
+                ))}
+              </ul>
+            )}
+            {estadoBusquedaDireccion==='buscando' && <small className="estadoBusquedaDireccion">Buscando direcciones…</small>}
+            {estadoBusquedaDireccion==='sin_resultados' && <small className="estadoBusquedaDireccion">Sin resultados para esa búsqueda. Prueba solo con el nombre de la calle (ej. "Pedro Montt").</small>}
+            {estadoBusquedaDireccion==='error' && <small className="estadoBusquedaDireccion error">No se pudo conectar al buscador de direcciones. Puedes seguir marcando el punto directo en el mapa.</small>}
+          </label>
 
-        <div className="nuevaEmergenciaCampo nuevaEmergenciaCampoMapa">
-          3. Georreferenciación (toca el mapa para marcar el punto)
-          <MapaSeleccionUbicacion lat={lat} lng={lng} onSeleccionar={seleccionarEnMapa}/>
-          {lat!=null && lng!=null && <small className="nuevaEmergenciaCoords">Lat {lat.toFixed(5)}, Lng {lng.toFixed(5)}</small>}
           <button className="nuevaEmergenciaCrearBtn" onClick={crear} disabled={enviando}>
             {enviando?'Creando…':'Crear y generar recomendación'}
           </button>
+        </div>
+
+        <div className="nuevaEmergenciaCampo nuevaEmergenciaCampoMapa">
+          <div>3. Confirmar ubicación en el mapa<span className="nuevaEmergenciaCampoHint">Toca el mapa para ajustar el punto exacto</span></div>
+          <MapaSeleccionUbicacion lat={lat} lng={lng} onSeleccionar={seleccionarEnMapa}/>
+          <small className={`nuevaEmergenciaCoords${lat!=null && lng!=null ? '' : ' nuevaEmergenciaCoordsVacias'}`}>
+            {lat!=null && lng!=null ? `Lat ${lat.toFixed(5)}, Lng ${lng.toFixed(5)}` : 'Lat 0.00000, Lng 0.00000'}
+          </small>
         </div>
 
       </div>
@@ -1467,6 +1481,7 @@ function RecursosView({resources,alertaTimeoutIds,onVerCuartelEnMapa,isAdmin,pue
     (!texto || r.name.toLowerCase().includes(texto) || r.compania.toLowerCase().includes(texto) || r.sector.toLowerCase().includes(texto))
   );
   const tipos=Array.from(new Set(resources.map(r=>r.type)));
+  const hayFiltrosActivos=busqueda!==''||filtroTipo!==TODOS||filtroEstado!==TODOS;
   return <div className="card sectionCard">
     <div className="cardHead"><div><b>Flota de Bomberos</b><span>{filtrados.length} de {resources.length} unidades · Cuerpos de Bomberos de Valparaíso y Viña del Mar</span></div></div>
     <div className="filterRow">
@@ -1479,13 +1494,14 @@ function RecursosView({resources,alertaTimeoutIds,onVerCuartelEnMapa,isAdmin,pue
         <option value={TODOS}>Todos los estados</option>
         {(Object.keys(RADIO_LABELS) as RadioState[]).map(s=><option key={s} value={s}>{RADIO_LABELS[s]}</option>)}
       </select>
+      {hayFiltrosActivos && <button className="linkBtn" onClick={()=>{setBusqueda('');setFiltroTipo(TODOS);setFiltroEstado(TODOS);}}>Quitar filtros</button>}
     </div>
     <div className="tableWrap"><table className="dataTable">
       <thead><tr><th></th><th>Unidad</th><th>Compañía</th><th>Sector</th><th>Tipo</th><th>Dotación</th><th>Distancia</th><th>ETA</th><th>Estado</th>{puedeCambiarEstado && <th></th>}</tr></thead>
-      <tbody>{filtrados.length?filtrados.map(r=><tr key={r.id}>
+      <tbody>{filtrados.length?filtrados.map(r=><tr key={r.id} className="resFilaClicable" title="Filtrar por esta compañía" onClick={()=>setBusqueda(r.compania)}>
         <td className="resIconCell">{resourceIcon(r.type)}</td>
         <td className="wrap resNombreCell">{r.name}</td>
-        <td className="wrap"><button className="linkBtn" title="Ver cuartel en el mapa" onClick={()=>onVerCuartelEnMapa(r.lat,r.lng)}>{r.compania}</button></td>
+        <td className="wrap"><button className="linkBtn" title="Ver cuartel en el mapa" onClick={e=>{e.stopPropagation(); onVerCuartelEnMapa(r.lat,r.lng);}}>{r.compania}</button></td>
         <td className="wrap">{r.sector}</td>
         <td>{r.type}</td>
         <td>{r.crew}</td>
@@ -1494,9 +1510,9 @@ function RecursosView({resources,alertaTimeoutIds,onVerCuartelEnMapa,isAdmin,pue
         <td className="wrap resEstadoCell"><span className={`estado estado-${r.radioState.replace('6-','')}`}>{r.radioState} · {RADIO_LABELS[r.radioState]}</span>{alertaTimeoutIds.has(r.id)&&<span className="timeoutBadge" title="Sin transmisión de estado dentro del umbral configurado"><AlertTriangle size={11}/> sin transmisión</span>}</td>
         {puedeCambiarEstado && <td>
           {r.radioState==='6-9'
-            ?<button className="reactivarBtn" onClick={()=>onCambiarFueraDeServicio(r,'6-0')}>Reactivar</button>
+            ?<button className="reactivarBtn" onClick={e=>{e.stopPropagation(); onCambiarFueraDeServicio(r,'6-0');}}>Reactivar</button>
             :r.radioState==='6-0'
-              ?<button className="fueraServicioBtn" onClick={()=>onCambiarFueraDeServicio(r,'6-9')}>Fuera de servicio</button>
+              ?<button className="fueraServicioBtn" onClick={e=>{e.stopPropagation(); onCambiarFueraDeServicio(r,'6-9');}}>Fuera de servicio</button>
               :null}
         </td>}
       </tr>):<tr><td colSpan={puedeCambiarEstado?10:9}><p className="emptyState">Ninguna unidad coincide con el filtro.</p></td></tr>}</tbody>
@@ -1516,7 +1532,7 @@ const TIPOS_HISTORIAL:HistorialTipo[]=['asignacion','rechazo','en_emergencia','l
 // cuartel" sin numero de emergencia).
 function estadoEmergenciaDeEvento(tipo:HistorialTipo, texto:string):{texto:string; clase:string}|null{
   if(!/Emergencia #\d+/.test(texto)) return null;
-  const esCierre = tipo==='liberacion' && (texto.includes('finalizó la atención') || texto.includes('finalizada en PostgreSQL'));
+  const esCierre = tipo==='liberacion' && (texto.includes('finalizó la atención') || texto.includes('finalizada en la base de datos'));
   return esCierre
     ? {texto:'Finalizada', clase:'historialEstado-finalizada'}
     : {texto:'Activa', clase:'historialEstado-activa'};
@@ -3404,7 +3420,7 @@ const intentarPatrullaje = async () => {
  // (Asignada o En atencion) en vez de dejar el panel vacio -- siempre hay
  // algo que mostrar mientras quede una emergencia sin finalizar.
  const currentEmergencia=
-   (emergenciaSeleccionadaId!=null ? queue.find(e=>e.id===emergenciaSeleccionadaId) : undefined) ??
+   (emergenciaSeleccionadaId!=null ? queue.find(e=>e.id===emergenciaSeleccionadaId && e.status==='Activa') : undefined) ??
    queue.find(e=>e.status==='Activa')??
    queue.find(e=>e.status==='Asignada'||e.status==='ASIGNADA')??
    queue.find(e=>e.status==='EN_ATENCION')??
@@ -3610,10 +3626,10 @@ const spawnEmergencia = (): Emergency => {
       try {
         await cambiarEstadoEmergenciaBD(emergenciaSnap.id, 'FINALIZADA');
         advanceQueue(emergenciaSnap.id);
-        pushHistorial('liberacion', `Emergencia #${emergenciaSnap.id} finalizada en PostgreSQL`);
+        pushHistorial('liberacion', `Emergencia #${emergenciaSnap.id} finalizada en la base de datos`);
       } catch (error) {
         console.error('No se pudo finalizar la emergencia:', error);
-        notify(error instanceof Error ? error.message : `No se pudo cerrar la emergencia #${emergenciaSnap.id} en PostgreSQL`);
+        notify(error instanceof Error ? error.message : `No se pudo cerrar la emergencia #${emergenciaSnap.id} en la base de datos`);
         return;
       }
 
@@ -3769,9 +3785,14 @@ const spawnEmergencia = (): Emergency => {
 
   const finalizarYRegresar = async (msHastaRegreso: number) => {
     try {
+      // El backend exige pasar por EN_ATENCION antes de FINALIZADA (no se
+      // puede saltar de ASIGNADA directo) -- al reanudar tras un F5/cierre
+      // largo, ese paso intermedio puede no haberse guardado nunca, asi que
+      // se reintenta aca (no-op con 200 si ya estaba en ese estado).
+      await cambiarEstadoEmergenciaBD(registro.emergenciaId, 'EN_ATENCION').catch(()=>{});
       await cambiarEstadoEmergenciaBD(registro.emergenciaId, 'FINALIZADA');
       advanceQueue(registro.emergenciaId);
-      pushHistorial('liberacion', `Emergencia #${registro.emergenciaId} finalizada en PostgreSQL (ciclo retomado tras recargar la página)`);
+      pushHistorial('liberacion', `Emergencia #${registro.emergenciaId} finalizada en la base de datos (ciclo retomado tras recargar la página)`);
     } catch (error) {
       // Puede ya estar finalizada (otro intento, otra pestana) -- no es fatal.
       console.warn(`Emergencia #${registro.emergenciaId}: no se pudo finalizar al reanudar (puede que ya lo estuviera):`, error);
@@ -3803,6 +3824,9 @@ const spawnEmergencia = (): Emergency => {
     // su cuartel de inmediato, sin animar nada.
     void (async () => {
       try {
+        // Mismo caso que en finalizarYRegresar: hay que pasar por
+        // EN_ATENCION antes de poder cerrar la emergencia.
+        await cambiarEstadoEmergenciaBD(registro.emergenciaId, 'EN_ATENCION').catch(()=>{});
         await cambiarEstadoEmergenciaBD(registro.emergenciaId, 'FINALIZADA');
         advanceQueue(registro.emergenciaId);
       } catch (error) {

@@ -78,6 +78,7 @@ html[data-theme="light"]{
    filtro oscuro de mas abajo). */
 html[data-theme="light"] #map .leaflet-tile-pane{filter:none}
 html[data-theme="light"] #heatmap .leaflet-tile-pane{filter:none}
+html[data-theme="light"] .formMapaUbicacion .leaflet-tile-pane{filter:none}
 /* Botones tipo pildora en tema claro, como los CTA de bomberos.cl (rojo
    institucional, esquinas muy redondeadas). En oscuro se mantiene el
    estilo mas cuadrado de siempre. */
@@ -266,11 +267,15 @@ html[data-theme="light"] .kpiIcon-azul{background:var(--azul-operativo)}
    asi el invert()+hue-rotate() que da el tono oscuro no le llega a los
    marcadores (estan en un pane hermano, .leaflet-marker-pane), y sus
    colores reales (verde=disponible, rojo=alerta, etc.) quedan intactos. */
-#map .leaflet-tile-pane{filter:invert(1) hue-rotate(200deg) brightness(.92) contrast(.92) saturate(.85)}
+#map .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.95) contrast(.9) saturate(1.5)}
 /* Mismo truco que #map de arriba, aplicado al mapa de calor: antes tenia
    un filtro plano (brightness/contrast) sobre todo #heatmap que solo lo
    atenuaba un poco, sin verse realmente oscuro como el mapa principal. */
-#heatmap .leaflet-tile-pane{filter:invert(1) hue-rotate(200deg) brightness(.92) contrast(.92) saturate(.85)}
+#heatmap .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.95) contrast(.9) saturate(1.5)}
+/* Mismo truco otra vez para el mapa de seleccion de ubicacion del
+   Formulario -- antes quedaba con las tiles claras de OSM sin ningun
+   filtro, un mapa blanco suelto en medio de una interfaz oscura. */
+.formMapaUbicacion .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.95) contrast(.9) saturate(1.5)}
 .legend{position:absolute;bottom:11px;left:15px;background:#0b0c0ee6;border:1px solid var(--borde-sutil);border-radius:6px;padding:7px 9px;display:flex;gap:14px;font-size:10px;color:var(--gris-tenue)}
 .dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:5px}
 .green{background:var(--verde-disponible)}
@@ -519,6 +524,7 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
 .dataTable td.wrap{white-space:normal;max-width:260px}
 .dataTable tr:last-child td{border-bottom:none}
 .dataTable tr:hover td{background:var(--negro-panel)}
+.resFilaClicable{cursor:pointer}
 .resIconCell{color:var(--acento)}
 /* Flota de Bomberos (RecursosView): "Compañía" y "Sector" traen nombres
    largos (ej. 9ª Cía. "Brigada Reñaca Alto" (Bomberos Viña del Mar)) -- sin
@@ -2215,43 +2221,87 @@ html[data-theme="light"] .adminTicketResponse textarea{
    (mismo max-width/margin:0 auto) -- si no, su texto quedaba pegado al
    borde izquierdo de la tarjeta completa mientras el contenido del
    formulario (mas angosto y centrado) empezaba mas adentro. */
-.nuevaEmergenciaCard > .cardHead{
-  max-width:1200px;
-  margin:0 auto;
+.nuevaEmergenciaCard .cardHead{
+  padding:0 0 4px;
 }
 
-.nuevaEmergenciaCard > .cardHead b{
-  font-size:22px;
+.nuevaEmergenciaCard .cardHead b{
+  font-size:28px;
 }
 
-.nuevaEmergenciaCard > .cardHead span{
+.nuevaEmergenciaCard .cardHead span{
+  font-size:17px;
+}
+
+/* El banner solido de fondo rojo que usan el resto de las tarjetas en modo
+   claro (ver html[data-theme="light"] .cardHead mas arriba) tenia sentido
+   cuando el encabezado ocupaba todo el ancho de la tarjeta -- aca ahora
+   vive metido en la columna angosta de la izquierda, asi que ese bloque
+   solido se ve como una caja suelta sin forma en vez de un banner. Para
+   esta tarjeta puntual se deja igual que el modo oscuro: sin fondo, solo
+   el titulo en el color de acento. */
+html[data-theme="light"] .nuevaEmergenciaCard .cardHead{
+  background:none;
+}
+
+html[data-theme="light"] .nuevaEmergenciaCard .cardHead b{
+  color:var(--acento);
+}
+
+html[data-theme="light"] .nuevaEmergenciaCard .cardHead span{
+  color:var(--gris-tenue);
+}
+
+/* Pedido de Bruno: titulo + campos 1 y 2 pegados a una columna angosta a
+   la izquierda, y el mapa (campo 3) usando todo el ancho restante a la
+   derecha -- antes todo iba apilado en una sola columna centrada y el
+   mapa quedaba angosto con espacio vacio a los lados. El mapa ademas se
+   estira (align-items:stretch) para calzar con el alto real del sidebar,
+   en vez de quedar mas corto y dejar un hueco vacio abajo. */
+.nuevaEmergenciaCampoHint{
+  display:block;
+  margin-top:4px;
   font-size:14px;
+  font-weight:500;
+  color:var(--gris-tenue);
+  text-transform:none;
 }
 
-/* Responsive: crece con la ventana en vez de quedar pegado a un ancho fijo
-   chico con todo el resto de la tarjeta vacio -- hasta un tope razonable
-   (1200px) para que el texto no quede ilegible en pantallas ultra anchas,
-   y centrado dentro de la tarjeta (que ya ocupa todo el ancho disponible). */
-.nuevaEmergenciaGrid{
-  display:grid;
-  grid-template-columns:1fr;
-  gap:22px;
-  padding:20px;
-  max-width:1200px;
+.nuevaEmergenciaCard{
+  /* El formulario entero se centra en la pagina (con margen a los lados)
+     en vez de quedar pegado al borde izquierdo mientras el mapa se estira
+     a todo lo ancho disponible. Ancho grande para aprovechar pantallas
+     anchas en vez de dejar mucho espacio negro vacio alrededor. */
+  max-width:min(2300px, 100%);
   margin:0 auto;
+}
+
+.nuevaEmergenciaLayout{
+  display:grid;
+  grid-template-columns:minmax(420px,620px) minmax(800px,1500px);
+  align-items:stretch;
+  justify-content:center;
+  gap:36px;
+  padding:28px;
+}
+
+.nuevaEmergenciaSidebar{
+  display:flex;
+  flex-direction:column;
+  gap:26px;
 }
 
 .nuevaEmergenciaCampo:not(.nuevaEmergenciaCampoMapa){
-  max-width:900px;
+  max-width:none;
 }
 
 .nuevaEmergenciaCampo{
   display:flex;
   flex-direction:column;
-  gap:8px;
+  gap:10px;
   position:relative;
 
-  font-size:16px;
+  font-size:23px;
   font-weight:700;
   color:var(--gris-texto);
 }
@@ -2262,14 +2312,15 @@ html[data-theme="light"] .adminTicketResponse textarea{
    de abajo (al reves, en un grid el ultimo en el DOM suele ganar), y el
    campo 2 tapaba el desplegable del campo 1. Por eso el orden baja en
    cascada: 1 (codigo) > 2 (direccion) > 3 (mapa).  */
-.nuevaEmergenciaGrid > *:nth-child(1){ z-index:3; }
-.nuevaEmergenciaGrid > *:nth-child(2){ z-index:2; }
+.nuevaEmergenciaSidebar{ position:relative; z-index:3; }
+.nuevaEmergenciaSidebar > .nuevaEmergenciaCampo:nth-of-type(1){ z-index:3; }
+.nuevaEmergenciaSidebar > .nuevaEmergenciaCampo:nth-of-type(2){ z-index:2; }
 .nuevaEmergenciaCampoMapa{ z-index:1; }
 
 .estadoBusquedaDireccion{
   color:var(--gris-tenue);
   font-weight:500;
-  font-size:14px;
+  font-size:16px;
   text-transform:none;
 }
 
@@ -2280,57 +2331,93 @@ html[data-theme="light"] .adminTicketResponse textarea{
 .nuevaEmergenciaCampo input[type="text"]{
   width:100%;
   box-sizing:border-box;
-  padding:13px 16px;
+  padding:16px 18px;
   border:1px solid var(--borde-sutil);
   border-radius:8px;
   background:var(--negro-panel);
   color:var(--blanco);
-  font-size:17px;
+  font-size:19px;
   font-family:inherit;
   text-transform:uppercase;
 }
 
+/* Direccion: textarea en vez de input de una sola linea, para que una
+   direccion larga (la que devuelve Nominatim, con comuna/provincia/region/
+   codigo postal/pais) se pueda leer completa en vez de cortarse. */
+.nuevaEmergenciaDireccionInput{
+  width:100%;
+  box-sizing:border-box;
+  padding:16px 18px;
+  border:1px solid var(--borde-sutil);
+  border-radius:8px;
+  background:var(--negro-panel);
+  color:var(--blanco);
+  font-size:19px;
+  font-family:inherit;
+  text-transform:uppercase;
+  line-height:1.4;
+  resize:vertical;
+}
+
 .nuevaEmergenciaCampoMapa{
-  grid-column:1 / -1;
-  /* Mismo ancho que el mapa (.formMapaUbicacion), si no el margin-left:auto
-     del boton lo alineaba con el borde de toda la tarjeta en vez de con el
-     borde real del mapa, que es mas angosto. */
-  max-width:1100px;
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
 }
 
 .nuevaEmergenciaCoords{
+  align-self:flex-end;
   color:var(--gris-tenue);
   font-weight:500;
-  font-size:14px;
+  font-size:16px;
   font-variant-numeric:tabular-nums;
+}
+
+/* Antes esta linea no se renderizaba hasta marcar un punto -- la columna
+   del mapa quedaba mas baja sin ella, y el boton (alineado contra el alto
+   de esta columna, ver .nuevaEmergenciaCrearBtn) saltaba de posicion al
+   marcar el primer punto. Ahora siempre ocupa su lugar, solo que atenuada
+   como placeholder mientras no hay ubicacion real. */
+.nuevaEmergenciaCoordsVacias{
+  opacity:.5;
+  font-style:italic;
 }
 
 .formMapaUbicacion{
   width:100%;
-  max-width:1100px;
-  height:600px;
+  flex:1;
+  min-height:820px;
+  /* El mapa se estira (flex:1) para llenar todo el alto de su columna,
+     calzando con el alto real del sidebar (ver .nuevaEmergenciaLayout) --
+     las coordenadas ya no le restan espacio porque van superpuestas. */
   border-radius:10px;
   overflow:hidden;
   border:1px solid var(--borde-sutil);
   cursor:crosshair;
 }
 
-/* "Crear y generar recomendacion" va debajo del mapa (no encima, no
-   flotando sobre el) pero pegado a su mismo costado derecho y sin la fila
-   extra con padding que antes dejaba un espacio en blanco de mas. */
+/* El boton vive en el mismo sidebar angosto que los campos 1 y 2, pero se
+   empuja al fondo (margin-top:auto en un flex column) para que quede a la
+   misma altura donde termina el mapa (que se estira para calzar con el
+   alto del sidebar completo), en vez de quedar pegado justo debajo del
+   campo 2 con un hueco vacio grande abajo. El margin-bottom POSITIVO
+   reserva el espacio que ocupa la linea de coordenadas que va DESPUES del
+   mapa en esa misma columna (.nuevaEmergenciaCoords): ese espacio se resta
+   del margin-top:auto antes de repartirlo, asi el boton sube y su borde
+   queda a la altura del mapa, no a la del texto "Lat/Lng" de mas abajo. */
 .nuevaEmergenciaCrearBtn{
   display:block;
-  margin:14px 0 0 auto;
-  max-width:1100px;
-  width:fit-content;
+  width:100%;
+  margin:auto 0 30px;
 
-  padding:15px 26px;
+  padding:18px 26px;
   border:none;
   border-radius:8px;
 
   background:var(--acento);
   color:#fff;
-  font-size:16px;
+  font-size:19px;
   font-weight:700;
   font-family:inherit;
   cursor:pointer;
@@ -2351,15 +2438,15 @@ html[data-theme="light"] .adminTicketResponse textarea{
 }
 
 .comboClaveLista, .comboDireccionLista{
-  position:absolute;
-  z-index:20;
-  top:calc(100% + 4px);
-  left:0;
-  right:0;
+  /* Flujo normal (no position:absolute): al abrirse, empuja el campo 2
+     (Direccion) hacia abajo para no taparlo -- cuando se cierra, el campo
+     2 vuelve a subir pegado justo debajo del campo 1, sin dejar un hueco
+     vacio fijo todo el tiempo. */
+  position:relative;
 
   max-height:240px;
   overflow-y:auto;
-  margin:0;
+  margin:4px 0 0;
   padding:6px;
   list-style:none;
 
@@ -2370,9 +2457,9 @@ html[data-theme="light"] .adminTicketResponse textarea{
 }
 
 .comboClaveLista li, .comboDireccionLista li{
-  padding:11px 12px;
+  padding:13px 14px;
   border-radius:6px;
-  font-size:15px;
+  font-size:17px;
   font-weight:500;
   text-transform:none;
   color:var(--blanco);
@@ -2394,7 +2481,7 @@ html[data-theme="light"] .adminTicketResponse textarea{
    (ver elegirCodigo en NuevaEmergenciaView), sin UI propia. */
 
 @media (max-width: 860px){
-  .nuevaEmergenciaGrid{
+  .nuevaEmergenciaLayout{
     grid-template-columns:1fr;
   }
 }
