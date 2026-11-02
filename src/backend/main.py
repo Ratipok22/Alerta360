@@ -124,6 +124,27 @@ class EmergencyCreate(BaseModel):
     # rapido (CAD) solo crea emergencias nuevas, siempre "Activa" -- se
     # fuerza server-side en vez de confiar en lo que mande el frontend.
 
+    # Tipo de estructura/lugar donde ocurre el incidente (emergencia.emergencia.
+    # tipo_estructura_emergencia) -- NO reemplaza terreno_emergencia (urbano/
+    # forestal, usado para la velocidad del ETA): esto describe el INMUEBLE
+    # puntual de este incidente, variable caso a caso (el mismo 10-0 puede
+    # ocurrir en una casa o en un edificio), por eso vive en la emergencia y
+    # no en el catalogo de claves (tipo_emergencia). Opcional: solo se pide
+    # en el formulario para claves cuyo criterio de despacho incluye una
+    # Escala Mecanica (hoy, solo 10-0) -- ver unidadesRequeridasEfectivas en
+    # el frontend.
+    tipo_estructura_emergencia: Literal[
+        "vivienda", "edificio_residencial", "equipamiento",
+        "industrial", "espacio_publico", "vegetacion", "vehiculo",
+    ] | None = None
+    # Piso donde ocurre el incidente (emergencia.emergencia.piso_emergencia).
+    # Solo es relevante para tipo_estructura_emergencia in
+    # (edificio_residencial, equipamiento): un incendio en el 1er piso de un
+    # edificio no necesita Escala Mecanica igual que uno en el 5to piso.
+    # None (sin especificar) se trata del lado conservador en el frontend
+    # (se asume que si podria necesitarla).
+    piso_emergencia: int | None = None
+
 #-------------------------------
 
 
@@ -189,9 +210,10 @@ def crear_emergencia(datos: EmergencyCreate, usuario: Usuario = Depends(requiere
                     latitud_emergencia,
                     longitud_emergencia,
                     prioridad_emergencia,
-                    estado_emergencia, id_zona
+                    estado_emergencia, id_zona,
+                    tipo_estructura_emergencia, piso_emergencia
                 )
-                VALUES (%s, %s, %s, %s, %s, 'Activa', %s)
+                VALUES (%s, %s, %s, %s, %s, 'Activa', %s, %s, %s)
                 RETURNING id_emergencia,
                           codigo_emergencia,
                           direccion_emergencia,
@@ -199,7 +221,8 @@ def crear_emergencia(datos: EmergencyCreate, usuario: Usuario = Depends(requiere
                           longitud_emergencia,
                           prioridad_emergencia,
                           estado_emergencia,
-                          fecha_creacion_emergencia, id_zona;
+                          fecha_creacion_emergencia, id_zona,
+                          tipo_estructura_emergencia, piso_emergencia;
                 """,
                 (
                     datos.codigo_emergencia,
@@ -208,6 +231,8 @@ def crear_emergencia(datos: EmergencyCreate, usuario: Usuario = Depends(requiere
                     datos.longitud_emergencia,
                     datos.prioridad_emergencia,
                     id_zona,
+                    datos.tipo_estructura_emergencia,
+                    datos.piso_emergencia,
                 ),
             )
 
@@ -225,6 +250,8 @@ def crear_emergencia(datos: EmergencyCreate, usuario: Usuario = Depends(requiere
             "estado_emergencia": emergencia[6],
             "fecha_creacion_emergencia": emergencia[7],
             "id_zona": emergencia[8],
+            "tipo_estructura_emergencia": emergencia[9],
+            "piso_emergencia": emergencia[10],
         }
 
     except HTTPException:
@@ -267,7 +294,9 @@ def obtener_emergencias():
                     e.estado_emergencia,
                     e.fecha_creacion_emergencia,
                     e.fecha_cierre_emergencia,
-                    e.id_zona
+                    e.id_zona,
+                    e.tipo_estructura_emergencia,
+                    e.piso_emergencia
                 FROM emergencia.emergencia e
                 INNER JOIN emergencia.tipo_emergencia t
                     ON e.codigo_emergencia = t.codigo_emergencia
@@ -291,6 +320,8 @@ def obtener_emergencias():
                     "fecha_creacion_emergencia": fila[8],
                     "fecha_cierre_emergencia": fila[9],
                     "id_zona": fila[10],
+                    "tipo_estructura_emergencia": fila[11],
+                    "piso_emergencia": fila[12],
                 }
                 for fila in filas
             ]
@@ -571,10 +602,51 @@ def cambiar_estado_recurso(
     finally:
         conexion.close()
 
+# Prefijo real de la unidad (ver core/vehicle_types.py y core/radio_codes.py)
+# -> categoria generica de ResourceType que ya usa el frontend (main.tsx,
+# tipoRecursoBD). Permite traducir los requisitos de CLAVES_RADIALES (que
+# hablan en terminos de prefijos reales: B, BF, Q, etc.) al mismo vocabulario
+# con el que el frontend ya filtra/cuenta recursos, sin duplicar la lista en
+# los dos lados.
+_PREFIJO_A_TIPO_RECURSO = {
+    "BF": "Forestal", "BR": "Forestal",
+    "R": "Rescate", "RX": "Rescate",
+    "H": "Hazmat",
+    "Q": "Escala", "M": "Escala",
+    "Z": "Cisterna",
+    "B": "Bomberos", "BX": "Bomberos", "B-U": "Bomberos",
+}
+
+
+def _unidades_requeridas_para(codigo: str) -> list[dict] | None:
+    """Cuantas unidades de que tipo exige una clave para considerarse
+    cubierta (ver CLAVES_RADIALES, core/radio_codes.py -- ese diccionario ya
+    traia esta informacion desde que se definio el estandar de claves
+    radiales, pero nunca se habia conectado a ningun endpoint). Devuelve
+    None para una clave sin este criterio ya modelado (ver el comentario en
+    POST /emergencies: CLAVES_RADIALES es un subconjunto mas chico que
+    emergencia.tipo_emergencia) -- el frontend interpreta None como "sin
+    requisito de cantidad conocido" y mantiene el comportamiento de una sola
+    unidad por emergencia para esos casos, en vez de inventar una cifra."""
+    clave = CLAVES_RADIALES.get(codigo)
+    if not clave:
+        return None
+    return [
+        {
+            "tipos": sorted({_PREFIJO_A_TIPO_RECURSO.get(p, "Bomberos") for p in req.tipos_alternativos}),
+            "cantidad": req.cantidad,
+        }
+        for req in clave.unidades_requeridas
+    ]
+
+
 @app.get("/catalog/claves")
 def catalog_claves(usuario: Usuario = Depends(usuario_actual)):
     try:
-        return {"claves": obtener_tipos()}
+        tipos = obtener_tipos()
+        for t in tipos:
+            t["unidades_requeridas"] = _unidades_requeridas_para(t["codigo"])
+        return {"claves": tipos}
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"No se pudieron consultar las claves: {exc}")
 
@@ -584,6 +656,30 @@ def zones(usuario: Usuario = Depends(usuario_actual)):
         return {"zones": obtener_zonas()}
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"No se pudieron consultar las zonas: {exc}")
+
+
+@app.get("/companies/personal-activo")
+def personal_activo_por_compania(usuario: Usuario = Depends(usuario_actual)):
+    """Cuenta de operadores marcados 'activo' (ver PATCH /auth/estado) por
+    compania, segun emergencia.usuario.id_compania. Es una base simple:
+    hoy solo hay 4 cuentas de sistema (no un bombero por cada persona real
+    del cuartel), asi que el conteo real por compania sera 0 o 1 mientras
+    no se agreguen mas cuentas -- pero la logica ya queda lista para crecer
+    sin cambios cuando eso pase. NO devuelve nombre ni correo, solo el
+    conteo, a proposito."""
+    try:
+        with obtener_conexion() as conexion, conexion.cursor() as cursor:
+            cursor.execute("""
+                SELECT c.nombre_compania,
+                       COUNT(u.id_usuario) FILTER (WHERE u.estado_usuario = 'activo')
+                FROM emergencia.compania c
+                LEFT JOIN emergencia.usuario u ON u.id_compania = c.id_compania
+                GROUP BY c.id_compania, c.nombre_compania
+            """)
+            filas = cursor.fetchall()
+        return {"personal_activo": {nombre: activos for nombre, activos in filas}}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"No se pudo consultar el personal activo: {exc}")
 
 @app.get("/prediction/demand")
 def prediction_demand(horizon: int = 4, fecha: str | None = None, recalcular: bool = False, usuario: Usuario = Depends(usuario_actual)):
@@ -822,30 +918,118 @@ def recommend(emergency: Emergency, usuario: Usuario = Depends(requiere_admin)):
 
 
 
+@app.get("/emergencies/{id_emergencia}/eta")
+def eta_por_emergencia(id_emergencia: int, usuario: Usuario = Depends(usuario_actual)):
+    """Distancia/ETA de TODOS los recursos hacia una emergencia, calculados
+    aca con la posicion que cada recurso tiene guardada en Postgres en este
+    momento (ver core/eta.py). Reemplaza el calculo que antes hacia el
+    frontend en JavaScript (Haversine + velocidad fija, duplicado de este
+    mismo codigo) -- ahora el navegador solo consulta este endpoint (ver
+    pollEtaPorEmergencia en main.tsx) y usa la respuesta tal cual, sin
+    recalcular nada por su cuenta. La posicion de cada recurso en Postgres
+    se actualiza cada ~2s durante un despacho (PATCH /resources/{..}/position),
+    asi que estos numeros se refrescan al mismo ritmo -- el vehiculo se
+    sigue viendo moverse fluido en el mapa porque esa animacion es aparte
+    (interpolacion visual en el navegador sobre la ruta real de OSRM), solo
+    la cifra de distancia/ETA mostrada en pantalla sigue ese ritmo de ~2s."""
+    try:
+        with obtener_conexion() as conexion, conexion.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT e.latitud_emergencia, e.longitud_emergencia, t.terreno_emergencia
+                FROM emergencia.emergencia e
+                JOIN emergencia.tipo_emergencia t ON t.codigo_emergencia = e.codigo_emergencia
+                WHERE e.id_emergencia = %s
+                """,
+                (id_emergencia,),
+            )
+            fila = cursor.fetchone()
+
+            if fila is None:
+                raise HTTPException(status_code=404, detail="La emergencia no existe")
+
+            lat_emergencia, lng_emergencia, terreno = fila[0], fila[1], fila[2] or "urbano"
+
+            if lat_emergencia is None or lng_emergencia is None:
+                return {"eta": []}
+
+            cursor.execute(
+                """
+                SELECT id_recurso, latitud_recurso, longitud_recurso
+                FROM emergencia.recurso
+                WHERE latitud_recurso IS NOT NULL AND longitud_recurso IS NOT NULL
+                """
+            )
+            recursos = cursor.fetchall()
+
+        resultado = [
+            {
+                "id_recurso": id_recurso,
+                **calcular_eta(lat_recurso, lng_recurso, lat_emergencia, lng_emergencia, terreno),
+            }
+            for id_recurso, lat_recurso, lng_recurso in recursos
+        ]
+        return {"eta": resultado}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"No se pudo calcular el ETA: {exc}")
+
+
 @app.post("/assignments")
 def asignar_recurso(
     id_emergencia: int,
     id_recurso: int,
-    id_usuario: int,
     tipo_asignacion: str = "Automatica",
     puntaje_asignacion: float | None = None,
     distancia_km: float | None = None,
     eta_minutos: int | None = None,
+    estado_asignacion: Literal["ASIGNADO", "RECHAZADO"] = "ASIGNADO",
     usuario: Usuario = Depends(requiere_admin),
 ):
+    """Deja el registro historico real del despacho (ver emergencia.asignacion):
+    quien lo hizo, a que distancia/ETA estaba el recurso en ese momento, y con
+    que puntaje. El frontend (despacharUnidad en main.tsx) ya calculaba esos
+    numeros para la animacion, pero nunca los persistia aca -- la tabla
+    quedaba vacia pese a que el endpoint ya existia.
+
+    estado_asignacion='RECHAZADO' deja registrada tambien cada vez que el
+    operador rechaza la recomendacion automatica (ver handleRechazar en
+    main.tsx) -- mismo recurso/distancia/ETA/puntaje que se le mostraron en
+    pantalla al rechazarla, pero sin tocar el estado real del recurso (sigue
+    disponible, nunca se le despacho de verdad).
+
+    distancia_km/eta_minutos que mande el cliente NUNCA se guardan tal cual:
+    son solo una referencia para detectar discrepancias grandes (ver log mas
+    abajo). El valor que queda en Postgres SIEMPRE se recalcula aca, con las
+    coordenadas reales de recurso.emergencia leidas en este mismo instante
+    (misma formula de core/eta.py que ya se usaba para /route) -- asi la
+    tabla asignacion queda con una unica fuente de verdad del lado servidor,
+    en vez de confiar en un numero que el navegador pudo calcular con datos
+    desactualizados (o, en teoria, inventados)."""
     conexion = None
 
     try:
+        # id_usuario SIEMPRE se resuelve en el servidor a partir del JWT, nunca
+        # se confia en un valor que mande el cliente (quien hizo la asignacion
+        # es quien esta autenticado en esta misma request, no un dato que el
+        # navegador pueda inventar).
+        id_usuario = _resolver_id_usuario(usuario.email)
         conexion = obtener_conexion()
 
         with conexion.cursor() as cursor:
 
-            # 1. Verificar que la emergencia esté activa
+            # 1. Verificar que la emergencia esté activa y traer sus
+            # coordenadas + el terreno de su tipo (ver tipo_emergencia.
+            # terreno_emergencia) para poder recalcular el ETA real.
             cursor.execute(
                 """
-                SELECT estado_emergencia
-                FROM emergencia.emergencia
-                WHERE id_emergencia = %s
+                SELECT e.estado_emergencia, e.latitud_emergencia, e.longitud_emergencia,
+                       t.terreno_emergencia
+                FROM emergencia.emergencia e
+                JOIN emergencia.tipo_emergencia t ON t.codigo_emergencia = e.codigo_emergencia
+                WHERE e.id_emergencia = %s
                 """,
                 (id_emergencia,)
             )
@@ -864,10 +1048,12 @@ def asignar_recurso(
                     detail="La emergencia no está activa"
                 )
 
-            # 2. Verificar que el recurso esté disponible
+            lat_emergencia, lng_emergencia, terreno = emergencia[1], emergencia[2], emergencia[3] or "urbano"
+
+            # 2. Verificar que el recurso esté disponible y traer su posición actual
             cursor.execute(
                 """
-                SELECT estado_radio
+                SELECT estado_radio, latitud_recurso, longitud_recurso
                 FROM emergencia.recurso
                 WHERE id_recurso = %s
                 """,
@@ -882,13 +1068,42 @@ def asignar_recurso(
                     detail="El recurso no existe"
                 )
 
-            if recurso[0] not in ("6-0", "Disponible"):
+            # Solo se exige disponibilidad cuando de verdad se va a despachar.
+            # Un RECHAZADO es solo una decision registrada -- el recurso nunca
+            # se mueve, asi que no tiene sentido bloquear el registro si por
+            # cualquier razon ya no figura como disponible en ese instante.
+            if estado_asignacion == "ASIGNADO" and recurso[0] not in ("6-0", "Disponible"):
                 raise HTTPException(
                     status_code=400,
                     detail="El recurso no está disponible"
                 )
 
-            # 3. Crear la asignación
+            lat_recurso, lng_recurso = recurso[1], recurso[2]
+
+            # Recalculo server-side: es la unica fuente de verdad que se
+            # persiste. Si por algun motivo el recurso o la emergencia no
+            # tienen coordenadas cargadas, se cae de vuelta a lo que mando
+            # el cliente antes que guardar un NULL.
+            if lat_recurso is not None and lng_recurso is not None and \
+               lat_emergencia is not None and lng_emergencia is not None:
+                eta_info = calcular_eta(lat_recurso, lng_recurso, lat_emergencia, lng_emergencia, terreno)
+                distancia_real_km = eta_info["distancia_km"]
+                # eta_minutos es columna integer en Postgres (ver emergencia.asignacion)
+                eta_real_min = round(eta_info["eta_min"])
+
+                # No bloquea nada -- solo deja constancia en los logs si el
+                # numero que mostraba la pantalla se alejo mucho del real
+                # (por ejemplo, si el recurso se movio entre que se calculo
+                # la recomendacion y se confirmo el despacho).
+                if distancia_km is not None and abs(distancia_km - distancia_real_km) > 1:
+                    print(
+                        f"[assignments] distancia_km del cliente ({distancia_km}) difiere de la "
+                        f"recalculada en servidor ({distancia_real_km}) para recurso {id_recurso}"
+                    )
+            else:
+                distancia_real_km, eta_real_min = distancia_km, eta_minutos
+
+            # 3. Crear la asignación (o el rechazo, ver estado_asignacion)
             cursor.execute(
                 """
                 INSERT INTO emergencia.asignacion (
@@ -905,7 +1120,7 @@ def asignar_recurso(
                 VALUES (
                     %s, %s, %s, %s, %s, %s, %s,
                     CURRENT_TIMESTAMP,
-                    'ASIGNADO'
+                    %s
                 )
                 RETURNING id_asignacion
                 """,
@@ -915,18 +1130,25 @@ def asignar_recurso(
                     id_usuario,
                     tipo_asignacion,
                     puntaje_asignacion,
-                    distancia_km,
-                    eta_minutos,
+                    distancia_real_km,
+                    eta_real_min,
+                    estado_asignacion,
                 )
             )
 
             id_asignacion = cursor.fetchone()[0]
 
-            # 4. Cambiar recurso a EN SERVICIO
-            cursor.execute(
+            # 4. Cambiar recurso a EN TRAYECTO (6-3) -- recien se esta
+            # despachando hacia la emergencia, todavia no esta "regresando"
+            # (6-8, que es el estado al terminar). El ciclo completo de
+            # radioState lo sigue manejando el frontend via
+            # PATCH /resources/{codigo}/position cada 2s. Si es un rechazo,
+            # el recurso nunca se despacho -- no se toca su estado.
+            if estado_asignacion == "ASIGNADO":
+                cursor.execute(
                 """
                 UPDATE emergencia.recurso
-                SET estado_radio = '6-8'
+                SET estado_radio = '6-3'
                 WHERE id_recurso = %s
                 """,
                 (id_recurso,)
@@ -935,11 +1157,11 @@ def asignar_recurso(
         conexion.commit()
 
         return {
-            "mensaje": "Recurso asignado correctamente",
+            "mensaje": "Recurso asignado correctamente" if estado_asignacion == "ASIGNADO" else "Rechazo registrado",
             "id_asignacion": id_asignacion,
             "estado_emergencia": "Activa",
-            "estado_recurso": "En servicio",
-            "estado_asignacion": "ASIGNADO"
+            "estado_recurso": "En trayecto" if estado_asignacion == "ASIGNADO" else recurso[0],
+            "estado_asignacion": estado_asignacion,
         }
 
     except HTTPException:
@@ -955,6 +1177,62 @@ def asignar_recurso(
             status_code=500,
             detail=f"Error al asignar recurso: {str(e)}"
         )
+
+    finally:
+        if conexion:
+            conexion.close()
+
+
+@app.patch("/assignments/retorno")
+def marcar_retorno_asignacion(
+    id_emergencia: int,
+    id_recurso: int,
+    usuario: Usuario = Depends(requiere_admin),
+):
+    """Registra fecha_retorno en emergencia.asignacion apenas el recurso
+    termina de atender y comienza a volver a su cuartel (radioState pasa a
+    6-8 en main.tsx, tanto en el ciclo normal como al retomar un despacho
+    tras un F5). Hasta ahora esa columna quedaba siempre en NULL porque
+    nada la llenaba. Se actualiza la asignacion ASIGNADO mas reciente de
+    ese recurso para esa emergencia que todavia no tenga retorno -- evita
+    pisar fecha_retorno si por algun motivo se llama dos veces."""
+    conexion = None
+    try:
+        conexion = obtener_conexion()
+        with conexion.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE emergencia.asignacion
+                SET fecha_retorno = CURRENT_TIMESTAMP
+                WHERE id_asignacion = (
+                    SELECT id_asignacion
+                    FROM emergencia.asignacion
+                    WHERE id_emergencia = %s
+                      AND id_recurso = %s
+                      AND estado_asignacion = 'ASIGNADO'
+                      AND fecha_retorno IS NULL
+                    ORDER BY fecha_asignacion DESC
+                    LIMIT 1
+                )
+                RETURNING id_asignacion, fecha_retorno
+                """,
+                (id_emergencia, id_recurso),
+            )
+            fila = cursor.fetchone()
+        conexion.commit()
+
+        if fila is None:
+            # No bloquea el regreso del vehiculo por esto: puede pasar si
+            # la asignacion se hizo antes de esta funcionalidad, o si ya
+            # se habia registrado el retorno.
+            return {"ok": False, "mensaje": "No se encontró una asignación pendiente de retorno"}
+
+        return {"ok": True, "id_asignacion": fila[0], "fecha_retorno": fila[1].isoformat()}
+
+    except Exception as e:
+        if conexion:
+            conexion.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al registrar el retorno: {str(e)}")
 
     finally:
         if conexion:

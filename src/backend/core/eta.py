@@ -6,7 +6,15 @@ segun el terreno de la emergencia (urbano vs. forestal).
 import math
 
 RADIO_TIERRA_KM = 6371.0
-VELOCIDAD_URBANA_KMH = 35.0
+# Velocidad real promedio de un carro bomba en emergencia urbana: 30-45 km/h,
+# pero en Valparaiso la mayoria de las direcciones reales son en cerros
+# (pendientes pronunciadas, calles angostas con curvas cerradas tipo
+# "horquilla", autos estacionados a ambos lados), donde baja a menudo por
+# debajo de los 20 km/h. 30 km/h refleja mejor ese promedio real de la
+# ciudad que el extremo optimista del rango (pensado para calles planas y
+# despejadas). Mismo valor usado en el frontend (ver VELOCIDAD_URBANO_KMH en
+# main.tsx) para que el ETA mostrado en el mapa y el calculado aca coincidan.
+VELOCIDAD_URBANA_KMH = 30.0
 VELOCIDAD_FORESTAL_KMH = 50.0
 
 

@@ -2366,6 +2366,24 @@ html[data-theme="light"] .nuevaEmergenciaCard .cardHead span{
   gap:10px;
 }
 
+/* Apartado 4 (tipo de estructura/piso, condicional -- ver claveExigeEscala
+   en main.tsx): mismo tratamiento visual que el resto de los campos del
+   formulario (input de direccion), para que no se sienta como un agregado
+   suelto. */
+.nuevaEmergenciaSelect,
+.nuevaEmergenciaPisoInput{
+  width:100%;
+  box-sizing:border-box;
+  padding:16px 18px;
+  border:1px solid var(--borde-sutil);
+  border-radius:8px;
+  background:var(--negro-panel);
+  color:var(--blanco);
+  font-size:19px;
+  font-family:inherit;
+}
+.nuevaEmergenciaPisoInput{ margin-top:10px; }
+
 .nuevaEmergenciaCoords{
   align-self:flex-end;
   color:var(--gris-tenue);
@@ -2485,3 +2503,22 @@ html[data-theme="light"] .nuevaEmergenciaCard .cardHead span{
     grid-template-columns:1fr;
   }
 }
+
+/* Popup del cuartel en el mapa operacional (ver popupCuartel en main.tsx).
+   Es HTML crudo dentro de un popup de Leaflet, no un componente React -- se
+   estilea por clase en vez de inline para poder darle espaciado real entre
+   cada recurso listado y su boton de asignar, en vez de todo amontonado en
+   una sola columna de texto separada por <br/>. */
+.popupCuartel{ min-width:208px; }
+.popupCuartelHead{ margin-bottom:10px; line-height:1.5; }
+.popupRecursosTitulo{
+  font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase;
+  color:#8b8d93; margin:4px 0 2px;
+}
+.popupRecursoItem{
+  padding:9px 0; border-top:1px solid #e7e7ea;
+}
+.popupRecursoItem:first-of-type{ border-top:none; padding-top:6px; }
+.popupRecursoNombre{ font-weight:700; font-size:12.5px; }
+.popupRecursoTipo{ font-weight:400; opacity:.65; }
+.popupRecursoEstado{ font-size:11.5px; opacity:.85; margin-top:2px; }

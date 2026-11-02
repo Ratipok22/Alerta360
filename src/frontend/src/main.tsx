@@ -58,6 +58,9 @@ type Tramo={
 };
 type Resource={
   id:string; name:string; type:ResourceType; lat:number; lng:number; codigo?: string;
+  // PK numerica real en emergencia.recurso -- necesaria para POST /assignments
+  // (deja el registro historico del despacho en emergencia.asignacion).
+  idRecurso?: number;
   radioState:RadioState; eta:number; distance:number; capacity:string; crew:number;
   compania:string; sector:string;
   // Coordenadas fijas de la compañía.
@@ -71,6 +74,24 @@ type Resource={
   ultimaActualizacion?:number;
 };
 //-------------------------NUEVA BASE DE DATOS
+// Tipo de inmueble donde ocurre el incidente (emergencia.emergencia.
+// tipo_estructura_emergencia) -- NO es el terreno (urbano/forestal, usado
+// para la velocidad del ETA): describe el INMUEBLE puntual de ESTA
+// emergencia, variable caso a caso (el mismo 10-0 puede ser en una casa o
+// en un edificio). Categorias basadas en los usos de suelo de la OGUC
+// (Art. 2.1.24), con "Residencial" partido en vivienda/edificio porque esa
+// es la distincion que importa para decidir si hace falta Escala Mecanica,
+// mas "vegetacion"/"vehiculo" que la OGUC no cubre (no son "suelo urbano").
+type TipoEstructura='vivienda'|'edificio_residencial'|'equipamiento'|'industrial'|'espacio_publico'|'vegetacion'|'vehiculo';
+const TIPO_ESTRUCTURA_LABELS:Record<TipoEstructura,string>={
+  vivienda:'Vivienda (casa, 1-2 pisos)',
+  edificio_residencial:'Edificio residencial (departamentos, 3+ pisos)',
+  equipamiento:'Equipamiento (comercio, salud, educación, oficinas)',
+  industrial:'Industrial (bodega, fábrica)',
+  espacio_publico:'Espacio público (vía pública, plaza)',
+  vegetacion:'Vegetación (pastizal, bosque)',
+  vehiculo:'Vehículo',
+};
 type Emergency={
   id:number;
   codigo:string;
@@ -80,13 +101,23 @@ type Emergency={
   status:'Activa'|'Asignada'|'PENDIENTE'|'ASIGNADA'|'EN_ATENCION'|'FINALIZADA'|'CANCELADA';
   creadaEn:number;
   prioridad:number;
+  // Opcionales: solo se piden en el formulario para claves cuyo criterio de
+  // despacho incluye una Escala Mecanica (hoy, solo 10-0) -- ver
+  // unidadesRequeridasEfectivas. undefined/null = no especificado.
+  tipoEstructura?:TipoEstructura|null;
+  piso?:number|null;
 };
 //-------------------------
 type ClimaEsperado={temperatura_c:number; viento_kmh:number; precipitacion_mm:number;};
 type ZoneDemand={zona_id:string; nombre:string; bounds:{lat_min:number;lat_max:number;lng_min:number;lng_max:number}; centroid:{lat:number;lng:number}; demanda_total:number; desglose:Record<string,number>; clima_esperado?:ClimaEsperado;};
 type Periodo={periodo_inicio:string; periodo_fin:string; zonas:ZoneDemand[];};
 type VariableImportancia={nombre:string; peso_pct:number};
-type Clave={codigo:string; nombre:string; prioridad:string; prioridad_nivel:number; terreno:string;};
+// unidades_requeridas viene de GET /catalog/claves (ver _unidades_requeridas_para
+// en main.py, backend) -- null/undefined para una clave sin este criterio ya
+// modelado (ver CLAVES_RADIALES en core/radio_codes.py), en cuyo caso se
+// mantiene el comportamiento de una sola unidad por emergencia.
+type RequisitoUnidad={tipos:ResourceType[]; cantidad:number};
+type Clave={codigo:string; nombre:string; prioridad:string; prioridad_nivel:number; terreno:string; unidades_requeridas?:RequisitoUnidad[]|null;};
 type HistorialTipo='asignacion'|'rechazo'|'en_emergencia'|'liberacion'|'nueva_emergencia';
 type HistorialEntry={id:number; ts:number; tipo:HistorialTipo; texto:string;};
 
@@ -308,15 +339,43 @@ async function obtenerRutaReal(origen: {lat:number;lng:number},destino: {lat:num
 }
 
 // Distancia real (Haversine) y ETA, con la misma logica que el backend
-// (core/eta.py): 35 km/h en tramos urbanos, 50 km/h en tramos forestales.
+// (core/eta.py): 30 km/h en tramos urbanos, 50 km/h en tramos forestales.
 // Antes el frontend usaba un numero de distancia/ETA fijo por unidad,
 // calculado una sola vez respecto a un punto de referencia; ahora se
 // calcula en vivo para la emergencia real que se esta evaluando y desde la
 // posicion actual de la unidad (no siempre su cuartel) — asi una unidad
 // que va de regreso y es redirigida a otra emergencia se evalua desde
 // donde esta en ese momento, no desde su cuartel de origen.
-const VELOCIDAD_URBANO_KMH=35;
+//
+// El numero urbano se ajusto de 35 a 30 km/h: la velocidad real promedio de
+// un carro bomba en una emergencia urbana es de 30-45 km/h, pero en
+// Valparaiso la mayoria de las direcciones reales son en cerros (pendientes
+// pronunciadas, calles angostas con curvas cerradas tipo "horquilla" y autos
+// estacionados a ambos lados), donde la velocidad baja a menudo por debajo
+// de los 20 km/h -- 30 km/h refleja mejor ese promedio real de la ciudad en
+// vez del extremo mas optimista del rango (45 km/h, pensado para calles
+// planas y despejadas). Sigue siendo una aproximacion simple (Haversine +
+// velocidad fija): la ruta real por calles ya la calcula OSRM aparte
+// (ver prepararTramoOSRM) para la animacion del vehiculo en el mapa.
+// Fuente de verdad real del calculo: GET /emergencies/{id}/eta (backend,
+// core/eta.py), consultado cada ~2.5s y guardado en EtaCache por id_recurso
+// -- ver el useEffect "pollEtaPorEmergencia" en App(). El Haversine +
+// velocidad fija de aca abajo ya NO es el camino normal: es solo un
+// respaldo para el breve instante antes de que llegue la primera respuesta
+// del backend (o si la red falla), y por eso solo se usa cuando el recurso
+// todavia no aparece en la cache.
+type EtaCache=Record<number,{distanciaKm:number; etaMin:number}>;
+const VELOCIDAD_URBANO_KMH=30;
 const VELOCIDAD_FORESTAL_KMH=50;
+// Velocidad de la ANIMACION del vehiculo yendo/volviendo de una emergencia
+// (ver despacharUnidad) -- NO toca el ETA real mostrado/guardado, solo
+// cuanto tarda en verse llegar en el mapa. Antes 1 minuto de ETA real
+// animaba en 3200ms; se bajo 50% la velocidad visual (ahora 4800ms por
+// minuto de ETA, tope de 135s en vez de 90s) a pedido del equipo, para que
+// el trayecto se perciba menos apurado en el demo.
+const MS_ANIMACION_POR_MINUTO_ETA=4800;
+const ANIMACION_DESPACHO_MIN_MS=37500;
+const ANIMACION_DESPACHO_MAX_MS=135000;
 function haversineKm(lat1:number,lng1:number,lat2:number,lng2:number):number{
   const R=6371;
   const toRad=(d:number)=>d*Math.PI/180;
@@ -328,7 +387,8 @@ function etaMinutos(distanciaKm:number, terreno:string):number{
   const velocidad=terreno==='forestal'?VELOCIDAD_FORESTAL_KMH:VELOCIDAD_URBANO_KMH;
   return (distanciaKm/velocidad)*60;
 }
-function distanciaYEtaHacia(r:Resource, destino:{lat:number;lng:number}, clave:Clave|undefined, nowMs:number):{distanciaKm:number; etaMin:number}{
+function distanciaYEtaHacia(r:Resource, destino:{lat:number;lng:number}, clave:Clave|undefined, nowMs:number, etaCache?:EtaCache):{distanciaKm:number; etaMin:number}{
+  if(r.idRecurso!=null && etaCache?.[r.idRecurso]) return etaCache[r.idRecurso];
   const origen=posicionActual(r, nowMs);
   const distanciaKm=haversineKm(origen.lat, origen.lng, destino.lat, destino.lng);
   const etaMin=etaMinutos(distanciaKm, clave?.terreno??'urbano');
@@ -631,16 +691,6 @@ function justificarRecomendacion(r:Resource, clave:Clave|undefined, distanciaKm:
   return partes.join(' · ');
 }
 
-// Una compania se considera "ocupada" si ya tiene alguna unidad en camino o
-// trabajando en OTRA emergencia (6-3/6-7). Mientras eso ocurra, el resto de
-// unidades de esa misma compania/cuartel tampoco se recomiendan, para que
-// no se despache el mismo cuartel a dos emergencias distintas al mismo tiempo.
-// Una unidad regresando (6-8) NO cuenta como "ocupada": ya termino su
-// atencion anterior y esta libre para una nueva emergencia.
-function companiaOcupada(resources:Resource[], compania:string):boolean{
-  return resources.some(r=>r.compania===compania && (r.radioState==='6-3'||r.radioState==='6-7'));
-}
-
 // Limite de unidades despachadas a la vez a UNA MISMA emergencia. En una
 // central real no se manda media flota a un incendio domiciliario comun --
 // 2 o 3 unidades es lo razonable. Se deja como constante unica por ahora
@@ -656,14 +706,105 @@ function unidadesEnCaminoA(resources:Resource[], emergenciaId:number):number{
   ).length;
 }
 
-function pickRecommendation(resources:Resource[], emergencia:Emergency|null, rechazados:Set<string>, clave:Clave|undefined, nowMs:number):Resource|null{
+// Cuantas unidades de cada tipo estan (o estuvieron) respondiendo a una
+// emergencia puntual -- incluye 6-8 (regresando) a proposito: una unidad que
+// ya atendio y va de vuelta sigue contando para el requisito cumplido, no
+// hay que volver a pedir otra del mismo tipo solo porque esta terminó.
+function unidadesAsignadasPorTipo(resources:Resource[], emergenciaId:number):Partial<Record<ResourceType,number>>{
+  const conteo:Partial<Record<ResourceType,number>>={};
+  resources.forEach(r=>{
+    if(r.destino?.emergenciaId===emergenciaId && (r.radioState==='6-3'||r.radioState==='6-7'||r.radioState==='6-8')){
+      conteo[r.type]=(conteo[r.type]??0)+1;
+    }
+  });
+  return conteo;
+}
+
+// ¿Esta clave exige una Escala Mecanica dentro de su criterio base (ver
+// Clave.unidades_requeridas)? Hoy solo el 10-0, pero se calcula de forma
+// generica para que siga funcionando si a futuro se modela otra clave asi.
+function claveExigeEscala(clave:Clave|undefined):boolean{
+  return !!clave?.unidades_requeridas?.some(req=>req.tipos.includes('Escala'));
+}
+
+// Ajusta el criterio BASE de la clave (Clave.unidades_requeridas) segun el
+// tipo de estructura/piso de ESTA emergencia puntual (ver
+// Emergency.tipoEstructura/piso) -- quita el requisito de Escala cuando no
+// corresponde:
+// - tipoEstructura sin especificar (null/undefined): se mantiene el
+//   criterio base tal cual, del lado conservador (podria necesitarla).
+// - tipoEstructura que no es "edificio_residencial" ni "equipamiento"
+//   (vivienda, industrial, espacio_publico, vegetacion, vehiculo): nunca
+//   necesita Escala, se quita el requisito.
+// - "edificio_residencial"/"equipamiento": necesita Escala solo si el piso
+//   es 3 o mas (o no se especifico el piso, tambien conservador); si el
+//   piso es 1 o 2, se quita el requisito.
+function unidadesRequeridasEfectivas(clave:Clave|undefined, emergencia:{tipoEstructura?:TipoEstructura|null; piso?:number|null}):RequisitoUnidad[]|null{
+  const base=clave?.unidades_requeridas;
+  if(!base || !base.length) return null;
+  const tipo=emergencia.tipoEstructura;
+  if(tipo==null) return base;
+  const esEnAltura=tipo==='edificio_residencial'||tipo==='equipamiento';
+  const necesitaEscala=esEnAltura && (emergencia.piso==null || emergencia.piso>=3);
+  if(necesitaEscala) return base;
+  return base.filter(req=>!req.tipos.includes('Escala'));
+}
+
+// null = la clave no tiene un criterio de cantidad ya modelado (ver
+// Clave.unidades_requeridas) -- se mantiene el comportamiento anterior de
+// una sola unidad por emergencia. [] = el criterio (ya ajustado por
+// unidadesRequeridasEfectivas segun tipo de estructura/piso) esta cubierto.
+// Un arreglo no vacio = falta al menos un tipo, y son justo los tipos que
+// todavia hacen falta (p.ej. ["Escala"] si el 10-0 ya tiene sus 2 Carro
+// Bomba pero no su Escala, y si corresponde pedirla segun el piso/estructura).
+function tiposFaltantesPara(emergencia:{id:number; tipoEstructura?:TipoEstructura|null; piso?:number|null}, clave:Clave|undefined, resources:Resource[]):ResourceType[]|null{
+  const requeridos=unidadesRequeridasEfectivas(clave, emergencia);
+  if(!requeridos || !requeridos.length) return null;
+  const conteo=unidadesAsignadasPorTipo(resources, emergencia.id);
+  const faltantes=requeridos.filter(req=>{
+    const cubiertas=req.tipos.reduce((acc,t)=>acc+(conteo[t]??0),0);
+    return cubiertas<req.cantidad;
+  });
+  return Array.from(new Set(faltantes.flatMap(f=>f.tipos)));
+}
+
+// Una emergencia "necesita despacho" si todavia le falta cubrir su
+// requisito real de unidades (ver tiposFaltantesPara). Para una clave sin
+// ese criterio modelado (tiposFaltantes===null) se mantiene el
+// comportamiento de una sola unidad: solo necesita despacho mientras siga
+// "Activa" (sin ninguna asignada todavia). Usado tanto para decidir que
+// emergencia mostrar/priorizar (ver currentEmergencia) como para validar
+// que una seleccion manual (Atender, clic en el mapa) siga teniendo sentido
+// -- un clic sobre una emergencia ya totalmente cubierta NO debe dejar el
+// panel pegado ahi si hay otras alertas esperando ser despachadas.
+function emergenciaNecesitaDespacho(e:Emergency, clave:Clave|undefined, resources:Resource[]):boolean{
+  if(e.status==='FINALIZADA') return false;
+  const faltantes=tiposFaltantesPara(e, clave, resources);
+  if(faltantes===null) return e.status==='Activa';
+  return faltantes.length>0;
+}
+
+function pickRecommendation(resources:Resource[], emergencia:Emergency|null, rechazados:Set<string>, clave:Clave|undefined, nowMs:number, etaCache?:EtaCache, tiposNecesarios?:ResourceType[]|null):Resource|null{
   if(!emergencia) return null;
   if(unidadesEnCaminoA(resources, emergencia.id) >= LIMITE_UNIDADES_POR_EMERGENCIA) return null;
-  const candidatos=resources.filter(r=>esDisponible(r) && !rechazados.has(r.id) && !companiaOcupada(resources, r.compania));
+  // Se filtra por disponibilidad del RECURSO individual (esDisponible), no
+  // de toda su compañía -- antes se excluia a una unidad libre si otra de
+  // su misma compañía estaba ocupada en otra emergencia, pensado para
+  // cuando cada compañía tenia un unico carro (bloquear la compañía era lo
+  // mismo que bloquear su único carro). Ahora que cada compañía tiene 2
+  // carros, esa regla ya no aplica: dejaba una unidad libre y mucho más
+  // cercana sin ofrecerse, forzando a buscar otra mucho más lejana solo
+  // porque su carro hermano estaba en otro incidente.
+  let candidatos=resources.filter(r=>esDisponible(r) && !rechazados.has(r.id));
+  // Si la clave ya tiene criterio de cantidad por tipo, solo se recomiendan
+  // unidades de los tipos que todavia faltan -- sin esto, una vez cubiertos
+  // los 2 Carro Bomba del 10-0 se seguiria insistiendo con mas Carro Bomba
+  // en vez de ofrecer la Escala pendiente.
+  if(tiposNecesarios && tiposNecesarios.length) candidatos=candidatos.filter(r=>tiposNecesarios.includes(r.type));
   if(!candidatos.length) return null;
   return candidatos.slice().sort((a,b)=>{
-    const da=distanciaYEtaHacia(a,emergencia,clave,nowMs);
-    const db=distanciaYEtaHacia(b,emergencia,clave,nowMs);
+    const da=distanciaYEtaHacia(a,emergencia,clave,nowMs,etaCache);
+    const db=distanciaYEtaHacia(b,emergencia,clave,nowMs,etaCache);
     return score(b,clave,db.distanciaKm,db.etaMin)-score(a,clave,da.distanciaKm,da.etaMin);
   })[0];
 }
@@ -935,7 +1076,7 @@ function useBuscadorDirecciones(){
 // como campo: se calcula sola desde el codigo elegido y se envia asi nomas.
 function NuevaEmergenciaView({claves, onCrear}:{
   claves:Record<string,Clave>;
-  onCrear:(payload:{codigo_emergencia:string; direccion_emergencia:string; latitud_emergencia:number; longitud_emergencia:number; prioridad_emergencia:number})=>Promise<{id_emergencia:number; codigo_emergencia:string}>;
+  onCrear:(payload:{codigo_emergencia:string; direccion_emergencia:string; latitud_emergencia:number; longitud_emergencia:number; prioridad_emergencia:number; tipo_estructura_emergencia?:TipoEstructura|null; piso_emergencia?:number|null})=>Promise<{id_emergencia:number; codigo_emergencia:string}>;
 }){
   const [codigo,setCodigo]=useState('');
   const [direccion,setDireccion]=useState('');
@@ -945,13 +1086,26 @@ function NuevaEmergenciaView({claves, onCrear}:{
   // código de emergencia (catalogo real, GET /catalog/claves). Sin código
   // elegido todavia no hay prioridad que mostrar.
   const [prioridad,setPrioridad]=useState<number|null>(null);
+  // Apartado 4 (condicional, ver mas abajo): solo tiene sentido pedirlo
+  // cuando la clave elegida exige una Escala Mecanica dentro de su criterio
+  // (hoy, solo 10-0) -- ver claveExigeEscala/unidadesRequeridasEfectivas.
+  const [tipoEstructura,setTipoEstructura]=useState<TipoEstructura|''>('');
+  const [piso,setPiso]=useState('');
   const [enviando,setEnviando]=useState(false);
   const {sugerencias, estado:estadoBusquedaDireccion, buscar, limpiar}=useBuscadorDirecciones();
+
+  const claveSeleccionada=claves[codigo];
+  const mostrarTipoEstructura=claveExigeEscala(claveSeleccionada);
+  const mostrarPiso=tipoEstructura==='edificio_residencial'||tipoEstructura==='equipamiento';
 
   const elegirCodigo=(cod:string)=>{
     setCodigo(cod);
     const clave=claves[cod];
     setPrioridad(clave?Number(clave.prioridad):null);
+    // Si la nueva clave ya no exige Escala, se limpia la seleccion anterior
+    // de este apartado -- no tiene sentido arrastrar un "tipo de estructura"
+    // elegido para un 10-0 si el operador cambia a un 10-1.
+    if(!claveExigeEscala(clave)){ setTipoEstructura(''); setPiso(''); }
   };
 
   const elegirDireccionSugerida=(s:{display_name:string; lat:string; lon:string})=>{
@@ -991,8 +1145,10 @@ function NuevaEmergenciaView({claves, onCrear}:{
         latitud_emergencia:lat,
         longitud_emergencia:lng,
         prioridad_emergencia:prioridad,
+        tipo_estructura_emergencia: mostrarTipoEstructura && tipoEstructura ? tipoEstructura : null,
+        piso_emergencia: mostrarTipoEstructura && mostrarPiso && piso.trim() ? Number(piso) : null,
       });
-      setCodigo(''); setDireccion(''); setLat(null); setLng(null); setPrioridad(null);
+      setCodigo(''); setDireccion(''); setLat(null); setLng(null); setPrioridad(null); setTipoEstructura(''); setPiso('');
     }catch(error){
       alert(error instanceof Error?error.message:'No se pudo crear la emergencia.');
     }finally{
@@ -1032,6 +1188,35 @@ function NuevaEmergenciaView({claves, onCrear}:{
             {estadoBusquedaDireccion==='sin_resultados' && <small className="estadoBusquedaDireccion">Sin resultados para esa búsqueda. Prueba solo con el nombre de la calle (ej. "Pedro Montt").</small>}
             {estadoBusquedaDireccion==='error' && <small className="estadoBusquedaDireccion error">No se pudo conectar al buscador de direcciones. Puedes seguir marcando el punto directo en el mapa.</small>}
           </label>
+
+          {mostrarTipoEstructura && (
+            <label className="nuevaEmergenciaCampo">
+              4. Tipo de estructura
+              <select
+                className="nuevaEmergenciaSelect"
+                value={tipoEstructura}
+                onChange={e=>{ const v=e.target.value as TipoEstructura|''; setTipoEstructura(v); if(v!=='edificio_residencial' && v!=='equipamiento') setPiso(''); }}
+              >
+                <option value="">Sin especificar</option>
+                {(Object.keys(TIPO_ESTRUCTURA_LABELS) as TipoEstructura[]).map(t=>
+                  <option key={t} value={t}>{TIPO_ESTRUCTURA_LABELS[t]}</option>
+                )}
+              </select>
+              <span className="nuevaEmergenciaCampoHint">
+                Determina si hace falta una Escala Mecánica además del Carro Bomba. Sin especificar, se asume que podría necesitarla.
+              </span>
+              {mostrarPiso && (
+                <input
+                  className="nuevaEmergenciaPisoInput"
+                  type="number"
+                  min={0}
+                  value={piso}
+                  onChange={e=>setPiso(e.target.value)}
+                  placeholder="Piso donde ocurre la emergencia (ej. 1)"
+                />
+              )}
+            </label>
+          )}
 
           <button className="nuevaEmergenciaCrearBtn" onClick={crear} disabled={enviando}>
             {enviando?'Creando…':'Crear y generar recomendación'}
@@ -1098,6 +1283,18 @@ function botonAsignarManual(unidad:Resource, hayEmergenciaActiva:boolean, isAdmi
 // Contenido HTML de la popup al hacer click en una unidad: detalle completo
 // (no solo el nombre/estado del tooltip al pasar el mouse), mas el boton
 // de asignacion manual si corresponde.
+// Fila "Personal activo: N" con luz verde (hay al menos 1) o roja (0),
+// a partir del conteo por compania que entrega GET /companies/personal-activo
+// (emergencia.usuario.estado_usuario='activo' agrupado por id_compania).
+// A proposito solo el numero -- nunca nombre ni correo de quien esta de
+// turno. Hoy esto da 0 o 1 (solo 4 cuentas de sistema existen), pero la
+// cuenta ya queda lista para cuando haya mas de un operador por compania.
+function filaPersonalActivo(compania:string, personalActivoPorCompania:Record<string,number>):string{
+  const n=personalActivoPorCompania[compania] ?? 0;
+  const luz=n>0?'🟢':'🔴';
+  return `<br/>Personal activo: ${luz} ${n}`;
+}
+
 function popupVehiculo(r:Resource, hayEmergenciaActiva:boolean, isAdmin:boolean):string{
   // Incluye el numero de la emergencia (no solo la direccion) para que
   // quede claro a cual alerta esta sirviendo este vehiculo -- sin esto, un
@@ -1106,6 +1303,9 @@ function popupVehiculo(r:Resource, hayEmergenciaActiva:boolean, isAdmin:boolean)
   const detalleTramo=r.destino
     ? `<br/>→ Emergencia #${r.destino.emergenciaId} · ${r.destino.address}`
     : '';
+  // Personal activo NO va aca: es informacion del CUARTEL (ver popupCuartel),
+  // no del vehiculo en movimiento -- a peticion explicita, este popup se
+  // mantiene igual que antes de agregar esa funcionalidad.
   return `<b>${r.name}</b><br/>${r.compania}<br/><span style="opacity:.75">${r.sector}</span><br/>
     Tipo: ${r.type} · Dotación: ${r.crew}<br/>
     Estado: <b>${RADIO_LABELS[r.radioState]}</b>${detalleTramo}
@@ -1115,15 +1315,25 @@ function popupVehiculo(r:Resource, hayEmergenciaActiva:boolean, isAdmin:boolean)
 // Popup del cuartel: lista todas las unidades basadas ahi y su estado
 // actual (un mismo cuartel puede tener mas de una), con un boton de
 // asignacion manual por cada unidad que este realmente disponible.
-function popupCuartel(compania:string, sector:string, unidades:Resource[], hayEmergenciaActiva:boolean, isAdmin:boolean):string{
-  const filas=unidades.map(u=>
-    `${u.id} (${u.type}) — <b>${RADIO_LABELS[u.radioState]}</b>${botonAsignarManual(u, hayEmergenciaActiva, isAdmin)}`
-  ).join('<br/>');
-  return `<b>${compania}</b><br/><span style="opacity:.75">${sector}</span><br/><br/>${filas}`;
+function popupCuartel(compania:string, sector:string, unidades:Resource[], hayEmergenciaActiva:boolean, isAdmin:boolean, personalActivoPorCompania:Record<string,number>={}):string{
+  const filas=unidades.map(u=>`
+    <div class="popupRecursoItem">
+      <div class="popupRecursoNombre">${u.id} <span class="popupRecursoTipo">(${u.type})</span></div>
+      <div class="popupRecursoEstado">Estado: <b>${RADIO_LABELS[u.radioState]}</b></div>
+      ${botonAsignarManual(u, hayEmergenciaActiva, isAdmin)}
+    </div>
+  `).join('');
+  return `<div class="popupCuartel">
+    <div class="popupCuartelHead"><b>${compania}</b><br/><span style="opacity:.75">${sector}</span>${filaPersonalActivo(compania, personalActivoPorCompania)}</div>
+    <div class="popupRecursosTitulo">Recursos</div>
+    ${filas}
+  </div>`;
 }
 
-function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSelectEmergencia, isAdmin=true}:{resources:Resource[]; emergencies:Emergency[]; focus:{lat:number;lng:number}|null; center:{lat:number;lng:number}; onAsignarManual:(resourceId:string)=>void; onSelectEmergencia?:(id:number)=>void; isAdmin?:boolean}){
+function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSelectEmergencia, isAdmin=true, personalActivoPorCompania={}}:{resources:Resource[]; emergencies:Emergency[]; focus:{lat:number;lng:number}|null; center:{lat:number;lng:number}; onAsignarManual:(resourceId:string)=>void; onSelectEmergencia?:(id:number)=>void; isAdmin?:boolean; personalActivoPorCompania?:Record<string,number>}){
   const mapRef=useRef<L.Map|null>(null);
+  const personalActivoRef=useRef(personalActivoPorCompania);
+  personalActivoRef.current=personalActivoPorCompania;
   // Refs para leer siempre el valor mas reciente desde callbacks que
   // Leaflet dispara mas tarde (popups, clicks) sin que queden desactualizados.
   const onAsignarManualRef=useRef(onAsignarManual);
@@ -1161,6 +1371,18 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
   // marcador es persistente y no se recrea, asi que su closure inicial
   // quedaria desactualizada si no se lee desde aca en vez de capturarla).
   const datosRef=useRef<Record<string, Resource>>({});
+
+  // Si el popup de un vehiculo ya esta abierto cuando llega personal activo
+  // nuevo (ver poll de GET /companies/personal-activo en App()), Leaflet NO
+  // vuelve a llamar solo a la funcion de contenido del popup -- queda
+  // mostrando el numero viejo hasta que el operador lo cierra y lo abre de
+  // nuevo. Forzamos el refresco aca para que se vea "en vivo", sin F5 ni
+  // tener que cerrar/reabrir el popup a mano.
+  useEffect(()=>{
+    Object.values(marcadoresRef.current).forEach(marcador=>{
+      if(marcador.isPopupOpen()) marcador.getPopup()?.update();
+    });
+  },[personalActivoPorCompania]);
 
   // Reloj de animacion propio del mapa (no el `now` general de la app, que
   // solo marca segundos completos): mueve las unidades cada 300ms para que
@@ -1237,8 +1459,14 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
       const letras=unidades.map(u=>RESOURCE_LETRA[u.type]);
       L.marker([lat,lng],{
         icon:L.divIcon({className:'cuartel-marker', html:iconoCuartel(letras), iconSize:[22,22], iconAnchor:[11,11]}),
-        zIndexOffset:-100,
-      }).addTo(layer).bindTooltip(`${compania} · ${sector}`).bindPopup(()=>popupCuartel(compania, sector, unidades, emergenciesRef.current.length>0, isAdminRef.current));
+        // Por encima del zIndexOffset del marcador de vehiculo (200): cuando
+        // una unidad esta "Disponible en cuartel" (6-0), comparte exactas las
+        // mismas coordenadas que su cuartel, y sin esto el vehiculo (encima)
+        // tapaba el clic al cuartel -- impidiendo ver el personal activo del
+        // cuartel. El popup del cuartel ya lista cada unidad con su propio
+        // boton de asignar, asi que no se pierde nada al priorizarlo aca.
+        zIndexOffset:250,
+      }).addTo(layer).bindTooltip(`${compania} · ${sector}`).bindPopup(()=>popupCuartel(compania, sector, unidades, emergenciesRef.current.length>0, isAdminRef.current, personalActivoRef.current));
     });
     emergencies.forEach(e=>{
       const marker=L.marker([e.lat,e.lng],{icon:L.divIcon({className:'emergency-marker',html:'<div>!</div>',iconSize:[36,36],iconAnchor:[18,18]})})
@@ -1444,12 +1672,43 @@ function HeatMapPanel({zonas, seleccionadaId, onSelectZona, focus}:{zonas:ZoneDe
   return <div id="heatmap"/>
 }
 
+const TODOS='todos' as const;
 function EmergenciasView({queue,claves,now,onAtender,onVerUbicacion,isAdmin}:{queue:Emergency[];claves:Record<string,Clave>;now:number;onAtender:(id:number)=>void;onVerUbicacion:(id:number)=>void;isAdmin:boolean}){
+  const [busqueda,setBusqueda]=useState('');
+  const [filtroPrioridad,setFiltroPrioridad]=useState<typeof TODOS|string>(TODOS);
+  const [filtroEstado,setFiltroEstado]=useState<typeof TODOS|Emergency['status']>(TODOS);
+  const texto=busqueda.trim().toLowerCase();
+  const ordenada=[...queue].sort((a,b)=>a.id-b.id);
+  const filtradas=ordenada.filter(e=>{
+    const c=claves[e.codigo];
+    return (filtroPrioridad===TODOS||obtenerNivelPrioridad(e.prioridad)===filtroPrioridad) &&
+      (filtroEstado===TODOS||e.status===filtroEstado) &&
+      (!texto ||
+        e.codigo.toLowerCase().includes(texto) ||
+        (c?.nombre??'').toLowerCase().includes(texto) ||
+        e.address.toLowerCase().includes(texto) ||
+        String(e.id).includes(texto));
+  });
+  const prioridades=Array.from(new Set(ordenada.map(e=>obtenerNivelPrioridad(e.prioridad))));
+  const estados=Array.from(new Set(ordenada.map(e=>e.status)));
+  const hayFiltrosActivos=busqueda!==''||filtroPrioridad!==TODOS||filtroEstado!==TODOS;
   return <div className="card sectionCard">
-    <div className="cardHead"><div><b>Emergencias activas</b><span>{queue.length} en cola de atención · toca una fila o "Ver ubicación" para verla en el mapa</span></div></div>
+    <div className="cardHead"><div><b>Emergencias activas</b><span>{filtradas.length} de {queue.length} en cola de atención · toca una fila o "Ver ubicación" para verla en el mapa</span></div></div>
+    <div className="filterRow">
+      <input placeholder="Buscar por ID, clave o dirección…" value={busqueda} onChange={e=>setBusqueda(e.target.value)}/>
+      <select value={filtroPrioridad} onChange={e=>setFiltroPrioridad(e.target.value)}>
+        <option value={TODOS}>Todas las prioridades</option>
+        {prioridades.map(p=><option key={p} value={p}>{p}</option>)}
+      </select>
+      <select value={filtroEstado} onChange={e=>setFiltroEstado(e.target.value as typeof TODOS|Emergency['status'])}>
+        <option value={TODOS}>Todos los estados</option>
+        {estados.map(s=><option key={s} value={s}>{s}</option>)}
+      </select>
+      {hayFiltrosActivos && <button className="linkBtn" onClick={()=>{setBusqueda('');setFiltroPrioridad(TODOS);setFiltroEstado(TODOS);}}>Quitar filtros</button>}
+    </div>
     <div className="tableWrap"><table className="dataTable">
       <thead><tr><th>ID</th><th>Clave</th><th>Prioridad</th><th>Dirección</th><th>Tiempo</th><th>Estado</th><th></th>{isAdmin && <th></th>}</tr></thead>
-      <tbody>{[...queue].sort((a, b) => a.id - b.id).map(e => {const c = claves[e.codigo];return <tr key={e.id} className="emergenciaRow" onClick={()=>onVerUbicacion(e.id)}>
+      <tbody>{filtradas.length?filtradas.map(e => {const c = claves[e.codigo];return <tr key={e.id} className="emergenciaRow" onClick={()=>onVerUbicacion(e.id)}>
         <td>#{e.id}</td>
         <td>{e.codigo} · {c?.nombre??'—'}</td>
         <td>
@@ -1464,13 +1723,11 @@ function EmergenciasView({queue,claves,now,onAtender,onVerUbicacion,isAdmin}:{qu
         <td>{e.status}</td>
         <td><button className="linkBtn" onClick={ev=>{ev.stopPropagation(); onVerUbicacion(e.id);}}><Crosshair size={13}/> Ver ubicación</button></td>
         {isAdmin && <td><button className="atenderBtn" onClick={ev=>{ev.stopPropagation(); onAtender(e.id);}}>Atender</button></td>}
-      </tr>;})}</tbody>
+      </tr>;}):<tr><td colSpan={isAdmin?8:7}><p className="emptyState">Ninguna emergencia coincide con el filtro.</p></td></tr>}</tbody>
     </table></div>
   </div>;
 }
-
-const TODOS='todos' as const;
-function RecursosView({resources,alertaTimeoutIds,onVerCuartelEnMapa,isAdmin,puedeCambiarEstado,onCambiarFueraDeServicio}:{resources:Resource[];alertaTimeoutIds:Set<string>;onVerCuartelEnMapa:(lat:number,lng:number)=>void;isAdmin:boolean;puedeCambiarEstado:boolean;onCambiarFueraDeServicio:(resource:Resource, nuevoEstado:'6-0'|'6-9')=>void}){
+function RecursosView({resources,alertaTimeoutIds,onVerCuartelEnMapa,isAdmin,puedeCambiarEstado,onCambiarFueraDeServicio,emergenciaReferencia,claveReferencia,now,etaPorRecurso}:{resources:Resource[];alertaTimeoutIds:Set<string>;onVerCuartelEnMapa:(lat:number,lng:number)=>void;isAdmin:boolean;puedeCambiarEstado:boolean;onCambiarFueraDeServicio:(resource:Resource, nuevoEstado:'6-0'|'6-9')=>void;emergenciaReferencia?:Emergency|null;claveReferencia?:Clave;now:number;etaPorRecurso?:EtaCache}){
   const [busqueda,setBusqueda]=useState('');
   const [filtroTipo,setFiltroTipo]=useState<typeof TODOS|ResourceType>(TODOS);
   const [filtroEstado,setFiltroEstado]=useState<typeof TODOS|RadioState>(TODOS);
@@ -1497,16 +1754,26 @@ function RecursosView({resources,alertaTimeoutIds,onVerCuartelEnMapa,isAdmin,pue
       {hayFiltrosActivos && <button className="linkBtn" onClick={()=>{setBusqueda('');setFiltroTipo(TODOS);setFiltroEstado(TODOS);}}>Quitar filtros</button>}
     </div>
     <div className="tableWrap"><table className="dataTable">
-      <thead><tr><th></th><th>Unidad</th><th>Compañía</th><th>Sector</th><th>Tipo</th><th>Dotación</th><th>Distancia</th><th>ETA</th><th>Estado</th>{puedeCambiarEstado && <th></th>}</tr></thead>
-      <tbody>{filtrados.length?filtrados.map(r=><tr key={r.id} className="resFilaClicable" title="Filtrar por esta compañía" onClick={()=>setBusqueda(r.compania)}>
+      <thead><tr><th></th><th>Unidad</th><th>Compañía</th><th>Sector</th><th>Tipo</th><th>Dotación</th><th title={emergenciaReferencia?`A la Emergencia #${emergenciaReferencia.id}`:'Sin emergencia activa para medir'}>Distancia{emergenciaReferencia?' a la emergencia':''}</th><th>ETA</th><th>Estado</th>{puedeCambiarEstado && <th></th>}</tr></thead>
+      <tbody>{filtrados.length?filtrados.map(r=>{
+        // Igual que el panel "Recurso recomendado" del Dashboard: distancia/ETA
+        // reales medidas hacia la emergencia activa que se este viendo ahi,
+        // calculadas en el backend (ver etaPorRecurso en App()). Sin una
+        // emergencia de referencia no hay destino contra el cual medir, asi
+        // que se muestra un guion en vez de "0 km/0 min" (que daba a entender
+        // que la unidad ya habia llegado a algun lado).
+        const medicion=emergenciaReferencia
+          ?distanciaYEtaHacia(r,{lat:emergenciaReferencia.lat,lng:emergenciaReferencia.lng},claveReferencia,now,etaPorRecurso)
+          :null;
+        return <tr key={r.id} className="resFilaClicable" title="Filtrar por esta compañía" onClick={()=>setBusqueda(r.compania)}>
         <td className="resIconCell">{resourceIcon(r.type)}</td>
         <td className="wrap resNombreCell">{r.name}</td>
         <td className="wrap"><button className="linkBtn" title="Ver cuartel en el mapa" onClick={e=>{e.stopPropagation(); onVerCuartelEnMapa(r.lat,r.lng);}}>{r.compania}</button></td>
         <td className="wrap">{r.sector}</td>
         <td>{r.type}</td>
         <td>{r.crew}</td>
-        <td>{r.distance} km</td>
-        <td>{r.eta} min</td>
+        <td>{medicion?`${medicion.distanciaKm} km`:'—'}</td>
+        <td>{medicion?`${medicion.etaMin} min`:'—'}</td>
         <td className="wrap resEstadoCell"><span className={`estado estado-${r.radioState.replace('6-','')}`}>{r.radioState} · {RADIO_LABELS[r.radioState]}</span>{alertaTimeoutIds.has(r.id)&&<span className="timeoutBadge" title="Sin transmisión de estado dentro del umbral configurado"><AlertTriangle size={11}/> sin transmisión</span>}</td>
         {puedeCambiarEstado && <td>
           {r.radioState==='6-9'
@@ -1515,7 +1782,7 @@ function RecursosView({resources,alertaTimeoutIds,onVerCuartelEnMapa,isAdmin,pue
               ?<button className="fueraServicioBtn" onClick={e=>{e.stopPropagation(); onCambiarFueraDeServicio(r,'6-9');}}>Fuera de servicio</button>
               :null}
         </td>}
-      </tr>):<tr><td colSpan={puedeCambiarEstado?10:9}><p className="emptyState">Ninguna unidad coincide con el filtro.</p></td></tr>}</tbody>
+      </tr>;}):<tr><td colSpan={puedeCambiarEstado?10:9}><p className="emptyState">Ninguna unidad coincide con el filtro.</p></td></tr>}</tbody>
     </table></div>
   </div>;
 }
@@ -2517,6 +2784,32 @@ function App(){
    return ()=>{ cancelado=true; window.clearInterval(id); };
  },[auth]);
 
+ // Cuantos operadores estan "activo" (ver estado_usuario) por compania,
+ // segun a cual quedo designado cada usuario (id_compania) -- solo el
+ // numero, nunca nombre ni correo (ver GET /companies/personal-activo).
+ // Hoy solo existen 4 cuentas de sistema, asi que esto da 0 o 1 por
+ // compania mientras no se agreguen mas; la logica ya sirve igual cuando
+ // eso pase. Se usa en los popups del mapa operacional (ver MapPanel).
+ const [personalActivoPorCompania,setPersonalActivoPorCompania]=useState<Record<string,number>>({});
+ useEffect(()=>{
+   if(!auth) { setPersonalActivoPorCompania({}); return; }
+   let cancelado=false;
+   const consultar=async()=>{
+     try{
+       const resp=await fetch(`${API_BASE}/companies/personal-activo`,{headers:{Authorization:`Bearer ${auth.token}`}});
+       if(!resp.ok) return;
+       const data=await resp.json();
+       if(!cancelado) setPersonalActivoPorCompania(data.personal_activo ?? {});
+     }catch{ /* red caida: se mantiene el ultimo valor conocido */ }
+   };
+   consultar();
+   // Cada 8s, no 30s como el resto -- es lo que se muestra en vivo en el
+   // mapa operacional mientras el operador tiene un popup abierto (ver
+   // efecto en MapPanel que refresca el popup abierto cuando esto cambia).
+   const id=window.setInterval(consultar,8000);
+   return ()=>{ cancelado=true; window.clearInterval(id); };
+ },[auth]);
+
  const toggleEstadoServicio=async()=>{
    if(!auth || cambiandoEstado) return;
    const nuevoActivo=!activoDB;
@@ -2812,6 +3105,16 @@ useEffect(()=>{
  const despachosReanudadosRef=useRef(false);
  const catalogoBDRef=useRef<Resource[]>([]);
  const operacionesPendientesRef=useRef<Set<string>>(new Set());
+ // Datos de regreso de cada recurso (su propio cuartel y la duracion de
+ // tramo ya calculada al despacharlo), guardados aca para que el temporizador
+ // de trabajo COMPARTIDO entre todos los recursos de una misma emergencia
+ // (ver intentarIniciarTrabajoCompartido) pueda hacer que cada uno vuelva a
+ // SU cuartel al mismo tiempo que los demas, sin que cada uno necesite su
+ // propio temporizador de trabajo individual.
+ const infoRegresoRef=useRef<Record<string,{home:{lat:number;lng:number}; duracionTramoMs:number}>>({});
+ // Por id de emergencia: evita programar el temporizador de trabajo
+ // compartido dos veces si dos recursos llegan casi al mismo tiempo.
+ const trabajoCompartidoRef=useRef<Record<number, boolean>>({});
  const soundOnRef=useRef(soundOn);
  // Espejos del resto del estado simulado, para publicarlo tal cual esta
  // en este instante desde el setInterval de "publicar estado" (ver mas
@@ -2880,6 +3183,7 @@ useEffect(()=>{
         return {
           id: codigo,
           codigo,
+          idRecurso: fila.id_recurso!=null ? Number(fila.id_recurso) : undefined,
           name: nombreRecursoBD(fila, codigo, tipo),
           type: tipo,
           lat, lng, homeLat, homeLng,
@@ -3412,40 +3716,97 @@ const intentarPatrullaje = async () => {
    [resources, filtroCuartel]
  );
 
- // Si se eligio una emergencia a mano desde el mapa, esa manda sobre la
- // seleccion automatica (mientras siga activa -- si ya se resolvio y
- // desaparecio de la cola, cae sola de vuelta al criterio automatico).
- // Ese criterio automatico prioriza una emergencia Activa (sin despachar
- // todavia); si no hay ninguna, muestra la siguiente que siga en curso
- // (Asignada o En atencion) en vez de dejar el panel vacio -- siempre hay
- // algo que mostrar mientras quede una emergencia sin finalizar.
+ // Si se eligio una emergencia a mano (Atender/Ver ubicacion en Emergencias,
+ // o clic en un marcador del mapa) esa manda sobre la seleccion automatica,
+ // pero SOLO mientras siga necesitando despacho (ver emergenciaNecesitaDespacho)
+ // -- un clic en el mapa (onSelectEmergencia en MapPanel) no valida nada por
+ // si solo, asi que sin este chequeo aca una emergencia ya completamente
+ // cubierta se quedaba "pegada" en el panel con la recomendacion vacia
+ // aunque hubiera otras alertas activas esperando ser despachadas.
+ // Si la seleccion manual ya no aplica (se resolvio, desaparecio de la cola,
+ // o ya esta completa), cae sola al criterio automatico, que PRIMERO termina
+ // de cubrir cualquier emergencia que ya se empezo a despachar pero le falta
+ // otro tipo requerido (p.ej. un 10-0 con su Escala pendiente), luego prioriza
+ // una emergencia Activa (sin despachar todavia), y si tampoco hay, muestra
+ // la siguiente que siga en curso (ya completa) solo para no dejar el panel
+ // vacio.
  const currentEmergencia=
-   (emergenciaSeleccionadaId!=null ? queue.find(e=>e.id===emergenciaSeleccionadaId && e.status==='Activa') : undefined) ??
+   (emergenciaSeleccionadaId!=null ? queue.find(e=>e.id===emergenciaSeleccionadaId && emergenciaNecesitaDespacho(e, claves[e.codigo], resources)) : undefined) ??
+   queue.find(e=>e.status!=='Activa' && emergenciaNecesitaDespacho(e, claves[e.codigo], resources))??
    queue.find(e=>e.status==='Activa')??
    queue.find(e=>e.status==='Asignada'||e.status==='ASIGNADA')??
    queue.find(e=>e.status==='EN_ATENCION')??
    null;
  const claveActual=currentEmergencia?claves[currentEmergencia.codigo]:undefined;
+ // Tipos de unidad que todavia faltan para esta emergencia segun el
+ // criterio real ya modelado (ver Clave.unidades_requeridas / CLAVES_RADIALES
+ // en el backend) -- null si la clave no tiene ese criterio modelado (se
+ // mantiene el comportamiento anterior de una sola unidad), [] si ya esta
+ // cubierta, o la lista de tipos pendientes (p.ej. ["Escala"]). Se cuenta
+ // sobre TODOS los recursos (`resources`), no `resourcesFiltrados`: una
+ // unidad ya asignada desde otro cuartel sigue cubriendo el requisito
+ // aunque el filtro de cuartel actual la oculte de la vista.
+ const tiposFaltantes=currentEmergencia?tiposFaltantesPara(currentEmergencia, claveActual, resources):null;
+ // Mismo criterio ya ajustado por tipo de estructura/piso (ver
+ // unidadesRequeridasEfectivas), para mostrar el detalle "Unidades: X/Y"
+ // en la tarjeta de la emergencia (sin esto, mostraria siempre el criterio
+ // BASE de la clave aunque ya se haya descartado la Escala por el piso).
+ const requisitosEfectivosActuales=currentEmergencia?unidadesRequeridasEfectivas(claveActual, currentEmergencia):null;
+
+ // Distancia/ETA de todos los recursos hacia la emergencia en pantalla,
+ // consultados al backend (ver GET /emergencies/{id}/eta, core/eta.py) --
+ // el frontend ya no calcula esto por su cuenta, solo guarda la ultima
+ // respuesta y la usa (ver distanciaYEtaHacia). Se usa un ref ademas del
+ // estado porque despacharUnidad/handleRechazar leen el valor vigente desde
+ // dentro de callbacks async, donde una referencia de closure quedaria
+ // desactualizada.
+ const [etaPorRecurso,setEtaPorRecurso]=useState<EtaCache>({});
+ const etaPorRecursoRef=useRef<EtaCache>({});
+ etaPorRecursoRef.current=etaPorRecurso;
+ useEffect(()=>{
+   if(!auth || !currentEmergencia){ setEtaPorRecurso({}); return; }
+   let cancelado=false;
+   const consultar=async()=>{
+     try{
+       const resp=await fetch(`${API_BASE}/emergencies/${currentEmergencia.id}/eta`,{headers:{Authorization:`Bearer ${auth.token}`}});
+       if(!resp.ok) return;
+       const data=await resp.json();
+       if(cancelado) return;
+       const mapa:EtaCache={};
+       for(const fila of (data.eta ?? [])){
+         mapa[fila.id_recurso]={distanciaKm:fila.distancia_km, etaMin:fila.eta_min};
+       }
+       setEtaPorRecurso(mapa);
+     }catch{ /* red caida: se mantiene el ultimo valor conocido */ }
+   };
+   consultar();
+   // Mismo ritmo (~2-3s) con el que PATCH /resources/{..}/position actualiza
+   // la posicion de los recursos en Postgres durante un despacho -- no tiene
+   // sentido consultar mas seguido que eso, la posicion real no cambiaria.
+   const id=window.setInterval(consultar,2500);
+   return ()=>{ cancelado=true; window.clearInterval(id); };
+ },[auth, currentEmergencia?.id]);
  // La recomendacion se calcula SOLO sobre las unidades del cuartel elegido
  // en el filtro (si hay uno activo) -- asi "RECURSO RECOMENDADO" refleja
  // que unidad de ESA compañia respondería, no la mejor de toda la flota.
- // Ademas, solo se sugiere una unidad cuando la emergencia en pantalla
- // sigue "Activa" (sin despachar todavia) -- si ya tiene alguien respondiendo
- // (Asignada/En atencion) y se sigue mostrando aca solo porque no quedaba
- // ninguna otra Activa, no tiene sentido insistir con recomendar otro
- // carro para ella.
+ // Mismo criterio que currentEmergencia/emergenciaNecesitaDespacho: se sigue
+ // recomendando mientras esta emergencia todavia necesite despacho (una
+ // clave sin criterio modelado solo mientras siga "Activa"; una con
+ // criterio -- ver Clave.unidades_requeridas -- mientras falte algun tipo,
+ // aunque ya este "Asignada", p.ej. un 10-0 al que ya se le asignaron sus 2
+ // Carro Bomba pero todavia le falta la Escala).
+ const necesitaMasUnidades = !!currentEmergencia && emergenciaNecesitaDespacho(currentEmergencia, claveActual, resources);
  const recommendation=useMemo(
-   ()=>currentEmergencia?.status==='Activa'
-     ? pickRecommendation(resourcesFiltrados,currentEmergencia,rechazadosPorEmergencia[currentEmergencia?.id??-1]||new Set(), claveActual, now)
+   ()=>necesitaMasUnidades
+     ? pickRecommendation(resourcesFiltrados,currentEmergencia,rechazadosPorEmergencia[currentEmergencia?.id??-1]||new Set(), claveActual, now, etaPorRecurso, tiposFaltantes)
      : null,
-   [resourcesFiltrados,currentEmergencia,rechazadosPorEmergencia,claveActual,now]
+   [necesitaMasUnidades,resourcesFiltrados,currentEmergencia,rechazadosPorEmergencia,claveActual,now,etaPorRecurso,tiposFaltantes]
  );
- // Distancia/ETA reales para la recomendacion actual: se recalculan segun
- // la posicion vigente de la unidad (cuartel, o su posicion actual si va
- // de regreso de otra emergencia) y la ubicacion real de esta emergencia.
+ // Distancia/ETA reales para la recomendacion actual: vienen del backend
+ // (ver etaPorRecurso mas arriba), no se calculan aca.
  const recomendacionInfo=useMemo(
-   ()=>(recommendation && currentEmergencia)?distanciaYEtaHacia(recommendation, currentEmergencia, claveActual, now):null,
-   [recommendation, currentEmergencia, claveActual, now]
+   ()=>(recommendation && currentEmergencia)?distanciaYEtaHacia(recommendation, currentEmergencia, claveActual, now, etaPorRecurso):null,
+   [recommendation, currentEmergencia, claveActual, now, etaPorRecurso]
  );
 
  const notify=(s:string)=>{setToast(s); setTimeout(()=>setToast(''),2800)};
@@ -3510,6 +3871,147 @@ const spawnEmergencia = (): Emergency => {
 };
 
 //--------------------------
+
+ // Inicia el regreso de UN recurso a SU propio cuartel (ruta OSRM real,
+ // 6-8, y luego 6-0 al llegar). Separado de scheduleResourceLifecycle
+ // porque ahora lo invoca el temporizador de trabajo COMPARTIDO (ver
+ // intentarIniciarTrabajoCompartido) para que todos los recursos de una
+ // misma emergencia regresen a la vez, cada uno por su propia ruta.
+ const iniciarRegresoUnidad = async (resourceId: string, emergenciaSnap: Emergency) => {
+  const info = infoRegresoRef.current[resourceId];
+  if (!info) return;
+  const { home, duracionTramoMs } = info;
+
+  const origenVuelta = { lat: emergenciaSnap.lat, lng: emergenciaSnap.lng };
+  const destinoVuelta = { lat: home.lat, lng: home.lng };
+
+  try {
+    // Pedir ruta de regreso al contenedor OSRM. No se inicia ningun
+    // movimiento hasta recibirla.
+    const tramoVuelta = await prepararTramoOSRM(resourceId, origenVuelta, destinoVuelta, duracionTramoMs);
+
+    // Verificar nuevamente el estado, porque OSRM puede tardar y la unidad
+    // podria haber cambiado.
+    const antesDeRegresar = resourcesRef.current.find(r => r.id === resourceId);
+    if (!antesDeRegresar || antesDeRegresar.radioState !== '6-7' || antesDeRegresar.destino?.emergenciaId !== emergenciaSnap.id) {
+      return;
+    }
+
+    setResources(rs => rs.map(r =>
+      r.id === resourceId && r.radioState === '6-7' && r.destino?.emergenciaId === emergenciaSnap.id
+        ? { ...r, radioState: '6-8' as RadioState, tramo: tramoVuelta, ultimaActualizacion: Date.now() }
+        : r
+    ));
+
+    pushHistorial('liberacion', `${resourceId} finalizó la atención de la Emergencia #${emergenciaSnap.id} y regresa a su cuartel por OSRM`);
+
+    // Registrar en emergencia.asignacion el instante en que comienza el
+    // regreso (ver PATCH /assignments/retorno) -- no bloquea el ciclo si
+    // falla, solo queda sin ese dato historico.
+    if (antesDeRegresar.idRecurso != null) {
+      void fetch(
+        `${API_BASE}/assignments/retorno?id_emergencia=${encodeURIComponent(emergenciaSnap.id)}&id_recurso=${encodeURIComponent(antesDeRegresar.idRecurso)}`,
+        { method: 'PATCH', credentials: 'include', headers: authHeaders() }
+      ).catch(error => console.error(`No se pudo registrar el retorno de ${resourceId}:`, error));
+    }
+
+    // Esperar hasta completar el regreso.
+    const tFin = window.setTimeout(() => {
+      setResources(rs => {
+        const resultado = rs.map(r => {
+          if (r.id !== resourceId || r.radioState !== '6-8' ||
+              r.destino?.emergenciaId !== emergenciaSnap.id ||
+              r.tramo?.inicio !== tramoVuelta.inicio) return r;
+          return { ...r, radioState: '6-0' as RadioState,
+            lat: home.lat, lng: home.lng, destino: undefined,
+            tramo: undefined, ultimaActualizacion: Date.now() };
+        });
+        resourcesRef.current = resultado;
+        return resultado;
+      });
+      // Persistir 6-0 tambien: el polling solo refleja el estado de
+      // PostgreSQL y no debe volver a mostrar 6-8.
+      void fetch(`${API_BASE}/resources/${encodeURIComponent(antesDeRegresar.codigo ?? resourceId)}/position`, {
+        method: 'PATCH', credentials: 'include',
+        headers: {'Content-Type': 'application/json', ...authHeaders()},
+        body: JSON.stringify({lat: home.lat, lng: home.lng, estado: '6-0'}),
+      }).then(async respuesta => {
+        if (!respuesta.ok) throw new Error(`HTTP ${respuesta.status}: ${await respuesta.text()}`);
+      }).catch(error => {
+        console.error(`No se pudo guardar 6-0 de ${resourceId}:`, error);
+        notify(`Error guardando regreso a cuartel de ${resourceId}`);
+      });
+      pushHistorial('liberacion', `${resourceId} regresó a su cuartel y está disponible (6-0)`);
+      limpiarDespachoLS(resourceId);
+      delete infoRegresoRef.current[resourceId];
+    }, tramoVuelta.duracionMs);
+
+    registerResourceTimer(resourceId, tFin);
+
+  } catch (error) {
+    console.error(`OSRM no pudo calcular el regreso de ${resourceId}:`, error);
+    // No crear un tramo alternativo en linea recta. La unidad permanece en
+    // estado 6-7.
+    notify(`${resourceId}: OSRM Docker no está disponible. El vehículo permanece en la emergencia.`);
+  }
+ };
+
+ // Se llama cada vez que un recurso llega a una emergencia (6-7). Si la
+ // clave radial tiene un criterio real de cantidad por tipo ya modelado
+ // (ver Clave.unidades_requeridas / CLAVES_RADIALES en el backend, p.ej. el
+ // 10-0 exige 2 Carro Bomba + 1 Escala) y todavia falta despachar o que
+ // llegue alguna unidad de ese tipo, la emergencia NO se da por resuelta:
+ // esta funcion simplemente no hace nada y la unidad recien llegada espera
+ // en la escena -- sera la llegada de la ULTIMA unidad necesaria la que
+ // dispare el temporizador de trabajo, compartido por todas, y al
+ // cumplirse ese tiempo todas regresan a la vez (cada una a su propio
+ // cuartel, ver iniciarRegresoUnidad). Para una clave sin ese criterio
+ // modelado (tiposFaltantesPara devuelve null) se mantiene el
+ // comportamiento anterior: se resuelve apenas llega esa unica unidad.
+ const intentarIniciarTrabajoCompartido = (emergenciaSnap: Emergency) => {
+  if (trabajoCompartidoRef.current[emergenciaSnap.id]) return;
+
+  const relacionados = resourcesRef.current.filter(r => r.destino?.emergenciaId === emergenciaSnap.id);
+  const siguenViajando = relacionados.some(r => r.radioState === '6-3');
+  if (siguenViajando) return;
+
+  const enEscena = relacionados.filter(r => r.radioState === '6-7');
+  if (!enEscena.length) return;
+
+  const faltantes = tiposFaltantesPara(emergenciaSnap, claves[emergenciaSnap.codigo], resourcesRef.current);
+  if (faltantes && faltantes.length > 0) return;
+
+  trabajoCompartidoRef.current[emergenciaSnap.id] = true;
+
+  const resourceIdsOla = enEscena.map(r => r.id);
+  const tiempoTrabajo = TIEMPO_TRABAJO_MS[emergenciaSnap.codigo] ?? 18000;
+
+  const tTrabajo = window.setTimeout(async () => {
+    delete trabajoCompartidoRef.current[emergenciaSnap.id];
+
+    const vigentes = resourceIdsOla
+      .map(id => resourcesRef.current.find(r => r.id === id))
+      .filter((r): r is Resource => !!r && r.radioState === '6-7' && r.destino?.emergenciaId === emergenciaSnap.id);
+
+    if (!vigentes.length) return;
+
+    try {
+      await cambiarEstadoEmergenciaBD(emergenciaSnap.id, 'FINALIZADA');
+      advanceQueue(emergenciaSnap.id);
+      pushHistorial('liberacion', `Emergencia #${emergenciaSnap.id} finalizada en la base de datos (${vigentes.length} unidad${vigentes.length>1?'es':''} regresando a la vez)`);
+    } catch (error) {
+      console.error('No se pudo finalizar la emergencia:', error);
+      notify(error instanceof Error ? error.message : `No se pudo cerrar la emergencia #${emergenciaSnap.id} en la base de datos`);
+      return;
+    }
+
+    // Todas las unidades vigentes de la escena regresan a la vez, cada una
+    // por su propia ruta OSRM hacia su propio cuartel.
+    await Promise.all(vigentes.map(r => iniciarRegresoUnidad(r.id, emergenciaSnap)));
+  }, tiempoTrabajo);
+
+  resourceIdsOla.forEach(id => registerResourceTimer(id, tTrabajo));
+ };
 
  // El tramo de vuelta (6-8) usa la misma duracion que la ida: mismo
  // trayecto recorrido en sentido inverso, misma velocidad estimada.
@@ -3584,9 +4086,16 @@ const spawnEmergencia = (): Emergency => {
       .then(() => setQueue(q => q.map(e => e.id === emergenciaSnap.id ? {...e, status: 'EN_ATENCION'} : e)))
       .catch(error => { console.error(error); notify(`Error guardando atención de emergencia #${emergenciaSnap.id}`); });
 
-    // La unidad llegó a la emergencia.
-    setResources(rs =>
-      rs.map(r =>
+    // La unidad llegó a la emergencia. La actualizacion funcional tambien
+    // sincroniza resourcesRef.current en el mismo tick (no esperar al
+    // useEffect que lo hace normalmente, que corre un render despues): el
+    // chequeo de intentarIniciarTrabajoCompartido de mas abajo se ejecuta
+    // ACTO SEGUIDO, en la misma pasada, y necesita ver a esta unidad ya como
+    // '6-7' -- si leyera la referencia vieja (todavia '6-3'), pensaria que
+    // la unidad sigue viajando y nunca arrancaria el temporizador de trabajo
+    // compartido, dejandola pegada en la escena para siempre.
+    setResources(rs => {
+      const resultado = rs.map(r =>
         r.id === resourceId &&
         r.radioState === '6-3' &&
         r.destino?.emergenciaId === emergenciaSnap.id
@@ -3599,145 +4108,26 @@ const spawnEmergencia = (): Emergency => {
               ultimaActualizacion: Date.now(),
             }
           : r
-      )
-    );
+      );
+      resourcesRef.current = resultado;
+      return resultado;
+    });
 
     pushHistorial(
       'en_emergencia',
       `${resourceId} llegó a la Emergencia #${emergenciaSnap.id} (${emergenciaSnap.address})`
     );
 
-    // 2. Permanecer atendiendo la emergencia.
-    const tTrabajo = window.setTimeout(async () => {
-      const vigente = resourcesRef.current.find(
-        r => r.id === resourceId
-      );
-
-      if (
-        !vigente ||
-        vigente.radioState !== '6-7' ||
-        vigente.destino?.emergenciaId !== emergenciaSnap.id
-      ) {
-        return;
-      }
-
-      // Resolver en PostgreSQL al terminar la atención, aunque OSRM falle
-      // después al calcular la ruta de regreso.
-      try {
-        await cambiarEstadoEmergenciaBD(emergenciaSnap.id, 'FINALIZADA');
-        advanceQueue(emergenciaSnap.id);
-        pushHistorial('liberacion', `Emergencia #${emergenciaSnap.id} finalizada en la base de datos`);
-      } catch (error) {
-        console.error('No se pudo finalizar la emergencia:', error);
-        notify(error instanceof Error ? error.message : `No se pudo cerrar la emergencia #${emergenciaSnap.id} en la base de datos`);
-        return;
-      }
-
-      const origenVuelta = {
-        lat: emergenciaSnap.lat,
-        lng: emergenciaSnap.lng,
-      };
-
-      const destinoVuelta = {
-        lat: home.lat,
-        lng: home.lng,
-      };
-
-      try {
-        // 3. Pedir ruta de regreso al contenedor OSRM.
-        // No se inicia ningún movimiento hasta recibirla.
-        const tramoVuelta = await prepararTramoOSRM(
-          resourceId,
-          origenVuelta,
-          destinoVuelta,
-          duracionTramoMs
-        );
-
-        // Verificar nuevamente el estado, porque OSRM
-        // puede tardar y la unidad podría haber cambiado.
-        const antesDeRegresar = resourcesRef.current.find(
-          r => r.id === resourceId
-        );
-
-        if (
-          !antesDeRegresar ||
-          antesDeRegresar.radioState !== '6-7' ||
-          antesDeRegresar.destino?.emergenciaId !== emergenciaSnap.id
-        ) {
-          return;
-        }
-
-        // 4. Iniciar regreso siguiendo los puntos de OSRM.
-        setResources(rs =>
-          rs.map(r =>
-            r.id === resourceId &&
-            r.radioState === '6-7' &&
-            r.destino?.emergenciaId === emergenciaSnap.id
-              ? {
-                  ...r,
-                  radioState: '6-8' as RadioState,
-                  tramo: tramoVuelta,
-                  ultimaActualizacion: Date.now(),
-                }
-              : r
-          )
-        );
-
-        pushHistorial(
-          'liberacion',
-          `${resourceId} finalizó la atención de la Emergencia #${emergenciaSnap.id} y regresa a su cuartel por OSRM`
-        );
-
-        // 5. Esperar hasta completar el regreso.
-        const tFin = window.setTimeout(() => {
-          // La actualización funcional evita depender de una referencia de React
-          // que puede quedar desfasada respecto del último render/polling.
-          setResources(rs => {
-            const resultado = rs.map(r => {
-              if (r.id !== resourceId || r.radioState !== '6-8' ||
-                  r.destino?.emergenciaId !== emergenciaSnap.id ||
-                  r.tramo?.inicio !== tramoVuelta.inicio) return r;
-              return { ...r, radioState: '6-0' as RadioState,
-                lat: home.lat, lng: home.lng, destino: undefined,
-                tramo: undefined, ultimaActualizacion: Date.now() };
-            });
-            resourcesRef.current = resultado;
-            return resultado;
-          });
-          // Persistir 6-0 también: el polling solo refleja el estado
-          // de PostgreSQL y no debe volver a mostrar 6-8.
-          void fetch(`${API_BASE}/resources/${encodeURIComponent(unidadInicial.codigo ?? resourceId)}/position`, {
-            method: 'PATCH', credentials: 'include',
-            headers: {'Content-Type': 'application/json', ...authHeaders()},
-            body: JSON.stringify({lat: home.lat, lng: home.lng, estado: '6-0'}),
-          }).then(async respuesta => {
-            if (!respuesta.ok) throw new Error(`HTTP ${respuesta.status}: ${await respuesta.text()}`);
-          }).catch(error => {
-            console.error(`No se pudo guardar 6-0 de ${resourceId}:`, error);
-            notify(`Error guardando regreso a cuartel de ${resourceId}`);
-          });
-          pushHistorial('liberacion', `${resourceId} regresó a su cuartel y está disponible (6-0)`);
-          limpiarDespachoLS(resourceId);
-        }, tramoVuelta.duracionMs);
-
-        registerResourceTimer(resourceId, tFin);
-
-      } catch (error) {
-        console.error(
-          `OSRM no pudo calcular el regreso de ${resourceId}:`,
-          error
-        );
-
-        // No crear un tramo alternativo en línea recta.
-        // La unidad permanece en estado 6-7.
-        notify(
-          `${resourceId}: OSRM Docker no está disponible. El vehículo permanece en la emergencia.`
-        );
-      }
-
-    }, tiempoTrabajo);
-
-    registerResourceTimer(resourceId, tTrabajo);
+    // 2. Guardar los datos de regreso de ESTA unidad y avisar que llego --
+    // si todavia faltan otras unidades (en camino, o un tipo requerido que
+    // ni siquiera se ha despachado), esta funcion no hace nada mas y la
+    // unidad espera en la escena: el tiempo de trabajo/resolucion es
+    // COMPARTIDO por toda la emergencia, no por unidad (ver
+    // intentarIniciarTrabajoCompartido mas arriba). Recien cuando llega la
+    // ultima unidad necesaria arranca ese temporizador unico, y al
+    // cumplirse todas regresan a la vez, cada una a su propio cuartel.
+    infoRegresoRef.current[resourceId] = { home, duracionTramoMs };
+    intentarIniciarTrabajoCompartido(emergenciaSnap);
 
   }, duracionTramoMs);
 
@@ -3806,6 +4196,13 @@ const spawnEmergencia = (): Emergency => {
     setResources(rs => rs.map(r => r.id === resourceId
       ? { ...r, radioState: '6-8' as RadioState, destino, ultimaActualizacion: Date.now() }
       : r));
+    const idRecursoRetorno = resourcesRef.current.find(r => r.id === resourceId)?.idRecurso;
+    if (idRecursoRetorno != null) {
+      void fetch(
+        `${API_BASE}/assignments/retorno?id_emergencia=${encodeURIComponent(registro.emergenciaId)}&id_recurso=${encodeURIComponent(idRecursoRetorno)}`,
+        { method: 'PATCH', credentials: 'include', headers: authHeaders() }
+      ).catch(error => console.error(`No se pudo registrar el retorno de ${resourceId} al reanudar:`, error));
+    }
     try {
       const tramoVuelta = await prepararTramoOSRM(resourceId, destino, home, msRestantes);
       setResources(rs => rs.map(r => r.id === resourceId && r.radioState === '6-8'
@@ -3973,12 +4370,13 @@ const spawnEmergencia = (): Emergency => {
       actual,
       destinoEmergencia,
       claves[emergenciaSnap.codigo],
-      Date.now()
+      Date.now(),
+      etaPorRecursoRef.current
     );
 
     const duracionMs = Math.max(
-      25000,
-      Math.min(info.etaMin * 3200, 90000)
+      ANIMACION_DESPACHO_MIN_MS,
+      Math.min(info.etaMin * MS_ANIMACION_POR_MINUTO_ETA, ANIMACION_DESPACHO_MAX_MS)
     );
 
     // No modifica el vehículo hasta tener la ruta.
@@ -4000,16 +4398,59 @@ const spawnEmergencia = (): Emergency => {
       return;
     }
 
-    // Confirmar la asignación en PostgreSQL antes de iniciar la simulación.
-    await cambiarEstadoEmergenciaBD(emergenciaSnap.id, 'ASIGNADA');
-    setQueue(q => q.map(e => e.id === emergenciaSnap.id ? {...e, status: 'Asignada'} : e));
+    // Deja el registro historico real del despacho en emergencia.asignacion
+    // (POST /assignments: quien lo asigno, a que distancia/ETA estaba la
+    // unidad y con que puntaje). Antes se calculaba esto solo para animar
+    // el mapa y se perdia -- la tabla quedaba vacia pese a existir el
+    // endpoint. Si falla (p.ej. la cuenta todavia no tiene fila en
+    // emergencia.usuario), no se bloquea el despacho real: solo se avisa
+    // y sigue, porque el operador ya espera ver la unidad en camino.
+    if (vigente.idRecurso != null) {
+      const puntaje = Math.round(scoreDetalle(actual, claves[emergenciaSnap.codigo], info.distanciaKm, info.etaMin).total);
+      try {
+        const params = new URLSearchParams({
+          id_emergencia: String(emergenciaSnap.id),
+          id_recurso: String(vigente.idRecurso),
+          tipo_asignacion: manual ? 'Manual' : 'Automatica',
+          puntaje_asignacion: String(puntaje),
+          distancia_km: String(info.distanciaKm),
+          eta_minutos: String(Math.round(info.etaMin)),
+        });
+        const respAsignacion = await fetch(`${API_BASE}/assignments?${params.toString()}`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: authHeaders(),
+        });
+        if (!respAsignacion.ok) {
+          console.error('No se pudo registrar la asignación:', await respAsignacion.text());
+        }
+      } catch (error) {
+        console.error('No se pudo registrar la asignación:', error);
+      }
+    }
 
-    // Si esta era la emergencia elegida a mano (clic en el mapa o recien
-    // creada desde el formulario), se suelta esa seleccion manual apenas
-    // se le asigna un recurso -- si no, "RECURSO RECOMENDADO" se quedaba
-    // pegado en ella mostrando "ya tiene una unidad respondiendo" para
-    // siempre, en vez de pasar sola a la siguiente emergencia Activa que
-    // todavia necesita despacho (ver currentEmergencia).
+    // Confirmar la asignación en PostgreSQL antes de iniciar la simulación --
+    // SOLO si la emergencia sigue "Activa" (primera unidad que se le
+    // despacha). Para una clave con criterio de varias unidades (ver
+    // Clave.unidades_requeridas, p.ej. 10-0) la recomendacion sigue
+    // ofreciendo una 2da/3ra unidad aunque la emergencia ya haya avanzado a
+    // "Asignada"/"EN_ATENCION" -- intentar poner "ASIGNADA" de nuevo en ese
+    // caso lo rechaza el backend (la maquina de estados no permite
+    // EN_ATENCION -> ASIGNADA), porque la emergencia como tal ya paso por
+    // esa transicion con la primera unidad; solo faltaba que llegaran mas
+    // recursos, no volver a "asignarla".
+    const estadoVigente = queueRef.current.find(e => e.id === emergenciaSnap.id)?.status;
+    if (estadoVigente === 'Activa') {
+      await cambiarEstadoEmergenciaBD(emergenciaSnap.id, 'ASIGNADA');
+      setQueue(q => q.map(e => e.id === emergenciaSnap.id ? {...e, status: 'Asignada'} : e));
+    }
+
+    // Se suelta la seleccion manual de esta emergencia (si la tenia, p.ej.
+    // por "Atender"/"Ver ubicación" o un clic en el mapa) apenas se le
+    // asigna un recurso -- no hace falta revisar si todavia le falta otro
+    // tipo requerido (ver Clave.unidades_requeridas): currentEmergencia ya
+    // vuelve a priorizarla sola mientras siga necesitando despacho (ver
+    // emergenciaNecesitaDespacho), con o sin esta seleccion manual.
     setEmergenciaSeleccionadaId(id => id === emergenciaSnap.id ? null : id);
 
     // Solo ahora comienza el desplazamiento.
@@ -4110,23 +4551,51 @@ const spawnEmergencia = (): Emergency => {
      set.add(recommendation.id);
      return {...r, [emergenciaId]:set};
    });
+   // Deja tambien el rechazo en emergencia.asignacion (estado_asignacion=
+   // RECHAZADO), con la misma distancia/ETA/puntaje que se le mostraron al
+   // operador en pantalla -- igual que con una asignacion real, si falla no
+   // bloquea nada (el rechazo local ya se aplico arriba).
+   if(recommendation.idRecurso!=null && recomendacionInfo){
+     const puntaje=Math.round(score(recommendation,claveActual,recomendacionInfo.distanciaKm,recomendacionInfo.etaMin));
+     const params=new URLSearchParams({
+       id_emergencia:String(emergenciaId),
+       id_recurso:String(recommendation.idRecurso),
+       tipo_asignacion:'Automatica',
+       puntaje_asignacion:String(puntaje),
+       distancia_km:String(recomendacionInfo.distanciaKm),
+       eta_minutos:String(Math.round(recomendacionInfo.etaMin)),
+       estado_asignacion:'RECHAZADO',
+     });
+     fetch(`${API_BASE}/assignments?${params.toString()}`,{
+       method:'POST', credentials:'include', headers:authHeaders(),
+     }).catch(error=>console.error('No se pudo registrar el rechazo:', error));
+   }
  };
 
  const atenderEmergencia=(id:number)=>{
    const target=queue.find(e=>e.id===id);
    setQueue(q=>{if(!target) return q; return [target, ...q.filter(e=>e.id!==id)];});
    if(target) setFocus({lat:target.lat,lng:target.lng});
+   // Fija la seleccion por id (ver emergenciaSeleccionadaId/currentEmergencia)
+   // en vez de depender solo del reordenamiento de queue de arriba: el
+   // refresco automatico de la cola cada 10s (cargarEmergencias) reemplaza
+   // el arreglo completo con el orden que devuelve el backend, deshaciendo
+   // ese reordenamiento -- sin esto, "Atender" dejaba de apuntar a la
+   // emergencia elegida apenas pasaban esos 10s.
+   setEmergenciaSeleccionadaId(id);
    setSection('Dashboard');
  };
 
- // Solo ubicar en el mapa una emergencia puntual (desde la tabla de
- // Emergencias) sin tocar el orden de la cola ni forzarla como la
- // emergencia "en curso" del panel de asignacion -- a diferencia de
- // atenderEmergencia, esto es solo para mirar donde esta ocurriendo.
+ // Ubicar en el mapa una emergencia puntual (desde la tabla de Emergencias,
+ // tanto "Ver ubicación" como el clic general sobre la fila) -- tambien fija
+ // la seleccion igual que atenderEmergencia, para que el panel de asignacion
+ // del Dashboard muestre y recomiende justo esta emergencia, no la que haya
+ // elegido el criterio automatico.
  const verEmergenciaEnMapa=(id:number)=>{
    const target=queue.find(e=>e.id===id);
    if(!target) return;
    setFocus({lat:target.lat,lng:target.lng});
+   setEmergenciaSeleccionadaId(id);
    setSection('Dashboard');
  };
 
@@ -4184,7 +4653,7 @@ const spawnEmergencia = (): Emergency => {
    }
  };
 
- const crearEmergenciaBD=async(payload:{codigo_emergencia:string; direccion_emergencia:string; latitud_emergencia:number; longitud_emergencia:number; prioridad_emergencia:number})=>{
+ const crearEmergenciaBD=async(payload:{codigo_emergencia:string; direccion_emergencia:string; latitud_emergencia:number; longitud_emergencia:number; prioridad_emergencia:number; tipo_estructura_emergencia?:TipoEstructura|null; piso_emergencia?:number|null})=>{
    const respuesta=await fetch(`${API_BASE}/emergencies`,{
      method:'POST', credentials:'include',
      headers:{'Content-Type':'application/json', ...authHeaders()},
@@ -4437,7 +4906,7 @@ const spawnEmergencia = (): Emergency => {
 </p></div><div className="headerActions">{!isAdmin && !isAdminSoporte && <div className="readOnlyBadge" title="Tu cuenta solo puede visualizar, no asignar recursos"><Eye size={13}/> Solo lectura</div>}{isAdmin && <div className="readOnlyBadge" title="Tu cuenta puede asignar recursos y despachar"><Eye size={13}/> Admin</div>}{isAdminSoporte && <div className="readOnlyBadge" title="Tu cuenta gestiona tickets de soporte"><Eye size={13}/> Soporte</div>}<button onClick={()=>setTheme(t=>t==='dark'?'light':'dark')} title={theme==='dark'?'Cambiar a tema claro':'Cambiar a tema oscuro'}>{theme==='dark'?<Sun size={17}/>:<Moon size={17}/>}</button><div className={`live liveToggle${activoDB?'':' liveOff'}${cambiandoEstado?' liveBusy':''}`} role="button" tabIndex={0} aria-disabled={cambiandoEstado} onClick={toggleEstadoServicio} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();toggleEstadoServicio();}}} title="Toca para cambiar tu estado de servicio (emergencia.usuario.estado_usuario)"><span/> {activoDB?'Activo':'Fuera de servicio'}</div><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
     {section==='Formulario' && isAdmin && <NuevaEmergenciaView claves={claves} onCrear={crearEmergenciaBD}/>}
     {section==='Emergencias' && !isAdminSoporte && <EmergenciasView queue={queue} claves={claves} now={now} onAtender={atenderEmergencia} onVerUbicacion={verEmergenciaEnMapa} isAdmin={isAdmin}/>}
-    {section==='Recursos' && !isAdminSoporte && <RecursosView resources={resources} alertaTimeoutIds={unidadesConAlertaTimeout} onVerCuartelEnMapa={verCuartelEnMapa} isAdmin={isAdmin} puedeCambiarEstado={!isAdminSoporte} onCambiarFueraDeServicio={cambiarFueraDeServicio}/>}
+    {section==='Recursos' && !isAdminSoporte && <RecursosView resources={resources} alertaTimeoutIds={unidadesConAlertaTimeout} onVerCuartelEnMapa={verCuartelEnMapa} isAdmin={isAdmin} puedeCambiarEstado={!isAdminSoporte} onCambiarFueraDeServicio={cambiarFueraDeServicio} emergenciaReferencia={currentEmergencia} claveReferencia={claveActual} now={now} etaPorRecurso={etaPorRecurso}/>}
     {section==='Historial' && !isAdminSoporte && <HistorialView historial={historial} now={now}/>}
     {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} onNotify={notify} auth={auth} onLogout={handleLogout} isAdmin={isAdmin} timeoutMinutos={timeoutMinutos} onChangeTimeout={setTimeoutMinutos} companiaDesignada={companiaDesignada}/>}
     {section==='Soporte' && (
@@ -4466,10 +4935,14 @@ const spawnEmergencia = (): Emergency => {
       {filtroCuartel!=='todos' && <button className="linkBtn" onClick={()=>setFiltroCuartel('todos')}>Quitar filtro</button>}
     </div>
     <section className="kpis"><Kpi icon={<AlertTriangle/>} label="Emergencias activas" value={String(queue.length)} meta={currentEmergencia?`atendiendo clave ${currentEmergencia.codigo}`:'sin emergencia activa'} tone="acento"/><Kpi icon={<Truck/>} label="Recursos disponibles" value={String(disponibles)} meta={filtroCuartel==='todos'?`de ${resources.length} unidades`:`de ${resourcesFiltrados.length} unidades de ${filtroCuartel}`} tone="azul"/><Kpi icon={<Clock3/>} label="Tiempo promedio" value={tiempoPromedioLabel} meta={tiempoPromedioMeta} tone="acento"/><Kpi icon={<ShieldCheck/>} label="Cobertura estimada" value={coberturaLabel} meta={coberturaMeta} tone="azul"/></section>
-    <section className="workspace"><div className="mapCard"><div className="cardHead"><div><b>Mapa operacional</b><span>Emergencias y recursos en tiempo real{isAdmin?' · toca un cuartel o vehículo para asignarlo manualmente':' · modo solo lectura'}</span></div></div><MapPanel resources={resourcesFiltrados} emergencies={emergenciasMapaDashboard} focus={focus} center={operationalCenter} onAsignarManual={handleAsignarManual} onSelectEmergencia={setEmergenciaSeleccionadaId} isAdmin={isAdmin}/><div className="legend"><span><i className="dot green"/> Disponible</span><span><i className="dot red"/> En misión</span><span><i className="dot blue"/> Ruta recomendada</span></div></div>
+    <section className="workspace"><div className="mapCard"><div className="cardHead"><div><b>Mapa operacional</b><span>Emergencias y recursos en tiempo real{isAdmin?' · toca un cuartel o vehículo para asignarlo manualmente':' · modo solo lectura'}</span></div></div><MapPanel resources={resourcesFiltrados} emergencies={emergenciasMapaDashboard} focus={focus} center={operationalCenter} onAsignarManual={handleAsignarManual} onSelectEmergencia={setEmergenciaSeleccionadaId} isAdmin={isAdmin} personalActivoPorCompania={personalActivoPorCompania}/><div className="legend"><span><i className="dot green"/> Disponible</span><span><i className="dot red"/> En misión</span><span><i className="dot blue"/> Ruta recomendada</span></div></div>
       <div className="sideCards">
       {currentEmergencia?<div className="emergencyCard"><div className="emergencyHeadRow"><div className="emergencyTitle"><div className="danger"><AlertTriangle/></div><div><b>Emergencia #{currentEmergencia.id}</b><span>{claveActual?.nombre??currentEmergencia.codigo}</span></div></div><div
-  className={`tag prioridad-badge ${obtenerClasePrioridad(currentEmergencia.prioridad)}`}>{obtenerNivelPrioridad(currentEmergencia.prioridad)} PRIORIDAD</div></div><div className="details"><p><MapPin size={18}/><span>{currentEmergencia.address}</span></p><p><Clock3 size={18}/><span>Tiempo transcurrido: <b>{elapsedLabel(currentEmergencia.creadaEn,now)}</b></span></p><p><Radio size={18}/><span>Estado: <b>{currentEmergencia.status}</b></span></p></div><div className="infoTipRow"><InfoTip texto={explicarEmergenciaActual(currentEmergencia.codigo, now)}/></div><button className="locateBtn" onClick={()=>setFocus({lat:currentEmergencia.lat,lng:currentEmergencia.lng})}><Crosshair size={13}/> Ver en el mapa</button></div>:<div className="emergencyCard"><p className="emptyState">Sin emergencias activas por el momento.</p></div>}
+  className={`tag prioridad-badge ${obtenerClasePrioridad(currentEmergencia.prioridad)}`}>{obtenerNivelPrioridad(currentEmergencia.prioridad)} PRIORIDAD</div></div><div className="details"><p><MapPin size={18}/><span>{currentEmergencia.address}</span></p><p><Clock3 size={18}/><span>Tiempo transcurrido: <b>{elapsedLabel(currentEmergencia.creadaEn,now)}</b></span></p><p><Radio size={18}/><span>Estado: <b>{currentEmergencia.status}</b></span></p>{requisitosEfectivosActuales && requisitosEfectivosActuales.length>0 && <p><Truck size={18}/><span>Unidades: <b>{requisitosEfectivosActuales.map(req=>{
+          const conteo=unidadesAsignadasPorTipo(resources, currentEmergencia.id);
+          const cubiertas=Math.min(req.tipos.reduce((acc,t)=>acc+(conteo[t]??0),0), req.cantidad);
+          return `${cubiertas}/${req.cantidad} ${req.tipos.join('/')}`;
+        }).join(' · ')}</b></span></p>}</div><div className="infoTipRow"><InfoTip texto={explicarEmergenciaActual(currentEmergencia.codigo, now)}/></div><button className="locateBtn" onClick={()=>setFocus({lat:currentEmergencia.lat,lng:currentEmergencia.lng})}><Crosshair size={13}/> Ver en el mapa</button></div>:<div className="emergencyCard"><p className="emptyState">Sin emergencias activas por el momento.</p></div>}
       <div className="recommend"><div className="recHead"><div><span>RECURSO RECOMENDADO</span><small>{filtroCuartel==='todos'?'Asignación multicriterio':`Asignación multicriterio · solo ${filtroCuartel}`}</small></div>{recommendation && recomendacionInfo && <div className="score" style={{color:scoreColor(Math.round(score(recommendation,claveActual,recomendacionInfo.distanciaKm,recomendacionInfo.etaMin)))}}>{Math.round(score(recommendation,claveActual,recomendacionInfo.distanciaKm,recomendacionInfo.etaMin))}<small>/100</small></div>}</div>
       {recommendation && recomendacionInfo?<>
        <div className="recBody"><div className="vehicleIcon">{resourceIcon(recommendation.type)}</div><div><b>{recommendation.name}</b><span className="recBodyCia">{recommendation.compania} · {recommendation.sector}</span><p><Clock3 size={17}/><span>ETA estimado: <strong>{recomendacionInfo.etaMin} min</strong></span></p><p><Navigation size={17}/><span>Distancia: <strong>{recomendacionInfo.distanciaKm} km</strong></span></p><p><CheckCircle2 size={17}/><span>Disponibilidad: <strong>{recommendation.radioState==='6-8'?'Regresando (redirigida a esta emergencia)':'Disponible en cuartel'}</strong></span></p><p><ShieldCheck size={17}/><span>Capacidad: <strong>{recommendation.capacity}</strong></span></p><p><Users size={17}/><span>Dotación: <strong>{recommendation.crew} personas</strong></span></p></div></div>
@@ -4478,7 +4951,13 @@ const spawnEmergencia = (): Emergency => {
        {isAdmin
          ?<div className="actions"><button className="assign" onClick={handleAsignar}>ASIGNAR</button><button className="reject" onClick={handleRechazar}>RECHAZAR</button></div>
          :<p className="emptyState readOnlyNote"><Lock size={12}/> Tu cuenta es de solo lectura: no puede asignar ni rechazar unidades.</p>}
-      </>:<p className="emptyState">{currentEmergencia && currentEmergencia.status!=='Activa'?'Esta emergencia ya tiene una unidad respondiendo.':(filtroCuartel==='todos'?'Sin unidades disponibles para esta emergencia en este momento — todas las compatibles están en misión.':`Sin unidades disponibles de ${filtroCuartel} para esta emergencia en este momento.`)}</p>}
+      </>:<p className="emptyState">{
+        tiposFaltantes && tiposFaltantes.length>0
+          ? `Faltan unidades para completar esta emergencia (${tiposFaltantes.join(', ')}), pero no hay ninguna disponible de ese tipo en este momento${filtroCuartel==='todos'?'':` en ${filtroCuartel}`}.`
+          : currentEmergencia && (tiposFaltantes?.length===0 || (tiposFaltantes===null && currentEmergencia.status!=='Activa'))
+            ? (tiposFaltantes?.length===0?'Esta emergencia ya tiene todas las unidades requeridas respondiendo.':'Esta emergencia ya tiene una unidad respondiendo.')
+            : (filtroCuartel==='todos'?'Sin unidades disponibles para esta emergencia en este momento — todas las compatibles están en misión.':`Sin unidades disponibles de ${filtroCuartel} para esta emergencia en este momento.`)
+      }</p>}
       </div></div></section>
       <section className="workspace"><div className="mapCard heatMapCard"><div className="cardHead"><div><b>Mapa de calor · Demanda de Bomberos</b><span>Predicción ML · próximas {(periodos.length||4)*3} horas · toca una zona para ver el detalle</span></div><span className="mlBadge">ML</span></div><HeatMapPanel zonas={currentZonas} seleccionadaId={zonaSeleccionada} focus={focusHeatmap} onSelectZona={z=>{setZonaSeleccionada(z.zona_id);setFocusHeatmap(z.centroid);}}/><div className="legend heatLegend"><span><i className="dot green"/> Baja</span><span><i className="dot yellow"/> Media</span><span><i className="dot red"/> Alta</span></div></div>
       <div className="sideCards"><div className="card alertsCard"><div className="cardHead"><div><b>Alertas predictivas</b><span>Zonas y horarios de mayor riesgo</span></div></div>
@@ -4604,6 +5083,8 @@ async function obtenerEmergenciasBD():Promise<Emergency[]>{
       ? new Date(e.fecha_creacion_emergencia).getTime()
       : Date.now(),
     prioridad:Number(e.prioridad_emergencia??3),
+    tipoEstructura:e.tipo_estructura_emergencia??null,
+    piso:e.piso_emergencia??null,
   }));
 }
 
