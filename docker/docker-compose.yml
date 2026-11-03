@@ -5,6 +5,14 @@ services:
     # carpeta) -- nunca escritas directo aca, porque este repo es publico.
     env_file:
       - .env
+    environment:
+      # Sin esto, CURRENT_TIMESTAMP/now() en Postgres usa UTC por defecto
+      # -- las columnas de fecha son "timestamp without time zone" (hora
+      # "ingenua", sin offset), y el frontend las muestra tal cual llegan
+      # (new Date(...).toLocaleString()), asumiendo que ya es hora de
+      # Chile. Fijando la zona del contenedor se evita ese desfase sin
+      # tener que tocar el esquema de la base de datos.
+      TZ: America/Santiago
     ports:
       - "5432:5432"
     volumes:

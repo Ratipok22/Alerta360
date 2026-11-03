@@ -1,46 +1,29 @@
-"""Benchmark del algoritmo de asignacion multicriterio vs. un metodo
-tradicional (recurso disponible mas cercano), sobre escenarios simulados.
+"""Benchmark de asignación sobre bloques históricos de PostgreSQL.
 
-Este es el entregable que exige la guia del proyecto (1.5_GuiaEstudiante):
-"comparar el algoritmo propuesto con un metodo tradicional de asignacion...
-metricas: tiempo estimado de respuesta, distancia recorrida, cobertura de
-recursos y utilizacion de las unidades".
-
-Metodologia:
-- Se genera una secuencia cronologica de emergencias sinteticas (mismo
-  enfoque que ml/generate_dataset.py: zona y clave elegidas segun el riesgo
-  real de cada zona/clave, no uniforme al azar), sobre la FLOTA REAL de
-  companias (core/companies.py) y las CLAVES REALES (core/radio_codes.py).
-- Cada estrategia mantiene su propio estado de la flota (que unidad esta
-  libre y desde cuando), completamente independiente de la otra, para que
-  ambas enfrenten exactamente la misma secuencia de emergencias en las
-  mismas condiciones.
-- Estrategia baseline: recurso disponible mas cercano (Haversine), sin
-  distinguir tipo de unidad ni dotacion.
-- Estrategia propuesta: la MISMA formula de puntaje multicriterio que usa
-  el frontend (frontend/src/main.tsx: scoreDetalle) -- idoneidad del tipo de
-  unidad para la clave, coincidencia de terreno, dotacion (mas relevante en
-  claves criticas) y penalizacion por distancia/ETA sin techo. Se mantiene
-  duplicada a mano en Python porque el algoritmo en produccion vive en el
-  frontend (TypeScript); si alguno de los dos cambia, hay que replicar el
-  cambio en el otro para que este benchmark siga evaluando el algoritmo
-  real y no una version desactualizada.
-
-Ejecutar desde `backend/`:
-    python -m evaluacion.benchmark_asignacion
+Se muestrean casos según cantidades existentes, sin fabricar riesgos.
+Ubicación aproximada: centro del límite de zona. Tiempo: inicio del bloque.
+La ocupación, tiempos de trabajo y puntuación siguen siendo una simulación;
+no representan despachos medidos ni garantizan igualdad con el frontend.
+No se escribe en la base de datos.
 """
 import json
 import pathlib
+import sys
+ROOT=pathlib.Path(__file__).resolve().parents[3]
+if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 import random
 import statistics
 from dataclasses import dataclass, field
 
-from core.companies import todas_las_unidades
+from ml.db_catalog import obtener_zonas, obtener_tipos, obtener_recursos
+from ml.dataset_db import generate
+from types import SimpleNamespace
+from bisect import bisect_right
+from itertools import accumulate
+import copy
+import math
 from core.eta import calcular_eta
-from core.radio_codes import CLAVES_RADIALES
 from core.vehicle_types import familia
-from ml.generate_dataset import BASE_RATE, DOW_FACTOR, HOUR_FACTOR, MONTH_FACTOR
-from ml.zones import EMERGENCY_TYPES, PERIOD_HOURS, ZONES
 
 RNG_SEED = 42
 N_EMERGENCIAS = 1500
@@ -102,8 +85,7 @@ def score_multicriterio(tipo_funcional: str, crew: int, contexto_clave: dict, pr
     return 25 + idoneidad_bonus + terreno_bonus + dotacion_bonus - penalizacion
 
 
-# --- Generacion de escenarios sinteticos (mismo criterio de riesgo real que
-# ml/generate_dataset.py: zona x clave ponderadas por su factor real) -------
+# --- Escenarios basados en cantidades históricas de PostgreSQL ------------
 
 @dataclass
 class Escenario:
@@ -115,35 +97,31 @@ class Escenario:
 
 
 def generar_escenarios(n: int, dias: int, seed: int) -> list[Escenario]:
-    """Genera emergencias con el MISMO modelo de riesgo real que
-    ml/generate_dataset.py (zona x clave x hora x dia x mes), no zona/clave
-    uniformes al azar -- asi el benchmark enfrenta a ambas estrategias a una
-    mezcla de emergencias realista (mas incendios forestales en zonas de
-    cerro en la temporada seca, mas rescates viales en horas punta, etc.)."""
-    rng = random.Random(seed)
-    escenarios = []
-    minutos_totales = dias * 24 * 60
-    for _ in range(n):
-        minuto = rng.uniform(0, minutos_totales)
-        dia_idx = int(minuto // (24 * 60))
-        hora_del_dia = int((minuto % (24 * 60)) // 60)
-        bloque_hora = max(h for h in PERIOD_HOURS if h <= hora_del_dia)
-        dow = dia_idx % 7
-        mes = (dia_idx // 30) % 12 + 1
-
-        combinaciones, pesos = [], []
-        for zona in ZONES:
-            for tipo in EMERGENCY_TYPES:
-                peso = (BASE_RATE[tipo] * zona.activity * zona.type_factor[tipo]
-                        * HOUR_FACTOR[tipo][bloque_hora] * DOW_FACTOR[tipo][dow] * MONTH_FACTOR[tipo][mes])
-                combinaciones.append((zona, tipo))
-                pesos.append(peso)
-
-        zona, tipo = rng.choices(combinaciones, weights=pesos, k=1)[0]
-        lat = rng.uniform(zona.lat_min, zona.lat_max)
-        lng = rng.uniform(zona.lng_min, zona.lng_max)
-        escenarios.append(Escenario(minuto=minuto, zona_id=zona.id, lat=lat, lng=lng, codigo_clave=tipo))
-    return sorted(escenarios, key=lambda e: e.minuto)
+    if n <= 0 or dias <= 0:
+        raise ValueError('n y dias deben ser positivos.')
+    df=generate(days=dias)
+    df=df.loc[df.cantidad_emergencias>0].sort_values(['timestamp','zona_id','tipo_emergencia'])
+    zonas={z['zona_id']:z for z in obtener_zonas()}
+    tipos={t['codigo'] for t in obtener_tipos()}
+    records=list(df.itertuples())
+    if not records:raise ValueError('No hay casos históricos positivos para el benchmark.')
+    for r in records:
+        if r.tipo_emergencia not in tipos or r.tipo_emergencia not in TIEMPO_TRABAJO_MIN:
+            raise ValueError(f'Falta configurar la simulación de trabajo para {r.tipo_emergencia}; no se omite silenciosamente.')
+        if r.zona_id not in zonas:raise ValueError(f'Zona no encontrada: {r.zona_id}')
+        if r.cantidad_emergencias != int(r.cantidad_emergencias):raise ValueError('Conteo histórico no entero.')
+    cumulative=list(accumulate(int(r.cantidad_emergencias) for r in records))
+    selected=random.Random(seed).sample(range(cumulative[-1]),min(n,cumulative[-1]))
+    inicio=df.timestamp.min()
+    salida=[]
+    for index in selected:
+        r=records[bisect_right(cumulative,index)]
+        centro=zonas[r.zona_id]['centroid']
+        lat,lng=centro['lat'],centro['lng']
+        if lat is None or lng is None or not all(math.isfinite(float(v)) for v in (lat,lng)):
+            raise ValueError(f'Zona {r.zona_id} sin ubicación válida en PostgreSQL.')
+        salida.append(Escenario((r.timestamp-inicio).total_seconds()/60,r.zona_id,float(lat),float(lng),r.tipo_emergencia))
+    return sorted(salida,key=lambda e:e.minuto)
 
 
 # --- Simulacion de flota con ocupacion en el tiempo ------------------------
@@ -159,14 +137,21 @@ class EstadoUnidad:
 
 
 def construir_flota() -> list[EstadoUnidad]:
-    flota = []
-    for unidad, compania in todas_las_unidades():
-        tipo_f = FAMILIA_FUNCIONAL.get(familia(unidad.id), "Bomberos")
-        flota.append(EstadoUnidad(
-            id=unidad.id, lat=compania.lat, lng=compania.lng,
-            tipo_funcional=tipo_f, crew=DOTACION_TIPICA.get(tipo_f, 4),
-        ))
+    flota=[]
+    for u in obtener_recursos():
+        if not u['disponible']:continue
+        if u['lat'] is None or u['lng'] is None or u['dotacion'] is None:
+            raise ValueError(f'Recurso {u["codigo"]} sin ubicación/dotación en PostgreSQL.')
+        tipo=u['tipo']
+        funcional=tipo if tipo in DOTACION_TIPICA else FAMILIA_FUNCIONAL.get(tipo)
+        if funcional is None:raise ValueError(f'Tipo de recurso no soportado por la puntuación: {tipo}')
+        flota.append(EstadoUnidad(u['codigo'],u['lat'],u['lng'],funcional,int(u['dotacion'])))
+    if not flota:raise ValueError('No hay recursos disponibles en PostgreSQL para el benchmark.')
     return flota
+
+
+def catalogo_claves():
+    return {t['codigo']:SimpleNamespace(terreno=str(t['terreno']).lower(),prioridad_nivel=int(t['prioridad'])) for t in obtener_tipos()}
 
 
 @dataclass
@@ -185,11 +170,11 @@ def elegir_baseline(flota: list[EstadoUnidad], e: Escenario) -> EstadoUnidad | N
     return min(disponibles, key=lambda u: calcular_eta(u.lat, u.lng, e.lat, e.lng)["distancia_km"])
 
 
-def elegir_multicriterio(flota: list[EstadoUnidad], e: Escenario) -> EstadoUnidad | None:
+def elegir_multicriterio(flota: list[EstadoUnidad], e: Escenario, claves=None) -> EstadoUnidad | None:
     disponibles = [u for u in flota if u.libre_desde <= e.minuto]
     if not disponibles:
         return None
-    clave = CLAVES_RADIALES[e.codigo_clave]
+    clave = (claves or catalogo_claves())[e.codigo_clave]
     contexto_clave = {"codigo": e.codigo_clave, "terreno": clave.terreno}
     mejor, mejor_score = None, float("-inf")
     for u in disponibles:
@@ -201,13 +186,14 @@ def elegir_multicriterio(flota: list[EstadoUnidad], e: Escenario) -> EstadoUnida
     return mejor
 
 
-def simular(escenarios: list[Escenario], elegir) -> tuple[list[ResultadoAsignacion], list[str]]:
-    flota = construir_flota()
+def simular(escenarios: list[Escenario], elegir, flota=None, claves=None):
+    flota = copy.deepcopy(flota if flota is not None else construir_flota())
+    claves = claves or catalogo_claves()
     resultados = []
     conteo_por_unidad: dict[str, int] = {u.id: 0 for u in flota}
     for e in escenarios:
-        elegida = elegir(flota, e)
-        clave = CLAVES_RADIALES[e.codigo_clave]
+        elegida = elegir(flota, e, claves=claves) if elegir is elegir_multicriterio else elegir(flota,e)
+        clave = (claves or catalogo_claves())[e.codigo_clave]
         if elegida is None:
             resultados.append(ResultadoAsignacion(atendida=False))
             continue
@@ -281,15 +267,19 @@ def ejecutar_benchmark() -> dict:
     print(f"Simulando {len(escenarios)} emergencias sobre {DIAS_SIMULADOS} dias, "
           f"sobre la flota real de {len(construir_flota())} unidades...")
 
-    res_base, conteo_base = simular(escenarios, elegir_baseline)
-    res_prop, conteo_prop = simular(escenarios, elegir_multicriterio)
+    flota=construir_flota()
+    claves=catalogo_claves()
+    res_base, conteo_base = simular(escenarios, elegir_baseline,flota,claves)
+    res_prop, conteo_prop = simular(escenarios, elegir_multicriterio,flota,claves)
 
     resumen_base = resumir("Baseline (mas cercano)", res_base, conteo_base)
     resumen_prop = resumir("Multicriterio (propuesto)", res_prop, conteo_prop)
 
     imprimir_comparacion(resumen_base, resumen_prop)
     resultado = {"baseline": resumen_base, "propuesto": resumen_prop, "n_escenarios": len(escenarios),
-                 "dias_simulados": DIAS_SIMULADOS, "seed": RNG_SEED}
+                 "dias_historico_consultados": DIAS_SIMULADOS, "seed": RNG_SEED,
+                 "origen": "PostgreSQL: registro_historico, zona, tipo_emergencia, recurso y compania",
+                 "metodo": "Muestreo sin reemplazo de casos agregados; centroides y tiempos de trabajo aproximados"}
 
     salida = pathlib.Path(__file__).parent / "resultados_benchmark.json"
     salida.write_text(json.dumps(resultado, indent=2, ensure_ascii=False), encoding="utf-8")

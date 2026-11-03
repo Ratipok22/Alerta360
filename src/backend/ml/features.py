@@ -1,7 +1,7 @@
 """Ingenieria de variables compartida entre entrenamiento e inferencia."""
 import pandas as pd
 
-from .zones import PERIOD_HOURS
+from .contratos import PERIOD_HOURS
 
 WINDOW_PERIODS = 7 * len(PERIOD_HOURS)  # 7 dias de historial (8 bloques/dia)
 

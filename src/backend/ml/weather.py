@@ -121,7 +121,7 @@ def factor_incendio_forestal(temperatura_c: float, viento_kmh: float, precipitac
     """Multiplicador de riesgo de incendio forestal/pastizales (10-2) segun
     condiciones del dia: sube con calor y viento, cae fuerte si llovio (piso
     humedo). Centrado para promediar ~1.0 a lo largo del anio, de forma que
-    la calibracion anual contra la cifra de CONAF (ver generate_dataset.py)
+    la calibracion anual contra la cifra de CONAF (ver dataset_db.py)
     se mantenga aproximadamente valida."""
     factor_temp = np.exp((temperatura_c - 14.5) * 0.045)
     factor_viento = np.exp((viento_kmh - 13.0) * 0.02)

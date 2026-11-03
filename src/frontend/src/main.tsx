@@ -3,7 +3,7 @@ import {createRoot} from 'react-dom/client';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
-import {AlertTriangle, BarChart3, Building2, CheckCircle2, Clock3, Crosshair, Droplet, Eye, Flame, HardHat, History, Info, Layers3, LifeBuoy, Lightbulb, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Paperclip, Phone, Radio, Send, Settings, ShieldCheck, Sun, Ticket, Truck, TreePine, Users, XCircle, Zap, Bug} from 'lucide-react';
+import {AlertTriangle, BarChart3, Building2, CheckCircle2, Clock3, Crosshair, Download, Droplet, Eye, FilePlus2, Flame, HardHat, History, Info, LifeBuoy, Lightbulb, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Paperclip, Phone, Radio, Send, Settings, ShieldCheck, Sun, Ticket, Truck, TreePine, Users, XCircle, Zap, Bug} from 'lucide-react';
 import logoDark from "./assets/logo-alerta360-dark.png";
 import logoLight from "./assets/logo-alerta360-light.png";
 
@@ -93,18 +93,54 @@ type HistorialEntry={id:number; ts:number; tipo:HistorialTipo; texto:string;};
 // CONFIGURACION PARA SOPORTE TICKET //
 type UserRole = 'admin' | 'visualizador' | 'soporte';
 
+// Refleja 1:1 lo que ya devuelve GET /tickets en el backend, que a su vez
+// sale directo de las tablas ya existentes en Postgres (ticket,
+// respuesta_ticket, tipo_ticket, apartado_ticket) -- no se inventan campos
+// que no esten en esas tablas.
+type TicketRespuesta = {mensaje:string; tipo_respuesta:'Respuesta'|'Usuario'; fecha_respuesta:string; autor:string};
 type SupportTicket = {
-  id:string;
+  id_ticket:number;
+  id:string; // codigo_ticket, ej. "SOP-0004"
   tipo:string;
   apartado:string;
   titulo:string;
   descripcion:string;
-  estado:'Pendiente'|'En proceso'|'Resuelto';
+  estado:'Abierto'|'En proceso'|'Resuelto';
   fecha:string;
   archivo:string;
+  creadoPor:string;
+  creadoPorEmail:string;
+  prioridad:'Sin asignar'|'Baja'|'Media'|'Alta';
+  respuestas:TicketRespuesta[];
   respuesta?:string;
+  respuestaAutor?:string;
   respuestaUsuario?:string;
 };
+type CatalogoTicket={id_tipo:number; nombre_tipo:string};
+type CatalogoApartado={id_apartado:number; nombre_apartado:string};
+function mapearTicketBD(t:any):SupportTicket{
+  const respuestas:TicketRespuesta[]=t.respuestas||[];
+  const ultimaDe=(tipo:'Respuesta'|'Usuario')=>[...respuestas].reverse().find(r=>r.tipo_respuesta===tipo);
+  const ultimaOficial=ultimaDe('Respuesta');
+  return {
+    id_ticket:t.id_ticket,
+    id:t.codigo_ticket,
+    tipo:t.tipo,
+    apartado:t.apartado,
+    titulo:t.titulo_ticket,
+    descripcion:t.descripcion,
+    estado:t.estado_ticket,
+    fecha:new Date(t.fecha_creacion).toLocaleString('es-CL'),
+    archivo:t.archivo_url??'',
+    creadoPor:t.creado_por,
+    creadoPorEmail:t.creado_por_email,
+    prioridad:t.prioridad??'Sin asignar',
+    respuestas,
+    respuesta:ultimaOficial?.mensaje,
+    respuestaAutor:ultimaOficial?.autor,
+    respuestaUsuario:ultimaDe('Usuario')?.mensaje,
+  };
+}
 
 
 const RADIO_LABELS:Record<RadioState,string>={'6-0':'Disponible en cuartel','6-3':'En trayecto','6-7':'En la emergencia','6-8':'Regresando','6-9':'Fuera de servicio'};
@@ -403,6 +439,29 @@ const CODIGO_TIPO_PREFERIDO:Record<string,ResourceType>={'10-0':'Bomberos','10-1
 // hasta terminar este tiempo + el regreso a cuartel).
 const TIEMPO_TRABAJO_MS:Record<string,number>={'10-0':26000,'10-1':14000,'10-2':32000,'10-3':16000,'10-4':17000,'10-5':22000};
 
+// Persistencia del despacho en curso: todo el ciclo (ida/atencion/vuelta) se
+// maneja con window.setTimeout, que vive solo mientras la pestana sigue
+// abierta. Si se recarga la pagina a mitad de camino, esos temporizadores se
+// pierden y la emergencia queda "pegada" en Postgres en el estado en que iba
+// (Activa/Asignada/En atencion), aunque el vehiculo ya haya vuelto a su
+// cuartel. Para que esto sea resistente a un F5, se guarda en localStorage
+// el momento exacto (epoch ms) en que debe ocurrir cada transicion, y al
+// cargar la pagina se retoma el ciclo desde donde corresponda (ver
+// reanudarDespachoDesdeReload en App).
+type DespachoPersistido={
+  emergenciaId:number; codigo:string; address:string;
+  destLat:number; destLng:number; homeLat:number; homeLng:number;
+  llegaEn:number; finalizaEn:number; regresaEn:number;
+};
+const DESPACHO_LS_PREFIX='alerta360_despacho_';
+const claveDespachoLS=(resourceId:string)=>`${DESPACHO_LS_PREFIX}${resourceId}`;
+function guardarDespachoLS(resourceId:string, registro:DespachoPersistido):void{
+  try{ localStorage.setItem(claveDespachoLS(resourceId), JSON.stringify(registro)); }catch{ /* localStorage no disponible: se pierde la resistencia a reload, pero no rompe el despacho en curso. */ }
+}
+function limpiarDespachoLS(resourceId:string):void{
+  try{ localStorage.removeItem(claveDespachoLS(resourceId)); }catch{ /* ignorar */ }
+}
+
 // Conocimiento sobre los factores horarios/estacionales que usa el modelo de
 // ML (backend/ml/generate_dataset.py) para cada clave, usado para explicar
 // en lenguaje simple por que una zona/periodo aparece con mayor demanda.
@@ -582,8 +641,24 @@ function companiaOcupada(resources:Resource[], compania:string):boolean{
   return resources.some(r=>r.compania===compania && (r.radioState==='6-3'||r.radioState==='6-7'));
 }
 
+// Limite de unidades despachadas a la vez a UNA MISMA emergencia. En una
+// central real no se manda media flota a un incendio domiciliario comun --
+// 2 o 3 unidades es lo razonable. Se deja como constante unica por ahora
+// (no se distingue aun "mega incendio" de area extendida, que ameritaria
+// permitir mas); cuando exista esa clasificacion, este valor puede variar
+// segun la clave/prioridad de la emergencia en vez de ser fijo.
+const LIMITE_UNIDADES_POR_EMERGENCIA = 3;
+
+function unidadesEnCaminoA(resources:Resource[], emergenciaId:number):number{
+  return resources.filter(r =>
+    r.destino?.emergenciaId === emergenciaId &&
+    (r.radioState === '6-3' || r.radioState === '6-7')
+  ).length;
+}
+
 function pickRecommendation(resources:Resource[], emergencia:Emergency|null, rechazados:Set<string>, clave:Clave|undefined, nowMs:number):Resource|null{
   if(!emergencia) return null;
+  if(unidadesEnCaminoA(resources, emergencia.id) >= LIMITE_UNIDADES_POR_EMERGENCIA) return null;
   const candidatos=resources.filter(r=>esDisponible(r) && !rechazados.has(r.id) && !companiaOcupada(resources, r.compania));
   if(!candidatos.length) return null;
   return candidatos.slice().sort((a,b)=>{
@@ -666,11 +741,300 @@ function buildAlerts(periodos:Periodo[], claves:Record<string,Clave>){
 // Fuerza a Leaflet a remedir su contenedor: evita mapas gigantes/desalineados
 // cuando el contenedor cambia de tamaño (ventana redimensionada, layout
 // flexible, o el propio arranque del mapa antes de que el layout se asiente).
+// Ademas del resize de ventana, observamos el propio contenedor del mapa:
+// las tarjetas del panel lateral (.sideCards) cargan datos de forma asincrona
+// y, al crecer, estiran la fila del grid (y por flex:1 tambien el mapa) sin
+// disparar un evento "resize" de ventana -- sin este observer, Leaflet se
+// queda con el tamano medido al arrancar y la parte nueva del mapa queda en
+// blanco.
 function fixMapSize(map:L.Map):()=>void{
   const invalidate=()=>map.invalidateSize();
   const t=window.setTimeout(invalidate,0);
   window.addEventListener('resize',invalidate);
   return()=>{window.clearTimeout(t); window.removeEventListener('resize',invalidate);};
+}
+
+function fixOperationalMapSize(map:L.Map):()=>void{
+  const invalidate=()=>map.invalidateSize();
+  const t=window.setTimeout(invalidate,0);
+  window.addEventListener('resize',invalidate);
+  const container=map.getContainer();
+  const observer=new ResizeObserver(invalidate);
+  observer.observe(container);
+  return()=>{
+    window.clearTimeout(t);
+    window.removeEventListener('resize',invalidate);
+    observer.disconnect();
+  };
+}
+
+// Mapa minimo y propio del formulario de "Nueva emergencia" -- a diferencia
+// de MapPanel (cuarteles, unidades animadas, asignacion), aca solo importa
+// una cosa: donde hace clic el operador. El click pone/mueve un marcador y
+// entrega lat/lng en crudo; el operador NUNCA digita coordenadas a mano,
+// tal como pide la especificacion del formulario CAD.
+function MapaSeleccionUbicacion({lat, lng, onSeleccionar}:{lat:number|null; lng:number|null; onSeleccionar:(lat:number, lng:number)=>void}){
+  const mapRef=useRef<L.Map|null>(null);
+  const markerRef=useRef<L.Marker|null>(null);
+  const onSeleccionarRef=useRef(onSeleccionar);
+  onSeleccionarRef.current=onSeleccionar;
+
+  useEffect(()=>{
+    const map=L.map('form-map',{zoomControl:true}).setView(
+      [lat??VALPARAISO_CENTER.lat, lng??VALPARAISO_CENTER.lng], 13
+    );
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors'}).addTo(map);
+    map.on('click',(e:L.LeafletMouseEvent)=>{ onSeleccionarRef.current(e.latlng.lat, e.latlng.lng); });
+    mapRef.current=map;
+    const cleanupResize=fixOperationalMapSize(map);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return()=>{ cleanupResize(); map.remove(); mapRef.current=null; markerRef.current=null; };
+  },[]);
+
+  // El marcador se mueve/crea por separado del mapa (que solo se crea una
+  // vez) -- asi un punto elegido por el buscador de direcciones tambien
+  // actualiza el pin sin tener que recrear el mapa entero.
+  useEffect(()=>{
+    const map=mapRef.current;
+    if(!map) return;
+    if(lat==null || lng==null){
+      markerRef.current?.remove();
+      markerRef.current=null;
+      return;
+    }
+    if(markerRef.current){
+      markerRef.current.setLatLng([lat,lng]);
+    }else{
+      markerRef.current=L.marker([lat,lng]).addTo(map);
+    }
+    map.setView([lat,lng], map.getZoom());
+  },[lat,lng]);
+
+  return <div id="form-map" className="formMapaUbicacion"/>;
+}
+
+// Combobox con filtrado dinamico de claves radiales (10-0, 10-1, ...) --
+// reutiliza el mismo catalogo real (`claves`, desde GET /catalog/claves)
+// que ya usa el resto del dashboard, no una lista propia que se pueda
+// desincronizar de la base de datos.
+function ComboCodigoEmergencia({claves, onElegir}:{claves:Record<string,Clave>; onElegir:(codigo:string)=>void}){
+  const [texto,setTexto]=useState('');
+  const [abierto,setAbierto]=useState(false);
+  const [indiceActivo,setIndiceActivo]=useState(0);
+
+  // Orden NUMERICO, no alfabetico -- "10-10".localeCompare("10-2") los
+  // ordenaba como texto (1 < 2, asi que 10-10 quedaba antes que 10-2).
+  // Se extrae el ultimo segmento numerico de cada codigo para comparar.
+  const numeroClave=(codigo:string)=>Number(codigo.split('-').pop());
+  const listaClaves=useMemo(
+    ()=>Object.values(claves).sort((a,b)=>numeroClave(a.codigo)-numeroClave(b.codigo)),
+    [claves]
+  );
+  const filtradas=useMemo(()=>{
+    const q=texto.trim().toLowerCase();
+    if(!q) return listaClaves;
+    return listaClaves.filter(c=>c.codigo.toLowerCase().includes(q) || c.nombre.toLowerCase().includes(q));
+  },[listaClaves, texto]);
+
+  const elegir=(c:Clave)=>{
+    setTexto(`${c.codigo} · ${c.nombre}`);
+    onElegir(c.codigo);
+    setAbierto(false);
+  };
+
+  return (
+    <div className="comboClave">
+      <input
+        type="text"
+        value={texto}
+        onChange={e=>{ setTexto(e.target.value); setAbierto(true); setIndiceActivo(0); }}
+        onFocus={()=>setAbierto(true)}
+        onBlur={()=>window.setTimeout(()=>setAbierto(false),150)}
+        onKeyDown={e=>{
+          if(e.key==='ArrowDown'){ e.preventDefault(); setIndiceActivo(i=>Math.min(i+1, filtradas.length-1)); }
+          else if(e.key==='ArrowUp'){ e.preventDefault(); setIndiceActivo(i=>Math.max(i-1,0)); }
+          else if(e.key==='Enter'){ e.preventDefault(); if(filtradas[indiceActivo]) elegir(filtradas[indiceActivo]); }
+        }}
+        placeholder="Buscar clave (ej: 10-0 o incendio)"
+      />
+      {abierto && filtradas.length>0 && (
+        <ul className="comboClaveLista">
+          {filtradas.map((c,i)=>(
+            <li
+              key={c.codigo}
+              className={i===indiceActivo?'activo':''}
+              onMouseDown={()=>elegir(c)}
+            >
+              <strong>{c.codigo}</strong> {c.nombre}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// Busqueda de direcciones contra Nominatim (API publica de OpenStreetMap,
+// sin API key). No hay geocodificacion propia en el proyecto -- OSRM solo
+// calcula rutas, no busca direcciones. Debounce de 500ms para no pasarse
+// del limite de uso de Nominatim (1 solicitud/seg) mientras el operador
+// sigue escribiendo.
+function useBuscadorDirecciones(){
+  const [sugerencias,setSugerencias]=useState<{display_name:string; lat:string; lon:string}[]>([]);
+  // Estado visible del buscador -- antes, mientras no habia resultados, no
+  // se mostraba nada y parecia que el autocompletado no hacia nada (aunque
+  // si estaba funcionando, solo que en silencio).
+  const [estado,setEstado]=useState<'inactivo'|'buscando'|'sin_resultados'|'error'>('inactivo');
+  const temporizadorRef=useRef<number|null>(null);
+
+  const buscar=(texto:string)=>{
+    if(temporizadorRef.current) window.clearTimeout(temporizadorRef.current);
+    const q=texto.trim();
+    if(q.length<3){ setSugerencias([]); setEstado('inactivo'); return; }
+    setEstado('buscando');
+    temporizadorRef.current=window.setTimeout(async()=>{
+      try{
+        const params=new URLSearchParams({
+          format:'json',
+          q,
+          countrycodes:'cl',
+          // Caja aproximada de la Region de Valparaiso, para priorizar
+          // resultados locales (formato Nominatim: min_lon,max_lat,max_lon,min_lat).
+          viewbox:'-71.75,-32.60,-71.30,-33.30',
+          bounded:'1',
+          limit:'5',
+        });
+        const resp=await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`);
+        if(!resp.ok) throw new Error('Nominatim no respondió');
+        const datos=await resp.json();
+        setSugerencias(datos);
+        setEstado(datos.length?'inactivo':'sin_resultados');
+      }catch(error){
+        console.error('No se pudo buscar la dirección en Nominatim:', error);
+        setSugerencias([]);
+        setEstado('error');
+      }
+    },500);
+  };
+
+  return {sugerencias, estado, buscar, limpiar:()=>{ setSugerencias([]); setEstado('inactivo'); }};
+}
+
+// Formulario "Nueva emergencia" (CAD) -- solo visible para admin (ver nav
+// del sidebar). Codigo (typeahead sobre el catalogo real), direccion (texto
+// + autocompletado Nominatim) y georreferenciacion (clic en el mapa, nunca
+// coordenadas digitadas a mano). La prioridad ya no se pide ni se muestra
+// como campo: se calcula sola desde el codigo elegido y se envia asi nomas.
+function NuevaEmergenciaView({claves, onCrear}:{
+  claves:Record<string,Clave>;
+  onCrear:(payload:{codigo_emergencia:string; direccion_emergencia:string; latitud_emergencia:number; longitud_emergencia:number; prioridad_emergencia:number})=>Promise<{id_emergencia:number; codigo_emergencia:string}>;
+}){
+  const [codigo,setCodigo]=useState('');
+  const [direccion,setDireccion]=useState('');
+  const [lat,setLat]=useState<number|null>(null);
+  const [lng,setLng]=useState<number|null>(null);
+  // La prioridad ya NO la elige el operador: se detecta sola a partir del
+  // código de emergencia (catalogo real, GET /catalog/claves). Sin código
+  // elegido todavia no hay prioridad que mostrar.
+  const [prioridad,setPrioridad]=useState<number|null>(null);
+  const [enviando,setEnviando]=useState(false);
+  const {sugerencias, estado:estadoBusquedaDireccion, buscar, limpiar}=useBuscadorDirecciones();
+
+  const elegirCodigo=(cod:string)=>{
+    setCodigo(cod);
+    const clave=claves[cod];
+    setPrioridad(clave?Number(clave.prioridad):null);
+  };
+
+  const elegirDireccionSugerida=(s:{display_name:string; lat:string; lon:string})=>{
+    setDireccion(s.display_name.toUpperCase());
+    setLat(Number(s.lat));
+    setLng(Number(s.lon));
+    limpiar();
+  };
+
+  // Geocodificacion INVERSA: al marcar un punto directo en el mapa (sin
+  // pasar por el buscador de texto), se completa sola la direccion con lo
+  // que haya en ese punto segun OpenStreetMap -- el operador puede seguir
+  // editandola a mano despues si el nombre no calza exacto.
+  const seleccionarEnMapa=async(la:number, lo:number)=>{
+    setLat(la);
+    setLng(lo);
+    try{
+      const params=new URLSearchParams({format:'json', lat:String(la), lon:String(lo)});
+      const resp=await fetch(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`);
+      if(!resp.ok) return;
+      const datos=await resp.json();
+      if(datos?.display_name) setDireccion(String(datos.display_name).toUpperCase());
+    }catch(error){
+      console.error('No se pudo obtener la dirección del punto marcado:', error);
+    }
+  };
+
+  const crear=async()=>{
+    if(!codigo || prioridad==null){ alert('Selecciona un código de emergencia.'); return; }
+    if(!direccion.trim()){ alert('Ingresa la dirección.'); return; }
+    if(lat==null || lng==null){ alert('Marca la ubicación en el mapa (clic sobre el punto real).'); return; }
+    setEnviando(true);
+    try{
+      await onCrear({
+        codigo_emergencia:codigo,
+        direccion_emergencia:direccion.trim(),
+        latitud_emergencia:lat,
+        longitud_emergencia:lng,
+        prioridad_emergencia:prioridad,
+      });
+      setCodigo(''); setDireccion(''); setLat(null); setLng(null); setPrioridad(null);
+    }catch(error){
+      alert(error instanceof Error?error.message:'No se pudo crear la emergencia.');
+    }finally{
+      setEnviando(false);
+    }
+  };
+
+  return (
+    <div className="card sectionCard nuevaEmergenciaCard">
+      <div className="cardHead"><div><b>Nueva emergencia</b><span>Ingreso rápido para despacho (CAD)</span></div></div>
+
+      <div className="nuevaEmergenciaGrid">
+
+        <label className="nuevaEmergenciaCampo">
+          1. Código de emergencia
+          <ComboCodigoEmergencia claves={claves} onElegir={elegirCodigo}/>
+        </label>
+
+        <label className="nuevaEmergenciaCampo">
+          2. Dirección / ubicación
+          <input
+            type="text"
+            value={direccion}
+            onChange={e=>{ const v=e.target.value.toUpperCase(); setDireccion(v); buscar(v); }}
+            placeholder="AV. ARGENTINA, BARRIO ALMENDRAL, VALPARAÍSO"
+          />
+          {sugerencias.length>0 && (
+            <ul className="comboDireccionLista">
+              {sugerencias.map((s,i)=>(
+                <li key={i} onMouseDown={()=>elegirDireccionSugerida(s)}>{s.display_name}</li>
+              ))}
+            </ul>
+          )}
+          {estadoBusquedaDireccion==='buscando' && <small className="estadoBusquedaDireccion">Buscando direcciones…</small>}
+          {estadoBusquedaDireccion==='sin_resultados' && <small className="estadoBusquedaDireccion">Sin resultados para esa búsqueda. Prueba solo con el nombre de la calle (ej. "Pedro Montt").</small>}
+          {estadoBusquedaDireccion==='error' && <small className="estadoBusquedaDireccion error">No se pudo conectar al buscador de direcciones. Puedes seguir marcando el punto directo en el mapa.</small>}
+        </label>
+
+        <div className="nuevaEmergenciaCampo nuevaEmergenciaCampoMapa">
+          3. Georreferenciación (toca el mapa para marcar el punto)
+          <MapaSeleccionUbicacion lat={lat} lng={lng} onSeleccionar={seleccionarEnMapa}/>
+          {lat!=null && lng!=null && <small className="nuevaEmergenciaCoords">Lat {lat.toFixed(5)}, Lng {lng.toFixed(5)}</small>}
+          <button className="nuevaEmergenciaCrearBtn" onClick={crear} disabled={enviando}>
+            {enviando?'Creando…':'Crear y generar recomendación'}
+          </button>
+        </div>
+
+      </div>
+    </div>
+  );
 }
 
 // Icono de vehiculo EN MOVIMIENTO: una silueta orientada segun el rumbo
@@ -721,8 +1085,12 @@ function botonAsignarManual(unidad:Resource, hayEmergenciaActiva:boolean, isAdmi
 // (no solo el nombre/estado del tooltip al pasar el mouse), mas el boton
 // de asignacion manual si corresponde.
 function popupVehiculo(r:Resource, hayEmergenciaActiva:boolean, isAdmin:boolean):string{
+  // Incluye el numero de la emergencia (no solo la direccion) para que
+  // quede claro a cual alerta esta sirviendo este vehiculo -- sin esto, un
+  // camion "En trayecto"/"Regresando" de una emergencia que no es la que
+  // esta en pantalla da la impresion de que esa alerta nunca se atendio.
   const detalleTramo=r.destino
-    ? `<br/>→ ${r.destino.address}`
+    ? `<br/>→ Emergencia #${r.destino.emergenciaId} · ${r.destino.address}`
     : '';
   return `<b>${r.name}</b><br/>${r.compania}<br/><span style="opacity:.75">${r.sector}</span><br/>
     Tipo: ${r.type} · Dotación: ${r.crew}<br/>
@@ -740,16 +1108,25 @@ function popupCuartel(compania:string, sector:string, unidades:Resource[], hayEm
   return `<b>${compania}</b><br/><span style="opacity:.75">${sector}</span><br/><br/>${filas}`;
 }
 
-function MapPanel({resources, emergencies, focus, center, onAsignarManual, isAdmin=true}:{resources:Resource[]; emergencies:Emergency[]; focus:{lat:number;lng:number}|null; center:{lat:number;lng:number}; onAsignarManual:(resourceId:string)=>void; isAdmin?:boolean}){
+function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSelectEmergencia, isAdmin=true}:{resources:Resource[]; emergencies:Emergency[]; focus:{lat:number;lng:number}|null; center:{lat:number;lng:number}; onAsignarManual:(resourceId:string)=>void; onSelectEmergencia?:(id:number)=>void; isAdmin?:boolean}){
   const mapRef=useRef<L.Map|null>(null);
   // Refs para leer siempre el valor mas reciente desde callbacks que
   // Leaflet dispara mas tarde (popups, clicks) sin que queden desactualizados.
   const onAsignarManualRef=useRef(onAsignarManual);
   onAsignarManualRef.current=onAsignarManual;
+  const onSelectEmergenciaRef=useRef(onSelectEmergencia);
+  onSelectEmergenciaRef.current=onSelectEmergencia;
   const emergenciesRef=useRef(emergencies);
   emergenciesRef.current=emergencies;
   const isAdminRef=useRef(isAdmin);
   isAdminRef.current=isAdmin;
+  // Que popup de emergencia esta abierto ahora mismo (si hay uno). La capa
+  // de emergencias/cuarteles se destruye y reconstruye entera cada vez que
+  // cambian los datos (p.ej. el refresco automatico de la cola cada 10s),
+  // lo que cierra cualquier popup abierto sobre ella -- esto deja registro
+  // de cual estaba abierta para volver a abrirla justo despues de recrear
+  // los marcadores, en vez de que se cierre sola sin que el operador la cerrara.
+  const emergenciaPopupAbiertaRef=useRef<number|null>(null);
   // Capa "estatica": emergencias, marcador de emergencia asignada y el
   // trazado de ruta -- se redibuja solo cuando cambian los datos (no en
   // cada tick), porque nada de esto se mueve cuadro a cuadro.
@@ -810,7 +1187,7 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, isAdm
         }, {once:true});
       });
     });
-    const cleanupResize=fixMapSize(map);
+    const cleanupResize=fixOperationalMapSize(map);
     return()=>{cleanupResize(); map.remove(); mapRef.current=null; layerRef.current=null; highlightLayerRef.current=null;};
   },[center]);
 
@@ -820,6 +1197,11 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, isAdm
   useEffect(()=>{
     const layer=layerRef.current;
     if(!layer) return;
+    // Se congela ANTES de clearLayers(): si clearLayers() dispara
+    // "popupclose" sobre el marcador que se esta destruyendo, el ref ya
+    // quedaria en null antes de llegar al forEach de abajo, y el marcador
+    // nuevo de esa misma emergencia nunca se reabriria.
+    const idPopupAbiertaAntes=emergenciaPopupAbiertaRef.current;
     layer.clearLayers();
     // Marcador de cuartel: FIJO, uno por compañía (varias unidades pueden
     // compartir el mismo cuartel), nunca se mueve -- independiente del
@@ -845,7 +1227,13 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, isAdm
       }).addTo(layer).bindTooltip(`${compania} · ${sector}`).bindPopup(()=>popupCuartel(compania, sector, unidades, emergenciesRef.current.length>0, isAdminRef.current));
     });
     emergencies.forEach(e=>{
-      L.marker([e.lat,e.lng],{icon:L.divIcon({className:'emergency-marker',html:'<div>!</div>',iconSize:[36,36],iconAnchor:[18,18]})}).addTo(layer).bindPopup(`<b>Emergencia #${e.id}</b><br/>Clave ${e.codigo}<br/>${e.address}`);
+      const marker=L.marker([e.lat,e.lng],{icon:L.divIcon({className:'emergency-marker',html:'<div>!</div>',iconSize:[36,36],iconAnchor:[18,18]})})
+        .addTo(layer)
+        .bindPopup(`<b>Emergencia #${e.id}</b><br/>Clave ${e.codigo}<br/>${e.address}`)
+        .on('click', ()=>onSelectEmergenciaRef.current?.(e.id))
+        .on('popupopen', ()=>{ emergenciaPopupAbiertaRef.current=e.id; })
+        .on('popupclose', ()=>{ if(emergenciaPopupAbiertaRef.current===e.id) emergenciaPopupAbiertaRef.current=null; });
+      if(idPopupAbiertaAntes===e.id) marker.openPopup();
     });
     // Emergencias ya asignadas (fuera de la cola) pero que aun tienen una unidad
     // en camino o trabajando: se mantienen marcadas para que la ruta apunte a
@@ -854,7 +1242,14 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, isAdm
     resources.forEach(r=>{
       if(r.destino && (r.radioState==='6-3'||r.radioState==='6-7') && !destinosMostrados.has(r.destino.emergenciaId)){
         destinosMostrados.add(r.destino.emergenciaId);
-        L.marker([r.destino.lat,r.destino.lng],{icon:L.divIcon({className:'emergency-marker emergency-marker-asignada',html:'<div>✓</div>',iconSize:[34,34],iconAnchor:[17,17]})}).addTo(layer).bindPopup(`<b>Emergencia #${r.destino.emergenciaId}</b><br/>${r.destino.address}<br/><i>Asignada</i>`);
+        const idEmergenciaDestino=r.destino.emergenciaId;
+        const markerAsignada=L.marker([r.destino.lat,r.destino.lng],{icon:L.divIcon({className:'emergency-marker emergency-marker-asignada',html:'<div>✓</div>',iconSize:[34,34],iconAnchor:[17,17]})})
+          .addTo(layer)
+          .bindPopup(`<b>Emergencia #${idEmergenciaDestino}</b><br/>${r.destino.address}<br/><i>Asignada</i>`)
+          .on('click', ()=>onSelectEmergenciaRef.current?.(idEmergenciaDestino))
+          .on('popupopen', ()=>{ emergenciaPopupAbiertaRef.current=idEmergenciaDestino; })
+          .on('popupclose', ()=>{ if(emergenciaPopupAbiertaRef.current===idEmergenciaDestino) emergenciaPopupAbiertaRef.current=null; });
+        if(idPopupAbiertaAntes===idEmergenciaDestino) markerAsignada.openPopup();
       }
     });
     resources.forEach(r=>{
@@ -961,6 +1356,14 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, isAdm
         highlightTimeoutRef.current=window.setTimeout(()=>{hl.clearLayers();}, 4000);
       }
     }
+    // Si el mapa se desmonta (ej. se cambia de seccion) antes de que pasen
+    // los 4 segundos, el setTimeout quedaba vivo apuntando a una capa que ya
+    // no existe -- al volver a montar el mapa esa capa nueva nunca se
+    // limpiaba, dejando el anillo pegado para siempre en el punto anterior.
+    return ()=>{
+      if(highlightTimeoutRef.current){ window.clearTimeout(highlightTimeoutRef.current); highlightTimeoutRef.current=null; }
+      highlightLayerRef.current?.clearLayers();
+    };
   },[focus]);
 
   return <div id="map"/>
@@ -1009,7 +1412,8 @@ function HeatMapPanel({zonas, seleccionadaId, onSelectZona, focus}:{zonas:ZoneDe
     const zoneLayer=zoneLayerRef.current;
     if(!zoneLayer) return;
     zoneLayer.clearLayers();
-    zonas.forEach(z=>{
+    // Ocultar las zonas cuyo valor visible, con un decimal, es 0.0.
+    zonas.filter(z=>Number.isFinite(z.demanda_total) && Number(z.demanda_total.toFixed(1))>0).forEach(z=>{
       const seleccionada=seleccionadaId===z.zona_id;
       const radioMetros=(z.bounds.lat_max-z.bounds.lat_min)/2*111320*0.5;
       const rect=L.circle(
@@ -1026,12 +1430,12 @@ function HeatMapPanel({zonas, seleccionadaId, onSelectZona, focus}:{zonas:ZoneDe
   return <div id="heatmap"/>
 }
 
-function EmergenciasView({queue,claves,now,onAtender,isAdmin}:{queue:Emergency[];claves:Record<string,Clave>;now:number;onAtender:(id:number)=>void;isAdmin:boolean}){
+function EmergenciasView({queue,claves,now,onAtender,onVerUbicacion,isAdmin}:{queue:Emergency[];claves:Record<string,Clave>;now:number;onAtender:(id:number)=>void;onVerUbicacion:(id:number)=>void;isAdmin:boolean}){
   return <div className="card sectionCard">
-    <div className="cardHead"><div><b>Emergencias activas</b><span>{queue.length} en cola de atención</span></div></div>
+    <div className="cardHead"><div><b>Emergencias activas</b><span>{queue.length} en cola de atención · toca una fila o "Ver ubicación" para verla en el mapa</span></div></div>
     <div className="tableWrap"><table className="dataTable">
-      <thead><tr><th>ID</th><th>Clave</th><th>Prioridad</th><th>Dirección</th><th>Tiempo</th><th>Estado</th>{isAdmin && <th></th>}</tr></thead>
-      <tbody>{[...queue].sort((a, b) => a.id - b.id).map(e => {const c = claves[e.codigo];return <tr key={e.id}>
+      <thead><tr><th>ID</th><th>Clave</th><th>Prioridad</th><th>Dirección</th><th>Tiempo</th><th>Estado</th><th></th>{isAdmin && <th></th>}</tr></thead>
+      <tbody>{[...queue].sort((a, b) => a.id - b.id).map(e => {const c = claves[e.codigo];return <tr key={e.id} className="emergenciaRow" onClick={()=>onVerUbicacion(e.id)}>
         <td>#{e.id}</td>
         <td>{e.codigo} · {c?.nombre??'—'}</td>
         <td>
@@ -1044,14 +1448,15 @@ function EmergenciasView({queue,claves,now,onAtender,isAdmin}:{queue:Emergency[]
         <td className="wrap">{e.address}</td>
         <td>{elapsedLabel(e.creadaEn,now)}</td>
         <td>{e.status}</td>
-        {isAdmin && <td><button className="atenderBtn" onClick={()=>onAtender(e.id)}>Atender</button></td>}
+        <td><button className="linkBtn" onClick={ev=>{ev.stopPropagation(); onVerUbicacion(e.id);}}><Crosshair size={13}/> Ver ubicación</button></td>
+        {isAdmin && <td><button className="atenderBtn" onClick={ev=>{ev.stopPropagation(); onAtender(e.id);}}>Atender</button></td>}
       </tr>;})}</tbody>
     </table></div>
   </div>;
 }
 
 const TODOS='todos' as const;
-function RecursosView({resources,alertaTimeoutIds,onVerCuartelEnMapa}:{resources:Resource[];alertaTimeoutIds:Set<string>;onVerCuartelEnMapa:(lat:number,lng:number)=>void}){
+function RecursosView({resources,alertaTimeoutIds,onVerCuartelEnMapa,isAdmin,puedeCambiarEstado,onCambiarFueraDeServicio}:{resources:Resource[];alertaTimeoutIds:Set<string>;onVerCuartelEnMapa:(lat:number,lng:number)=>void;isAdmin:boolean;puedeCambiarEstado:boolean;onCambiarFueraDeServicio:(resource:Resource, nuevoEstado:'6-0'|'6-9')=>void}){
   const [busqueda,setBusqueda]=useState('');
   const [filtroTipo,setFiltroTipo]=useState<typeof TODOS|ResourceType>(TODOS);
   const [filtroEstado,setFiltroEstado]=useState<typeof TODOS|RadioState>(TODOS);
@@ -1076,23 +1481,47 @@ function RecursosView({resources,alertaTimeoutIds,onVerCuartelEnMapa}:{resources
       </select>
     </div>
     <div className="tableWrap"><table className="dataTable">
-      <thead><tr><th></th><th>Unidad</th><th>Compañía</th><th>Sector</th><th>Tipo</th><th>Dotación</th><th>Distancia</th><th>ETA</th><th>Estado</th></tr></thead>
+      <thead><tr><th></th><th>Unidad</th><th>Compañía</th><th>Sector</th><th>Tipo</th><th>Dotación</th><th>Distancia</th><th>ETA</th><th>Estado</th>{puedeCambiarEstado && <th></th>}</tr></thead>
       <tbody>{filtrados.length?filtrados.map(r=><tr key={r.id}>
         <td className="resIconCell">{resourceIcon(r.type)}</td>
-        <td>{r.name}</td>
-        <td><button className="linkBtn" title="Ver cuartel en el mapa" onClick={()=>onVerCuartelEnMapa(r.lat,r.lng)}>{r.compania}</button></td>
-        <td>{r.sector}</td>
+        <td className="wrap resNombreCell">{r.name}</td>
+        <td className="wrap"><button className="linkBtn" title="Ver cuartel en el mapa" onClick={()=>onVerCuartelEnMapa(r.lat,r.lng)}>{r.compania}</button></td>
+        <td className="wrap">{r.sector}</td>
         <td>{r.type}</td>
         <td>{r.crew}</td>
         <td>{r.distance} km</td>
         <td>{r.eta} min</td>
-        <td><span className={`estado estado-${r.radioState.replace('6-','')}`}>{r.radioState} · {RADIO_LABELS[r.radioState]}</span>{alertaTimeoutIds.has(r.id)&&<span className="timeoutBadge" title="Sin transmisión de estado dentro del umbral configurado"><AlertTriangle size={11}/> sin transmisión</span>}</td>
-      </tr>):<tr><td colSpan={9}><p className="emptyState">Ninguna unidad coincide con el filtro.</p></td></tr>}</tbody>
+        <td className="wrap resEstadoCell"><span className={`estado estado-${r.radioState.replace('6-','')}`}>{r.radioState} · {RADIO_LABELS[r.radioState]}</span>{alertaTimeoutIds.has(r.id)&&<span className="timeoutBadge" title="Sin transmisión de estado dentro del umbral configurado"><AlertTriangle size={11}/> sin transmisión</span>}</td>
+        {puedeCambiarEstado && <td>
+          {r.radioState==='6-9'
+            ?<button className="reactivarBtn" onClick={()=>onCambiarFueraDeServicio(r,'6-0')}>Reactivar</button>
+            :r.radioState==='6-0'
+              ?<button className="fueraServicioBtn" onClick={()=>onCambiarFueraDeServicio(r,'6-9')}>Fuera de servicio</button>
+              :null}
+        </td>}
+      </tr>):<tr><td colSpan={puedeCambiarEstado?10:9}><p className="emptyState">Ninguna unidad coincide con el filtro.</p></td></tr>}</tbody>
     </table></div>
   </div>;
 }
 
 const TIPOS_HISTORIAL:HistorialTipo[]=['asignacion','rechazo','en_emergencia','liberacion','nueva_emergencia'];
+// Dice si el EVENTO (no la emergencia en vivo) representa el cierre de una
+// emergencia o el que sigue en curso -- a partir de lo que el propio texto
+// ya cuenta (tipo + palabras clave), nunca comparando contra el estado
+// actual: la base se reinicia seguido durante las pruebas y los IDs se
+// reciclan, asi que "Emergencia #5 de hace 20 minutos" y "Emergencia #5 de
+// ahora" pueden ser filas completamente distintas -- cruzarlo contra la
+// cola en vivo daba estados erroneos. Null para eventos genericos que no
+// mencionan ninguna emergencia en particular (ej. "unidad regreso a su
+// cuartel" sin numero de emergencia).
+function estadoEmergenciaDeEvento(tipo:HistorialTipo, texto:string):{texto:string; clase:string}|null{
+  if(!/Emergencia #\d+/.test(texto)) return null;
+  const esCierre = tipo==='liberacion' && (texto.includes('finalizó la atención') || texto.includes('finalizada en PostgreSQL'));
+  return esCierre
+    ? {texto:'Finalizada', clase:'historialEstado-finalizada'}
+    : {texto:'Activa', clase:'historialEstado-activa'};
+}
+
 function HistorialView({historial,now}:{historial:HistorialEntry[];now:number}){
   const [filtroTipo,setFiltroTipo]=useState<typeof TODOS|HistorialTipo>(TODOS);
   const filtrado=filtroTipo===TODOS?historial:historial.filter(h=>h.tipo===filtroTipo);
@@ -1104,7 +1533,7 @@ function HistorialView({historial,now}:{historial:HistorialEntry[];now:number}){
         {TIPOS_HISTORIAL.map(t=><option key={t} value={t}>{historialTitle(t)}</option>)}
       </select>
     </div>
-    <div className="activityRows">{filtrado.length?filtrado.map(h=><Activity key={h.id} icon={historialIcon(h.tipo)} title={historialTitle(h.tipo)} detail={h.texto} time={timeAgo(h.ts,now)}/>):<p className="emptyState">{historial.length?'Ningún evento coincide con el filtro.':'Aún no hay acciones registradas. Asigna o rechaza una recomendación desde el Dashboard para empezar a construir el historial.'}</p>}</div>
+    <div className="activityRows">{filtrado.length?filtrado.map(h=><Activity key={h.id} icon={historialIcon(h.tipo)} title={historialTitle(h.tipo)} detail={h.texto} time={timeAgo(h.ts,now)} estado={estadoEmergenciaDeEvento(h.tipo,h.texto)}/>):<p className="emptyState">{historial.length?'Ningún evento coincide con el filtro.':'Aún no hay acciones registradas. Asigna o rechaza una recomendación desde el Dashboard para empezar a construir el historial.'}</p>}</div>
   </div>;
 }
 
@@ -1162,34 +1591,122 @@ function LoginView({onLogin,theme,onToggleTheme}:{onLogin:(token:string, nombre:
   </div>;
 }
 
-function ReportesView({historial}:{historial:HistorialEntry[]}){
-  const asignaciones=historial.filter(h=>h.tipo==='asignacion').length;
-  const rechazos=historial.filter(h=>h.tipo==='rechazo').length;
-  const liberaciones=historial.filter(h=>h.tipo==='liberacion').length;
-  return <div className="sectionGrid">
-    <div className="kpis">
-      <Kpi icon={<Navigation/>} label="Asignaciones realizadas" value={String(asignaciones)} meta="esta sesión" tone="acento"/>
-      <Kpi icon={<XCircle/>} label="Recomendaciones rechazadas" value={String(rechazos)} meta="esta sesión" tone="azul"/>
-      <Kpi icon={<Truck/>} label="Unidades liberadas" value={String(liberaciones)} meta="regresaron a cuartel" tone="acento"/>
-    </div>
-    <div className="card sectionCard"><div className="cardHead"><div><b>Nota</b></div></div><p className="emptyState">Estos indicadores se calculan en vivo a partir de las acciones tomadas en esta sesión (asignar/rechazar recomendaciones). Al recargar la página el historial se reinicia, ya que aún no hay persistencia en base de datos.</p></div>
+function prioridadClase(p:'Sin asignar'|'Baja'|'Media'|'Alta'):string{
+  return p==='Alta' ? 'ticketPrioridad-alta'
+    : p==='Media' ? 'ticketPrioridad-media'
+    : p==='Baja' ? 'ticketPrioridad-baja'
+    : 'ticketPrioridad-sinasignar';
+}
+
+// Hilo completo de la conversacion de un ticket (respuestas oficiales de
+// soporte y seguimientos del usuario que lo creo), en orden cronologico --
+// antes solo se mostraba la ULTIMA respuesta de cada lado, perdiendo el
+// resto del historial de la conversacion.
+function TicketThread({respuestas}:{respuestas:TicketRespuesta[]}){
+  if(!respuestas.length) return null;
+  return <div className="ticketThread">
+    {respuestas.map((r,i)=>
+      <div key={i} className={`ticketThreadMsg ${r.tipo_respuesta==='Respuesta'?'esSoporte':'esUsuario'}`}>
+        <strong>{r.tipo_respuesta==='Respuesta'?'Soporte':'Usuario'} · {r.autor}</strong>
+        <p>{r.mensaje}</p>
+        <small>{new Date(r.fecha_respuesta).toLocaleString('es-CL')}</small>
+      </div>
+    )}
   </div>;
+}
+
+// Los tickets antiguos guardan un link externo en archivo_url; los nuevos
+// guardan la imagen ya codificada como data URI (ver crearTicketBD). Un
+// mismo campo sirve para ambos casos: si empieza con "data:image" se
+// renderiza como <img>, si no, como enlace de texto (comportamiento previo).
+function esImagenAdjunta(url:string){
+  return url.startsWith('data:image');
+}
+
+// Extensión real del archivo a partir del mime type (para el nombre que
+// se ofrece al descargar: "adjunto-ticket.png", no "adjunto-ticket.data").
+function extensionImagen(dataUri:string){
+  const mime = dataUri.slice(5, dataUri.indexOf(';'));
+  return mime.split('/')[1] || 'png';
+}
+
+// Overlay a pantalla completa con la imagen ampliada. Los navegadores
+// Chromium (Chrome, Brave, Edge) bloquean la navegacion a una URL "data:"
+// en una pestaña nueva (pantalla en blanco, "Sin titulo") por seguridad
+// anti-phishing -- por eso esto se abre dentro de la misma pagina en vez
+// de usar <a target="_blank">.
+function LightboxImagenTicket({url, onCerrar}:{url:string; onCerrar:()=>void}){
+  return (
+    <div className="ticketImagenLightbox" onClick={onCerrar}>
+      <img src={url} alt="Imagen adjunta ampliada"/>
+    </div>
+  );
+}
+
+function AdjuntoTicket({url}:{url:string}){
+  const [ampliada,setAmpliada]=useState(false);
+  if(esImagenAdjunta(url)){
+    return <>
+      <button type="button" onClick={()=>setAmpliada(true)} className="ticketAdjuntoImagenLink">
+        <img src={url} alt="Captura adjunta al ticket" className="ticketAdjuntoImagen"/>
+      </button>
+      {ampliada && <LightboxImagenTicket url={url} onCerrar={()=>setAmpliada(false)}/>}
+    </>;
+  }
+  return <a href={url} target="_blank" rel="noreferrer">{url}</a>;
+}
+
+// Bloque dedicado para mostrar la imagen adjunta en grande, con marco y
+// boton de descarga -- separado del renglon de metadatos (Fecha/Estado)
+// porque una imagen no cabe bien ahi como un dato mas en linea.
+function ImagenAdjuntaTicket({url}:{url:string}){
+  const [ampliada,setAmpliada]=useState(false);
+  return (
+    <div className="ticketAdjuntoBox">
+      <span className="ticketAdjuntoLabel"><Paperclip size={13}/> Imagen adjunta</span>
+      <button type="button" onClick={()=>setAmpliada(true)} className="ticketAdjuntoImagenBtn">
+        <img src={url} alt="Imagen adjunta al ticket" className="ticketAdjuntoImagenGrande"/>
+      </button>
+      <a href={url} download={`adjunto-ticket.${extensionImagen(url)}`} className="ticketAdjuntoDescargar">
+        <Download size={14}/> Descargar imagen
+      </a>
+      {ampliada && <LightboxImagenTicket url={url} onCerrar={()=>setAmpliada(false)}/>}
+    </div>
+  );
 }
 
 function AdminTicketsView({
   tickets,
-  setTickets
+  onResponder,
+  onCambiarEstado,
+  onCambiarPrioridad,
 }:{
   tickets:SupportTicket[];
-  setTickets:React.Dispatch<React.SetStateAction<SupportTicket[]>>;
+  onResponder:(idTicket:number, mensaje:string)=>Promise<void>;
+  onCambiarEstado:(idTicket:number, estado:'Abierto'|'En proceso'|'Resuelto')=>Promise<void>;
+  onCambiarPrioridad:(idTicket:number, prioridad:'Baja'|'Media'|'Alta')=>Promise<void>;
 }){
   const [filtro,setFiltro]=useState('Todos');
+  const [filtroPrioridad,setFiltroPrioridad]=useState('Todas');
   const [busqueda,setBusqueda]=useState('');
   const [ticketSeleccionadoId,setTicketSeleccionadoId]=useState<string|null>(null);
   const [respuesta,setRespuesta]=useState('');
+  const [enviando,setEnviando]=useState(false);
+  const detalleRef=useRef<HTMLElement>(null);
+
+  // Al elegir un ticket de la lista, el panel de detalle recien aparece debajo
+  // (antes no existia en el DOM), asi que hay que esperar a que React lo
+  // renderice para poder hacerle scroll -- por eso va en un efecto que
+  // reacciona al id seleccionado, no directo en el onClick de la fila.
+  useEffect(()=>{
+    if(ticketSeleccionadoId){
+      detalleRef.current?.scrollIntoView({behavior:'smooth', block:'start'});
+    }
+  },[ticketSeleccionadoId]);
 
   const ticketsFiltrados=tickets.filter(ticket=>{
     const coincideEstado=filtro==='Todos' || ticket.estado===filtro;
+    const coincidePrioridad=filtroPrioridad==='Todas' || ticket.prioridad===filtroPrioridad;
 
     const textoBusqueda=busqueda.trim().toLowerCase();
 
@@ -1200,10 +1717,10 @@ function AdminTicketsView({
       ticket.tipo.toLowerCase().includes(textoBusqueda) ||
       ticket.apartado.toLowerCase().includes(textoBusqueda);
 
-    return coincideEstado && coincideBusqueda;
+    return coincideEstado && coincidePrioridad && coincideBusqueda;
   });
 
-  const pendientes=tickets.filter(ticket=>ticket.estado==='Pendiente').length;
+  const pendientes=tickets.filter(ticket=>ticket.estado==='Abierto').length;
   const enProceso=tickets.filter(ticket=>ticket.estado==='En proceso').length;
   const resueltos=tickets.filter(ticket=>ticket.estado==='Resuelto').length;
 
@@ -1213,49 +1730,36 @@ function AdminTicketsView({
 
   const abrirTicket=(ticket:SupportTicket)=>{
     setTicketSeleccionadoId(ticket.id);
-    setRespuesta(ticket.respuesta || '');
+    setRespuesta('');
   };
 
-  const guardarRespuesta=()=>{
+  // El estado solo cambia junto con una respuesta real -- no tiene sentido
+  // marcar "En proceso" o "Resuelto" sin dejar constancia de que se hizo
+  // algo, asi que ambos botones exigen el mensaje y lo envian como parte de
+  // la misma accion (en vez de dos acciones sueltas e independientes).
+  const responderYCambiarEstado=async(nuevoEstado:'En proceso'|'Resuelto')=>{
     if(!ticketSeleccionado){
       return;
     }
 
     if(!respuesta.trim()){
-      alert('Escribe una respuesta antes de enviarla.');
+      alert('Escribe una respuesta antes de cambiar el estado del ticket.');
       return;
     }
 
-    setTickets(prev=>
-      prev.map(ticket=>
-        ticket.id===ticketSeleccionado.id
-          ? {
-              ...ticket,
-              respuesta:respuesta.trim(),
-              estado:ticket.estado==='Pendiente'
-                ? 'En proceso'
-                : ticket.estado
-            }
-          : ticket
-      )
-    );
-
-    alert(`Respuesta enviada al ticket ${ticketSeleccionado.id}.`);
-  };
-
-  const cambiarEstado=(nuevoEstado:'Pendiente'|'En proceso'|'Resuelto')=>{
-    if(!ticketSeleccionado){
-      return;
+    setEnviando(true);
+    try{
+      await onResponder(ticketSeleccionado.id_ticket, respuesta.trim());
+      await onCambiarEstado(ticketSeleccionado.id_ticket, nuevoEstado);
+      setRespuesta('');
+      alert(`Respuesta enviada y ticket ${ticketSeleccionado.id} marcado como "${nuevoEstado}".`);
+    }catch(error){
+      alert(error instanceof Error?error.message:'No se pudo actualizar el ticket.');
+    }finally{
+      setEnviando(false);
     }
-
-    setTickets(prev=>
-      prev.map(ticket=>
-        ticket.id===ticketSeleccionado.id
-          ? {...ticket,estado:nuevoEstado}
-          : ticket
-      )
-    );
   };
+
 
   return (
     <div className="adminTicketsPage">
@@ -1304,9 +1808,20 @@ function AdminTicketsView({
             onChange={e=>setFiltro(e.target.value)}
           >
             <option value="Todos">Todos los estados</option>
-            <option value="Pendiente">Pendientes</option>
+            <option value="Abierto">Pendientes</option>
             <option value="En proceso">En proceso</option>
             <option value="Resuelto">Resueltos</option>
+          </select>
+
+          <select
+            value={filtroPrioridad}
+            onChange={e=>setFiltroPrioridad(e.target.value)}
+          >
+            <option value="Todas">Toda prioridad</option>
+            <option value="Sin asignar">Sin asignar</option>
+            <option value="Alta">Alta</option>
+            <option value="Media">Media</option>
+            <option value="Baja">Baja</option>
           </select>
 
         </div>
@@ -1341,7 +1856,10 @@ function AdminTicketsView({
 
                 <div className="adminTicketInfo">
                   <strong>{ticket.titulo}</strong>
-                  <span>{ticket.tipo} · {ticket.apartado}</span>
+                  <div className="adminTicketMetaRow">
+                    <span>{ticket.tipo} · {ticket.apartado}</span>
+                    <span className={`ticketPrioridad ${prioridadClase(ticket.prioridad)}`}>{ticket.prioridad}</span>
+                  </div>
                 </div>
 
                 <span className={`adminTicketStatus status-${ticket.estado.toLowerCase().replace(' ','-')}`}>
@@ -1360,14 +1878,33 @@ function AdminTicketsView({
 
       {ticketSeleccionado && (
 
-        <section className="card adminTicketsPanel adminTicketDetail">
+        <section className="card adminTicketsPanel adminTicketDetail" ref={detalleRef}>
 
           <div className="cardHead">
 
             <div>
               <b>{ticketSeleccionado.id} · {ticketSeleccionado.titulo}</b>
-              <span>
-                {ticketSeleccionado.tipo} · {ticketSeleccionado.apartado}
+              <span className="adminTicketHeadMeta">
+                <span><Users size={12}/> {ticketSeleccionado.creadoPor} · {ticketSeleccionado.creadoPorEmail}</span>
+                <span>Tipo: <b>{ticketSeleccionado.tipo}</b></span>
+                <span>Apartado: <b>{ticketSeleccionado.apartado}</b></span>
+                <span>
+                  Prioridad:
+                  <select
+                    className={`ticketPrioridadSelect ${prioridadClase(ticketSeleccionado.prioridad)}`}
+                    value={ticketSeleccionado.prioridad}
+                    onClick={ev=>ev.stopPropagation()}
+                    onChange={e=>onCambiarPrioridad(ticketSeleccionado.id_ticket, e.target.value as 'Baja'|'Media'|'Alta')}
+                    title="Solo soporte puede ajustar que tan urgente es este ticket"
+                  >
+                    {ticketSeleccionado.prioridad==='Sin asignar' && (
+                      <option value="Sin asignar" disabled>Sin asignar</option>
+                    )}
+                    <option value="Baja">Baja</option>
+                    <option value="Media">Media</option>
+                    <option value="Alta">Alta</option>
+                  </select>
+                </span>
               </span>
             </div>
 
@@ -1396,41 +1933,45 @@ function AdminTicketsView({
                 <b>Estado:</b> {ticketSeleccionado.estado}
               </span>
 
-              {ticketSeleccionado.archivo && (
+              {ticketSeleccionado.archivo && !esImagenAdjunta(ticketSeleccionado.archivo) && (
                 <span>
                   <Paperclip size={13}/>
-                  <b>Archivo:</b> {ticketSeleccionado.archivo}
+                  <b>Archivo:</b> <AdjuntoTicket url={ticketSeleccionado.archivo}/>
                 </span>
               )}
 
             </div>
+
+            {ticketSeleccionado.archivo && esImagenAdjunta(ticketSeleccionado.archivo) && (
+              <ImagenAdjuntaTicket url={ticketSeleccionado.archivo}/>
+            )}
 
             <div className="adminTicketDescription">
               <span>Descripción</span>
               <p>{ticketSeleccionado.descripcion}</p>
             </div>
 
-            {ticketSeleccionado.respuesta && (
-              <div className="adminTicketExistingResponse">
-                <span>Respuesta actual</span>
-                <p>{ticketSeleccionado.respuesta}</p>
-              </div>
-            )}
+            <TicketThread respuestas={ticketSeleccionado.respuestas}/>
 
-            {ticketSeleccionado.respuestaUsuario && (
-              <div className="adminTicketUserResponse">
-                <span>Respuesta del usuario</span>
-                <p>{ticketSeleccionado.respuestaUsuario}</p>
+            {ticketSeleccionado.estado==='Resuelto' ? (
+              <div className="adminTicketActions">
+                <button
+                  type="button"
+                  className="adminTicketBtn"
+                  onClick={()=>onCambiarEstado(ticketSeleccionado.id_ticket,'En proceso')}
+                  title="Vuelve a dejar el ticket En proceso, por si se cerró por error"
+                >
+                  Reabrir ticket
+                </button>
               </div>
-            )}
-
+            ) : <>
             <label className="adminTicketResponse">
               Responder ticket
 
               <textarea
                 value={respuesta}
                 onChange={e=>setRespuesta(e.target.value)}
-                placeholder="Escribe la respuesta para el usuario..."
+                placeholder="Escribe la respuesta para el usuario... (obligatoria para cambiar el estado)"
                 rows={5}
               />
             </label>
@@ -1440,29 +1981,27 @@ function AdminTicketsView({
               <button
                 type="button"
                 className="adminTicketBtn"
-                onClick={()=>cambiarEstado('En proceso')}
+                onClick={()=>responderYCambiarEstado('En proceso')}
+                disabled={enviando}
+                title="Envía la respuesta de arriba y marca el ticket como En proceso"
               >
-                En proceso
-              </button>
-
-              <button
-                type="button"
-                className="adminTicketBtn"
-                onClick={()=>cambiarEstado('Resuelto')}
-              >
-                Resuelto
+                <Send size={15}/>
+                {enviando?'Enviando…':'Responder y marcar en proceso'}
               </button>
 
               <button
                 type="button"
                 className="adminTicketBtn primary"
-                onClick={guardarRespuesta}
+                onClick={()=>responderYCambiarEstado('Resuelto')}
+                disabled={enviando}
+                title="Envía la respuesta de arriba y marca el ticket como Resuelto"
               >
                 <Send size={15}/>
-                Enviar respuesta
+                {enviando?'Enviando…':'Responder y marcar resuelto'}
               </button>
 
             </div>
+            </>}
 
           </div>
 
@@ -1476,42 +2015,103 @@ function AdminTicketsView({
 
 function SoporteView({
   tickets,
-  setTickets
+  catalogos,
+  onCrear,
+  onResponderUsuario,
 }:{
   tickets:SupportTicket[];
-  setTickets:React.Dispatch<React.SetStateAction<SupportTicket[]>>;
+  catalogos:{tipos:CatalogoTicket[]; apartados:CatalogoApartado[]};
+  onCrear:(idTipo:number, idApartado:number|null, titulo:string, descripcion:string, archivoUrl:string|null)=>Promise<unknown>;
+  onResponderUsuario:(idTicket:number, mensaje:string)=>Promise<void>;
 }){
 
-  const [tipo,setTipo] = useState('Bug');
-  const [apartado,setApartado] = useState('Dashboard');
+  const [idTipo,setIdTipo] = useState<number|''>('');
+  const [idApartado,setIdApartado] = useState<number|''>('');
   const [titulo,setTitulo] = useState('');
   const [descripcion,setDescripcion] = useState('');
-  const [archivo,setArchivo] = useState<File|null>(null);
+  const [archivoUrl,setArchivoUrl] = useState('');
+  const [archivoError,setArchivoError] = useState('');
+  const [enviando,setEnviando] = useState(false);
+  // Borrador de respuesta del usuario por ticket (antes de enviarla al
+  // backend) -- se guarda por codigo_ticket, no se pisa con la respuesta ya
+  // persistida mientras se esta escribiendo una nueva.
+  const [borradores,setBorradores] = useState<Record<string,string>>({});
+  const [enviandoRespuesta,setEnviandoRespuesta] = useState<string|null>(null);
 
-  const crearTicket = () => {
+  // Primer tipo/apartado activo como valor por defecto del select, una vez
+  // que el catalogo real (tipo_ticket/apartado_ticket) termina de cargar.
+  useEffect(()=>{
+    if(idTipo==='' && catalogos.tipos.length) setIdTipo(catalogos.tipos[0].id_tipo);
+  },[catalogos.tipos, idTipo]);
+  useEffect(()=>{
+    if(idApartado==='' && catalogos.apartados.length) setIdApartado(catalogos.apartados[0].id_apartado);
+  },[catalogos.apartados, idApartado]);
+
+  // Limite de tamaño del archivo original (antes de codificar a base64,
+  // que agrega ~33% de peso) para no mandar imagenes gigantes al backend.
+  const LIMITE_ADJUNTO_BYTES = 3*1024*1024;
+
+  const seleccionarArchivo = (archivo:File|undefined) => {
+    setArchivoError('');
+    if(!archivo) return;
+    if(!archivo.type.startsWith('image/')){
+      setArchivoError('Solo se permiten imágenes (PNG, JPG, GIF, WEBP).');
+      return;
+    }
+    if(archivo.size > LIMITE_ADJUNTO_BYTES){
+      setArchivoError('La imagen pesa demasiado (máximo 3 MB).');
+      return;
+    }
+    const lector = new FileReader();
+    lector.onload = () => setArchivoUrl(typeof lector.result==='string'?lector.result:'');
+    lector.onerror = () => setArchivoError('No se pudo leer la imagen.');
+    lector.readAsDataURL(archivo);
+  };
+
+  const crearTicket = async () => {
     if(!titulo.trim() || !descripcion.trim()){
       alert('Completa el título y la descripción del problema.');
       return;
     }
+    if(idTipo===''){
+      alert('Selecciona un tipo de solicitud.');
+      return;
+    }
 
-    const nuevoTicket:SupportTicket = {
-      id:`SOP-${String(tickets.length + 1).padStart(4,'0')}`,
-      tipo,
-      apartado,
-      titulo,
-      descripcion,
-      estado:'Pendiente',
-      fecha:new Date().toLocaleString('es-CL'),
-      archivo:archivo ? archivo.name : ''
-    };
+    setEnviando(true);
+    try{
+      // La prioridad la decide soporte al revisar el ticket, no quien lo
+      // reporta -- el ticket entra "Sin asignar" (lo fija el backend) y
+      // soporte la ajusta despues (ver selector en AdminTicketsView).
+      const creado=await onCrear(idTipo, idApartado===''?null:idApartado, titulo.trim(), descripcion.trim(), archivoUrl.trim()||null);
+      setTitulo('');
+      setDescripcion('');
+      setArchivoUrl('');
+      setArchivoError('');
+      alert(`Ticket ${(creado as {codigo_ticket:string}).codigo_ticket} creado correctamente.`);
+    }catch(error){
+      alert(error instanceof Error?error.message:'No se pudo crear el ticket.');
+    }finally{
+      setEnviando(false);
+    }
+  };
 
-    setTickets(prev => [...prev,nuevoTicket]);
-
-    setTitulo('');
-    setDescripcion('');
-    setArchivo(null);
-
-    alert(`Ticket ${nuevoTicket.id} creado correctamente.`);
+  const enviarRespuestaUsuario = async (ticket:SupportTicket) => {
+    const mensaje=(borradores[ticket.id]||'').trim();
+    if(!mensaje){
+      alert('Escribe una respuesta antes de enviarla.');
+      return;
+    }
+    setEnviandoRespuesta(ticket.id);
+    try{
+      await onResponderUsuario(ticket.id_ticket, mensaje);
+      setBorradores(prev=>({...prev, [ticket.id]:''}));
+      alert(`Respuesta enviada al soporte para ${ticket.id}.`);
+    }catch(error){
+      alert(error instanceof Error?error.message:'No se pudo enviar la respuesta.');
+    }finally{
+      setEnviandoRespuesta(null);
+    }
   };
 
   return (
@@ -1590,13 +2190,10 @@ function SoporteView({
                 Tipo de solicitud
 
                 <select
-                  value={tipo}
-                  onChange={e=>setTipo(e.target.value)}
+                  value={idTipo}
+                  onChange={e=>setIdTipo(Number(e.target.value))}
                 >
-                  <option>Bug</option>
-                  <option>Problema técnico</option>
-                  <option>Sugerencia</option>
-                  <option>Solicitud de mejora</option>
+                  {catalogos.tipos.map(t=><option key={t.id_tipo} value={t.id_tipo}>{t.nombre_tipo}</option>)}
                 </select>
               </label>
 
@@ -1605,17 +2202,10 @@ function SoporteView({
                 Apartado afectado
 
                 <select
-                  value={apartado}
-                  onChange={e=>setApartado(e.target.value)}
+                  value={idApartado}
+                  onChange={e=>setIdApartado(Number(e.target.value))}
                 >
-                  <option>Dashboard</option>
-                  <option>Emergencias</option>
-                  <option>Recursos</option>
-                  <option>Historial</option>
-                  <option>Reportes</option>
-                  <option>Soporte</option>
-                  <option>Configuración</option>
-                  <option>Otro</option>
+                  {catalogos.apartados.map(a=><option key={a.id_apartado} value={a.id_apartado}>{a.nombre_apartado}</option>)}
                 </select>
               </label>
 
@@ -1647,20 +2237,25 @@ function SoporteView({
 
 
               <label>
-                Captura o archivo
+                Imagen adjunta (opcional, máx. 3 MB)
 
                 <input
                   type="file"
-                  accept="image/*,.pdf"
-                  onChange={e=>setArchivo(e.target.files?.[0] || null)}
+                  accept="image/*"
+                  onChange={e=>seleccionarArchivo(e.target.files?.[0])}
                 />
               </label>
 
+            {archivoError && (
+              <div className="supportFileError">{archivoError}</div>
+            )}
 
-            {archivo && (
+            {archivoUrl.trim() && !archivoError && (
               <div className="supportFile">
-                <Paperclip size={16}/>
-                <span>{archivo.name}</span>
+                <img src={archivoUrl} alt="Vista previa de la imagen adjunta" className="supportFilePreview"/>
+                <button type="button" className="supportFileRemove" onClick={()=>setArchivoUrl('')}>
+                  Quitar imagen
+                </button>
               </div>
             )}
 
@@ -1670,9 +2265,10 @@ function SoporteView({
               <button
                 className="supportSubmit"
                 onClick={crearTicket}
+                disabled={enviando}
               >
                 <Ticket size={17}/>
-                Generar ticket
+                {enviando?'Generando…':'Generar ticket'}
               </button>
 
             </div>
@@ -1724,7 +2320,10 @@ function SoporteView({
 
                     <strong>{ticket.id}</strong>
 
-                    <span>{ticket.estado}</span>
+                    <div className="ticketTopBadges">
+                      <span className={`ticketPrioridad ${prioridadClase(ticket.prioridad)}`}>{ticket.prioridad}</span>
+                      <span>{ticket.estado}</span>
+                    </div>
 
                   </div>
 
@@ -1743,19 +2342,18 @@ function SoporteView({
                   </div>
 
 
-                  {ticket.archivo && (
+                  {ticket.archivo && !esImagenAdjunta(ticket.archivo) && (
                     <div className="ticketAttachment">
                       <Paperclip size={13}/>
-                      {ticket.archivo}
+                      <AdjuntoTicket url={ticket.archivo}/>
                     </div>
                   )}
 
-                  {ticket.respuesta && (
-                    <div className="ticketSupportResponse">
-                      <strong>Respuesta del soporte</strong>
-                      <p>{ticket.respuesta}</p>
-                    </div>
+                  {ticket.archivo && esImagenAdjunta(ticket.archivo) && (
+                    <ImagenAdjuntaTicket url={ticket.archivo}/>
                   )}
+
+                  <TicketThread respuestas={ticket.respuestas}/>
 
                   {ticket.estado==='En proceso' && (
                     <div className="ticketUserReply">
@@ -1763,17 +2361,10 @@ function SoporteView({
                       <strong>Responder al soporte</strong>
 
                       <textarea
-                        value={ticket.respuestaUsuario || ''}
+                        value={borradores[ticket.id] ?? ''}
                         onChange={e=>{
                           const texto=e.target.value;
-
-                          setTickets(prev=>
-                            prev.map(t=>
-                              t.id===ticket.id
-                                ? {...t,respuestaUsuario:texto}
-                                : t
-                            )
-                          );
+                          setBorradores(prev=>({...prev, [ticket.id]:texto}));
                         }}
                         placeholder="Escribe una respuesta para el equipo de soporte..."
                         rows={4}
@@ -1781,28 +2372,11 @@ function SoporteView({
 
                       <button
                         type="button"
-                        onClick={()=>{
-                          if(!ticket.respuestaUsuario?.trim()){
-                            alert('Escribe una respuesta antes de enviarla.');
-                            return;
-                          }
-
-                          setTickets(prev=>
-                            prev.map(t=>
-                              t.id===ticket.id
-                                ? {
-                                    ...t,
-                                    respuestaUsuario:t.respuestaUsuario!.trim()
-                                  }
-                                : t
-                            )
-                          );
-
-                          alert(`Respuesta enviada al soporte para ${ticket.id}.`);
-                        }}
+                        onClick={()=>enviarRespuestaUsuario(ticket)}
+                        disabled={enviandoRespuesta===ticket.id}
                       >
                         <Send size={14}/>
-                        Enviar respuesta
+                        {enviandoRespuesta===ticket.id?'Enviando…':'Enviar respuesta'}
                       </button>
 
                     </div>
@@ -1826,7 +2400,7 @@ function SoporteView({
   );
 }
 
-function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRefresh,onNotify,auth,onLogout,isAdmin,timeoutMinutos,onChangeTimeout}:{soundOn:boolean;onToggleSound:(v:boolean)=>void;autoRefreshSec:number;onChangeAutoRefresh:(v:number)=>void;onNotify:(s:string)=>void;auth:{nombre:string;email:string;rol:UserRole};onLogout:()=>void;isAdmin:boolean;timeoutMinutos:number;onChangeTimeout:(v:number)=>void}){
+function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRefresh,onNotify,auth,onLogout,isAdmin,timeoutMinutos,onChangeTimeout,companiaDesignada}:{soundOn:boolean;onToggleSound:(v:boolean)=>void;autoRefreshSec:number;onChangeAutoRefresh:(v:number)=>void;onNotify:(s:string)=>void;auth:{nombre:string;email:string;rol:UserRole};onLogout:()=>void;isAdmin:boolean;timeoutMinutos:number;onChangeTimeout:(v:number)=>void;companiaDesignada:string|null}){
   return <div className="sectionGrid">
     <div className="card sectionCard">
       <div className="cardHead"><div><b>Cuenta</b><span>Sesión iniciada</span></div></div>
@@ -1834,6 +2408,7 @@ function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRef
         <label className="configRow">Nombre<input value={auth.nombre} disabled/></label>
         <label className="configRow">Correo<input value={auth.email} disabled/></label>
         <label className="configRow">Rol<input value={isAdmin?'Administrador / Despachador':'Visualizador (solo lectura)'} disabled/></label>
+        {auth.rol==='visualizador' && <label className="configRow">Compañía designada<input value={companiaDesignada ?? 'Sin compañía asignada'} disabled/></label>}
         <div className="configNote">Nombre, correo y rol vienen de la cuenta real verificada por el backend (login con JWT) — no son editables, ni hay registro público: solo los operadores autorizados del equipo pueden entrar.</div>
         <button className="locateBtn logoutBtn" onClick={onLogout}><LogOut size={14}/> Cerrar sesión</button>
       </div>
@@ -1870,17 +2445,76 @@ function ConfiguracionView({soundOn,onToggleSound,autoRefreshSec,onChangeAutoRef
   </div>;
 }
 
+// Sesion persistida en localStorage para que F5/recargar la pagina no pida
+// login de nuevo. La version anterior de esto validaba el token guardado
+// de forma ASINCRONA al montar la app (un fetch a /auth/me antes de fijar
+// `auth`), y esa espera causaba una carrera real con el patrullaje: varios
+// efectos que dependen de `auth` arrancaban con `auth` todavia en null,
+// disparando llamadas (p.ej. /route) sin el header Authorization y
+// recibiendo 401 sueltos justo al reiniciar. La solucion aca es NO validar
+// nada de forma asincrona: el token guardado se confia de entrada (se lee
+// de forma SINCRONA en el useState inicial, antes de que corra ningun
+// efecto), y si en realidad ya vencio (dura 12h, ver EXPIRACION_HORAS en
+// core/auth.py), el primer fetch real que haga la app devuelve 401 y el
+// usuario simplemente tiene que loguearse de nuevo -- no distinto a lo que
+// ya pasaba antes si alguien dejaba la sesion abierta mas de 12 horas.
+const SESION_KEY='alerta360-sesion';
+const SECCION_KEY='alerta360-seccion';
+type Auth={token:string; nombre:string; email:string; rol:UserRole};
+function leerSesionGuardada():Auth|null{
+  try{
+    const raw=localStorage.getItem(SESION_KEY);
+    return raw?JSON.parse(raw):null;
+  }catch{ return null; }
+}
+
 function App(){
- // La sesion vive SOLO en memoria (no en localStorage a proposito): cada
- // vez que se recarga la pagina o se reinicia el servidor de desarrollo,
- // se pide login de nuevo. De paso, esto elimina la validacion asincrona
- // de un token guardado al montar la app -- que era la causa de una
- // carrera con el patrullaje (401 sueltos en /route justo al reiniciar).
- const [auth,setAuth]=useState<{token:string; nombre:string; email:string; rol:UserRole}|null>(null);
+ const [auth,setAuth]=useState<Auth|null>(leerSesionGuardada);
 
  // currentToken (variable de modulo) es lo que leen las funciones sueltas
  // fuera de React (obtenerRutaReal) para mandar el header Authorization.
  useEffect(()=>{ currentToken=auth?.token ?? null; },[auth]);
+
+ // Estado real de la sesion segun Postgres (emergencia.usuario.estado_usuario):
+ // "Activo"/"Fuera de servicio" lo decide el propio operador haciendo clic
+ // en el badge del header (ver toggleEstadoServicio), nunca el sistema solo
+ // -- este efecto solo LEE el valor actual (p.ej. si otra pestaña lo cambio)
+ // y lo refleja aca.
+ const [activoDB,setActivoDB]=useState(false);
+ const [cambiandoEstado,setCambiandoEstado]=useState(false);
+ // Compania a la que esta designado el operador (emergencia.usuario.id_compania,
+ // ver docker/migracion_usuario_compania.sql) -- null si no tiene una asignada.
+ const [companiaDesignada,setCompaniaDesignada]=useState<string|null>(null);
+ useEffect(()=>{
+   if(!auth) { setActivoDB(false); setCompaniaDesignada(null); return; }
+   let cancelado=false;
+   const consultar=async()=>{
+     try{
+       const resp=await fetch(`${API_BASE}/auth/me`,{headers:{Authorization:`Bearer ${auth.token}`}});
+       if(!resp.ok) return;
+       const data=await resp.json();
+       if(!cancelado){ setActivoDB(!!data.activo); setCompaniaDesignada(data.compania ?? null); }
+     }catch{ /* red caida: se mantiene el ultimo valor conocido */ }
+   };
+   consultar();
+   const id=window.setInterval(consultar,30000);
+   return ()=>{ cancelado=true; window.clearInterval(id); };
+ },[auth]);
+
+ const toggleEstadoServicio=async()=>{
+   if(!auth || cambiandoEstado) return;
+   const nuevoActivo=!activoDB;
+   setCambiandoEstado(true);
+   try{
+     const resp=await fetch(`${API_BASE}/auth/estado`,{
+       method:'PATCH',
+       headers:{'Content-Type':'application/json',Authorization:`Bearer ${auth.token}`},
+       body:JSON.stringify({activo:nuevoActivo}),
+     });
+     if(resp.ok) setActivoDB(nuevoActivo);
+   }catch{ /* sin red: se mantiene el estado anterior */ }
+   finally{ setCambiandoEstado(false); }
+ };
 
 const handleLogin=(
   token:string,
@@ -1888,12 +2522,24 @@ const handleLogin=(
   email:string,
   rol:UserRole
 )=>{
-  setAuth({token,nombre,email,rol});
-  setSection(rol==='soporte'?'Tickets':'Dashboard');
+  const sesion={token,nombre,email,rol};
+  setAuth(sesion);
+  try{ localStorage.setItem(SESION_KEY, JSON.stringify(sesion)); }catch{ /* localStorage no disponible (modo incognito, etc.) -- la sesion sigue funcionando, solo no sobrevive a un F5 */ }
+  // Admin entra directo al formulario de ingreso rapido de emergencias
+  // (CAD) -- visualizador y soporte mantienen su landing de siempre.
+  setSection(rol==='soporte'?'Tickets':rol==='admin'?'Formulario':'Dashboard');
 };
 
  const handleLogout=()=>{
+   // Best-effort: marca la cuenta como inactiva en emergencia.usuario antes
+   // de limpiar la sesion local. Si falla (sin red, token ya vencido) no
+   // bloquea el logout -- el usuario igual sale de la app.
+   if(auth?.token){
+     fetch(`${API_BASE}/auth/logout`,{method:'POST',headers:{Authorization:`Bearer ${auth.token}`}}).catch(()=>{});
+   }
    setAuth(null);
+   setActivoDB(false);
+   try{ localStorage.removeItem(SESION_KEY); localStorage.removeItem(SECCION_KEY); }catch{ /* ignorar */ }
  };
  // RBAC: "admin" (coordinacion/despacho, puede asignar/rechazar y editar
  // configuracion administrativa) vs "visualizador" (solo lectura -- puede
@@ -1934,15 +2580,121 @@ useEffect(()=>{
   };
 
   cargarEmergencias();
+  // Sin este repoleo, si la emergencia cambiaba de estado por otra via
+  // (otra pestaña, un reinicio de la base en pruebas, etc.) esta pestaña
+  // se quedaba para siempre con el estado viejo (ej. "Asignada" aunque el
+  // vehiculo ya habia vuelto a su cuartel en la base real).
+  const intervalo=window.setInterval(()=>{ void cargarEmergencias(); },10000);
 
   return()=>{
     cancelado=true;
+    window.clearInterval(intervalo);
   };
+},[auth]);
+
+// Historial persistido en el backend (archivo local, NO en Postgres -- ver
+// /historial en main.py). Antes el historial vivia solo en memoria del
+// navegador (useState inicial en []) y se perdia con cada F5; esto lo
+// recupera al entrar y lo mantiene sincronizado entre pestañas/roles.
+useEffect(()=>{
+  if(!auth) return;
+  let cancelado=false;
+  const cargarHistorial=async()=>{
+    try{
+      const respuesta=await fetch(`${API_BASE}/historial`, {credentials:'include', headers:{...authHeaders()}});
+      if(!respuesta.ok || cancelado) return;
+      const datos=await respuesta.json();
+      if(cancelado) return;
+      const entradas:HistorialEntry[]=(datos.historial||[]).map((e:any)=>({
+        id:e.id, ts:e.ts, tipo:e.tipo as HistorialTipo, texto:e.texto,
+      }));
+      setHistorial(entradas);
+      const maxId=entradas.reduce((m,e)=>Math.max(m,e.id),0);
+      if(maxId>=historialIdRef.current) historialIdRef.current=maxId+1;
+    }catch(error){
+      if(!cancelado) console.error('No se pudo cargar el historial persistido:', error);
+    }
+  };
+  cargarHistorial();
+  const intervalo=window.setInterval(()=>{ void cargarHistorial(); },10000);
+  return()=>{ cancelado=true; window.clearInterval(intervalo); };
+},[auth]);
+
+// Tickets de Soporte: ya vienen de verdad desde Postgres (ticket,
+// respuesta_ticket, tipo_ticket, apartado_ticket -- ver /tickets en
+// main.py), no de un useState local que se perdia con cada F5.
+//
+// Ademas, cada vez que se repolea se avisa (toast) al creador del ticket
+// si le llego una respuesta OFICIAL nueva de soporte desde la ultima vez
+// -- antes no se enteraba hasta entrar el solo a mirar.
+const ultimasRespuestasOficialesRef=useRef<Record<string,number>>({});
+const primerCargaTicketsRef=useRef(true);
+const cargarTickets=async()=>{
+  try{
+    const respuesta=await fetch(`${API_BASE}/tickets`, {credentials:'include', headers:authHeaders()});
+    if(!respuesta.ok) return;
+    const datos=await respuesta.json();
+    const nuevos:SupportTicket[]=(datos.tickets||[]).map(mapearTicketBD);
+
+    if(!primerCargaTicketsRef.current && auth){
+      for(const t of nuevos){
+        const cantidadOficiales=t.respuestas.filter(r=>r.tipo_respuesta==='Respuesta').length;
+        const anterior=ultimasRespuestasOficialesRef.current[t.id];
+        if(
+          t.creadoPorEmail===auth.email &&
+          anterior!==undefined &&
+          cantidadOficiales>anterior
+        ){
+          notify(`Soporte respondió tu ticket ${t.id}: "${t.titulo}"`);
+        }
+      }
+    }
+    nuevos.forEach(t=>{
+      ultimasRespuestasOficialesRef.current[t.id]=t.respuestas.filter(r=>r.tipo_respuesta==='Respuesta').length;
+    });
+    primerCargaTicketsRef.current=false;
+
+    setTickets(nuevos);
+  }catch(error){
+    console.error('No se pudieron cargar los tickets:', error);
+  }
+};
+useEffect(()=>{
+  if(!auth) return;
+  void cargarTickets();
+  const intervalo=window.setInterval(()=>{ void cargarTickets(); },10000);
+  return()=>{ window.clearInterval(intervalo); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+},[auth]);
+
+useEffect(()=>{
+  if(!auth) return;
+  let cancelado=false;
+  (async()=>{
+    try{
+      const respuesta=await fetch(`${API_BASE}/tickets/catalogos`, {credentials:'include', headers:authHeaders()});
+      if(!respuesta.ok || cancelado) return;
+      const datos=await respuesta.json();
+      if(!cancelado) setCatalogoTickets({tipos:datos.tipos||[], apartados:datos.apartados||[]});
+    }catch(error){
+      if(!cancelado) console.error('No se pudo cargar el catálogo de tickets:', error);
+    }
+  })();
+  return()=>{cancelado=true;};
 },[auth]);
 
  //--------------------------------------------
 
- const [section,setSection]=useState('Dashboard');
+ // Tambien se restaura el apartado que se estaba viendo (no solo la
+ // sesion): si no, un F5 dejaba logueado pero igual "interrumpia" saltando
+ // siempre de vuelta al Dashboard/Formulario por defecto en vez de seguir
+ // donde estaba el operador.
+ const [section,setSection]=useState<string>(()=>{
+   try{ return localStorage.getItem(SECCION_KEY) || 'Dashboard'; }catch{ return 'Dashboard'; }
+ });
+ useEffect(()=>{
+   try{ localStorage.setItem(SECCION_KEY, section); }catch{ /* ignorar */ }
+ },[section]);
  const [toast,setToast]=useState('');
  const [refresh,setRefresh]=useState(0);
  const [operationalCenter,setOperationalCenter]=useState(VALPARAISO_CENTER);
@@ -1967,6 +2719,7 @@ useEffect(()=>{
  const [rechazadosPorEmergencia,setRechazadosPorEmergencia]=useState<Record<number,Set<string>>>({});
  const [historial,setHistorial]=useState<HistorialEntry[]>([]);
  const [tickets,setTickets]=useState<SupportTicket[]>([]);
+ const [catalogoTickets,setCatalogoTickets]=useState<{tipos:CatalogoTicket[]; apartados:CatalogoApartado[]}>({tipos:[],apartados:[]});
  // ETA real e idoneidad de tipo de cada asignacion hecha esta sesion —
  // base para "Tiempo promedio" y "Cobertura estimada" del dashboard,
  // calculados de verdad en vez de numeros fijos.
@@ -1988,6 +2741,11 @@ useEffect(()=>{
  // estado de Mapa/Recursos/Emergencias (paneles independientes). 'todos'
  // = sin filtro.
  const [filtroCuartel,setFiltroCuartel]=useState<string>('todos');
+ // Emergencia elegida a mano al tocar su marcador en el mapa (cualquier
+ // rol, incluido visualizador) -- tiene prioridad sobre la seleccion
+ // automatica (ver currentEmergencia) para que la tarjeta lateral pueda
+ // mostrar cualquier alerta activa, no solo la que toca despachar primero.
+ const [emergenciaSeleccionadaId,setEmergenciaSeleccionadaId]=useState<number|null>(null);
 
  // Menu lateral colapsable (mas espacio para mapas/paneles). Preferencia de
  // UI pura, sin dato sensible -- se guarda en localStorage para que no
@@ -2035,6 +2793,7 @@ useEffect(()=>{
  // patron que soundOnRef mas abajo).
  const resourcesRef=useRef(resources);
  const resourcesCargadosRef=useRef(false);
+ const despachosReanudadosRef=useRef(false);
  const catalogoBDRef=useRef<Resource[]>([]);
  const operacionesPendientesRef=useRef<Set<string>>(new Set());
  const soundOnRef=useRef(soundOn);
@@ -2128,15 +2887,32 @@ useEffect(()=>{
 
       catalogoBDRef.current = recursosBD;
       setResources(anteriores => {
-        // PostgreSQL define la lista de unidades y sus datos descriptivos.
-        // Solo el administrador conserva el tramo local de una simulación en curso.
+        // PostgreSQL manda siempre el estado (radioState, datos descriptivos).
+        // Solo se conserva la animacion local (tramo/destino) cuando la base
+        // CONFIRMA que sigue siendo el mismo despacho en curso -- si la base
+        // ya no coincide (ej. quedo "pegado" en memoria pero la base dice
+        // 6-0), se descarta la simulacion local y se usa el dato real, para
+        // que un carro nunca quede atascado visualmente despues de recargar.
+        // Orden del trayecto en curso. El poll cada 10s puede llegar ANTES
+        // de que guardarPosiciones (cada 2s) haya alcanzado a persistir el
+        // ultimo avance local (ej. 6-3->6-7 recien ocurrido) -- si en ese
+        // caso se exige que coincidan exactamente, la base "vieja" (6-3)
+        // pisa el avance local (6-7) y el destino se pierde, dejando el
+        // carro pegado para siempre en "En trayecto". Por eso se conserva
+        // lo local tambien cuando la base solo esta un paso atras.
+        const ORDEN_TRAYECTO: Record<string, number> = { '6-3': 0, '6-7': 1, '6-8': 2 };
         const previos = new Map(anteriores.map(r => [r.id, r]));
         const resultado = recursosBD.map(db => {
           const anterior = previos.get(db.id);
-          if (isAdmin && anterior?.destino && ['6-3', '6-7', '6-8'].includes(anterior.radioState)) {
-            return { ...db, lat: anterior.lat, lng: anterior.lng,
-              radioState: anterior.radioState, tramo: anterior.tramo,
-              destino: anterior.destino, ultimaActualizacion: anterior.ultimaActualizacion };
+          if (
+            anterior?.destino &&
+            anterior.radioState in ORDEN_TRAYECTO &&
+            db.radioState in ORDEN_TRAYECTO &&
+            ORDEN_TRAYECTO[db.radioState] <= ORDEN_TRAYECTO[anterior.radioState]
+          ) {
+            return { ...db, radioState: anterior.radioState, lat: anterior.lat, lng: anterior.lng,
+              tramo: anterior.tramo, destino: anterior.destino,
+              ultimaActualizacion: anterior.ultimaActualizacion };
           }
           return db;
         });
@@ -2189,7 +2965,7 @@ useEffect(()=>{
 
       await Promise.all(
         resourcesRef.current.filter(recurso =>
-          recurso.radioState === '6-3' || recurso.radioState === '6-7' || recurso.radioState === '6-8'
+          recurso.destino && (recurso.radioState === '6-3' || recurso.radioState === '6-7' || recurso.radioState === '6-8')
         ).map(async (recurso) => {
           const posicion = posicionActual(recurso, ahora);
           const codigo = recurso.codigo ?? recurso.id;
@@ -2581,8 +3357,15 @@ const intentarPatrullaje = async () => {
              };
            }));
          }
-         if(Array.isArray(data.queue)) setQueue(data.queue);
-         if(Array.isArray(data.historial)) setHistorial(data.historial);
+         // La cola de emergencias YA se trae directo de Postgres cada 10s
+         // (ver el otro efecto mas arriba, corre para cualquier rol) -- esa
+         // fuente es la real y confiable. Si ademas se pisara aca con la
+         // "foto" que publico el admin cada 2s, y esa foto estuviera vieja o
+         // vacia (ej. el admin recien abrio su pestaña y su propia cola
+         // todavia no cargaba), el visualizador veia las alertas aparecer y
+         // desaparecer cada 2 segundos por esta carrera entre ambas fuentes.
+         // Mismo motivo para no pisar "historial": ya se trae persistido
+         // desde el backend (GET /historial, cada 10s, cualquier rol).
          if(Array.isArray(data.metricasAsignacion)) setMetricasAsignacion(data.metricasAsignacion);
          if(data.rechazadosPorEmergencia){
            const reconstruido:Record<number,Set<string>>={};
@@ -2599,19 +3382,46 @@ const intentarPatrullaje = async () => {
  // Filtro global por cuartel (solo Dashboard): lista de companias reales
  // disponibles y el subconjunto de recursos de la compañia elegida. Con
  // 'todos' no se filtra nada -- se usa el listado completo de siempre.
- const companiasDisponibles=useMemo(()=>Array.from(new Set(resources.map(r=>r.compania))).sort(),[resources]);
+ // Orden NUMERICO por el numero de compañia ("1ª Cía...", "2ª Cía...",
+ // "10ª Cía..."), no alfabetico -- .sort() por defecto compara como texto
+ // y dejaba "10ª" antes que "1ª" (el caracter despues del "1" en "10ª" es
+ // "0", que es menor que "ª" en "1ª").
+ const numeroCompania=(nombre:string)=>Number(nombre.match(/^(\d+)/)?.[1] ?? Infinity);
+ const companiasDisponibles=useMemo(
+   ()=>Array.from(new Set(resources.map(r=>r.compania))).sort((a,b)=>numeroCompania(a)-numeroCompania(b)),
+   [resources]
+ );
  const resourcesFiltrados=useMemo(
    ()=>filtroCuartel==='todos'?resources:resources.filter(r=>r.compania===filtroCuartel),
    [resources, filtroCuartel]
  );
 
- const currentEmergencia=queue.find(e=>e.status==='Activa')??null;
+ // Si se eligio una emergencia a mano desde el mapa, esa manda sobre la
+ // seleccion automatica (mientras siga activa -- si ya se resolvio y
+ // desaparecio de la cola, cae sola de vuelta al criterio automatico).
+ // Ese criterio automatico prioriza una emergencia Activa (sin despachar
+ // todavia); si no hay ninguna, muestra la siguiente que siga en curso
+ // (Asignada o En atencion) en vez de dejar el panel vacio -- siempre hay
+ // algo que mostrar mientras quede una emergencia sin finalizar.
+ const currentEmergencia=
+   (emergenciaSeleccionadaId!=null ? queue.find(e=>e.id===emergenciaSeleccionadaId) : undefined) ??
+   queue.find(e=>e.status==='Activa')??
+   queue.find(e=>e.status==='Asignada'||e.status==='ASIGNADA')??
+   queue.find(e=>e.status==='EN_ATENCION')??
+   null;
  const claveActual=currentEmergencia?claves[currentEmergencia.codigo]:undefined;
  // La recomendacion se calcula SOLO sobre las unidades del cuartel elegido
  // en el filtro (si hay uno activo) -- asi "RECURSO RECOMENDADO" refleja
  // que unidad de ESA compañia respondería, no la mejor de toda la flota.
+ // Ademas, solo se sugiere una unidad cuando la emergencia en pantalla
+ // sigue "Activa" (sin despachar todavia) -- si ya tiene alguien respondiendo
+ // (Asignada/En atencion) y se sigue mostrando aca solo porque no quedaba
+ // ninguna otra Activa, no tiene sentido insistir con recomendar otro
+ // carro para ella.
  const recommendation=useMemo(
-   ()=>pickRecommendation(resourcesFiltrados,currentEmergencia,rechazadosPorEmergencia[currentEmergencia?.id??-1]||new Set(), claveActual, now),
+   ()=>currentEmergencia?.status==='Activa'
+     ? pickRecommendation(resourcesFiltrados,currentEmergencia,rechazadosPorEmergencia[currentEmergencia?.id??-1]||new Set(), claveActual, now)
+     : null,
    [resourcesFiltrados,currentEmergencia,rechazadosPorEmergencia,claveActual,now]
  );
  // Distancia/ETA reales para la recomendacion actual: se recalculan segun
@@ -2642,6 +3452,14 @@ const intentarPatrullaje = async () => {
 
  const pushHistorial=(tipo:HistorialTipo, texto:string)=>{
    setHistorial(h=>[{id:historialIdRef.current++, ts:Date.now(), tipo, texto}, ...h].slice(0,200));
+   // Se persiste en el backend (archivo local, NO en Postgres) para que el
+   // historial sobreviva a un F5 y se vea igual desde cualquier cuenta --
+   // antes vivia solo en memoria del navegador y se perdia con cada recarga.
+   void fetch(`${API_BASE}/historial`, {
+     method: 'POST', credentials: 'include',
+     headers: {'Content-Type': 'application/json', ...authHeaders()},
+     body: JSON.stringify({tipo, texto}),
+   }).catch(error => console.error('No se pudo guardar el evento en el historial persistente:', error));
  };
 
 
@@ -2711,6 +3529,24 @@ const spawnEmergencia = (): Emergency => {
     lat: latCuartel,
     lng: lngCuartel,
   };
+
+  // Guarda cuando deberia ocurrir cada transicion (epoch ms) para poder
+  // retomar el ciclo si la pagina se recarga antes de que termine -- ver
+  // comentario de DespachoPersistido mas arriba.
+  const horaInicio = Date.now();
+  const llegaEn = horaInicio + duracionTramoMs;
+  const finalizaEn = llegaEn + tiempoTrabajo;
+  const regresaEn = finalizaEn + duracionTramoMs;
+  guardarDespachoLS(resourceId, {
+    emergenciaId: emergenciaSnap.id,
+    codigo: emergenciaSnap.codigo,
+    address: emergenciaSnap.address,
+    destLat: emergenciaSnap.lat,
+    destLng: emergenciaSnap.lng,
+    homeLat: home.lat,
+    homeLng: home.lng,
+    llegaEn, finalizaEn, regresaEn,
+  });
 
   // 1. Esperar hasta que termine el trayecto de ida.
   const tLlegada = window.setTimeout(() => {
@@ -2865,6 +3701,7 @@ const spawnEmergencia = (): Emergency => {
             notify(`Error guardando regreso a cuartel de ${resourceId}`);
           });
           pushHistorial('liberacion', `${resourceId} regresó a su cuartel y está disponible (6-0)`);
+          limpiarDespachoLS(resourceId);
         }, tramoVuelta.duracionMs);
 
         registerResourceTimer(resourceId, tFin);
@@ -2890,6 +3727,181 @@ const spawnEmergencia = (): Emergency => {
 
   registerResourceTimer(resourceId, tLlegada);
  };
+
+ // Retoma un despacho que quedo en curso en localStorage (ver
+ // DespachoPersistido) cuando la pagina se recarga a mitad de camino. No usa
+ // OSRM ni anima el regreso punto a punto -- en esta ruta de recuperacion
+ // (que solo ocurre tras un F5/cierre de pestana) lo que importa es que la
+ // emergencia SIEMPRE termine finalizada y el vehiculo SIEMPRE vuelva a su
+ // cuartel, no la fidelidad visual del trayecto.
+ const reanudarDespachoDesdeReload = (resourceId: string, registro: DespachoPersistido) => {
+  const ahora = Date.now();
+  const home = { lat: registro.homeLat, lng: registro.homeLng };
+  const destino = {
+    emergenciaId: registro.emergenciaId,
+    lat: registro.destLat,
+    lng: registro.destLng,
+    address: registro.address,
+  };
+
+  const volverACuartel = async () => {
+    setResources(rs => {
+      const resultado = rs.map(r => r.id === resourceId
+        ? { ...r, radioState: '6-0' as RadioState, lat: home.lat, lng: home.lng,
+            destino: undefined, tramo: undefined, ultimaActualizacion: Date.now() }
+        : r);
+      resourcesRef.current = resultado;
+      return resultado;
+    });
+    try {
+      const respuesta = await fetch(`${API_BASE}/resources/${encodeURIComponent(resourceId)}/position`, {
+        method: 'PATCH', credentials: 'include',
+        headers: {'Content-Type': 'application/json', ...authHeaders()},
+        body: JSON.stringify({lat: home.lat, lng: home.lng, estado: '6-0'}),
+      });
+      if (!respuesta.ok) throw new Error(`HTTP ${respuesta.status}: ${await respuesta.text()}`);
+    } catch (error) {
+      console.error(`No se pudo guardar 6-0 de ${resourceId} al reanudar tras recargar:`, error);
+    }
+    pushHistorial('liberacion', `${resourceId} regresó a su cuartel (ciclo retomado tras recargar la página)`);
+    limpiarDespachoLS(resourceId);
+  };
+
+  const finalizarYRegresar = async (msHastaRegreso: number) => {
+    try {
+      await cambiarEstadoEmergenciaBD(registro.emergenciaId, 'FINALIZADA');
+      advanceQueue(registro.emergenciaId);
+      pushHistorial('liberacion', `Emergencia #${registro.emergenciaId} finalizada en PostgreSQL (ciclo retomado tras recargar la página)`);
+    } catch (error) {
+      // Puede ya estar finalizada (otro intento, otra pestana) -- no es fatal.
+      console.warn(`Emergencia #${registro.emergenciaId}: no se pudo finalizar al reanudar (puede que ya lo estuviera):`, error);
+    }
+    // Se pide una ruta OSRM nueva (origen=emergencia, destino=cuartel) para
+    // el tiempo que falte -- antes se dejaba tramo:undefined y, sin ruta
+    // que animar, posicionActual() devolvia la ultima posicion conocida sin
+    // moverse: con un F5 a mitad de regreso, el vehiculo parecia ya haber
+    // llegado (o seguir pegado en el incidente) en vez de seguir viajando.
+    const msRestantes = Math.max(1000, msHastaRegreso);
+    setResources(rs => rs.map(r => r.id === resourceId
+      ? { ...r, radioState: '6-8' as RadioState, destino, ultimaActualizacion: Date.now() }
+      : r));
+    try {
+      const tramoVuelta = await prepararTramoOSRM(resourceId, destino, home, msRestantes);
+      setResources(rs => rs.map(r => r.id === resourceId && r.radioState === '6-8'
+        ? { ...r, tramo: tramoVuelta }
+        : r));
+    } catch (error) {
+      console.error(`No se pudo recalcular la ruta de vuelta de ${resourceId} al reanudar:`, error);
+    }
+    const t = window.setTimeout(() => { void volverACuartel(); }, msRestantes);
+    registerResourceTimer(resourceId, t);
+  };
+
+  if (ahora >= registro.regresaEn) {
+    // Todo el ciclo deberia haber terminado mientras la pagina estaba
+    // cerrada o recargando -- cerrar la emergencia y dejar el vehiculo en
+    // su cuartel de inmediato, sin animar nada.
+    void (async () => {
+      try {
+        await cambiarEstadoEmergenciaBD(registro.emergenciaId, 'FINALIZADA');
+        advanceQueue(registro.emergenciaId);
+      } catch (error) {
+        console.warn(`Emergencia #${registro.emergenciaId}: probablemente ya estaba finalizada:`, error);
+      }
+      await volverACuartel();
+    })();
+    return;
+  }
+
+  if (ahora >= registro.finalizaEn) {
+    // Ya deberia estar de regreso.
+    void finalizarYRegresar(registro.regresaEn - ahora);
+    return;
+  }
+
+  if (ahora >= registro.llegaEn) {
+    // Deberia estar atendiendo en el lugar.
+    setResources(rs => rs.map(r => r.id === resourceId
+      ? { ...r, radioState: '6-7' as RadioState, lat: destino.lat, lng: destino.lng,
+          destino, tramo: undefined, ultimaActualizacion: Date.now() }
+      : r));
+    void cambiarEstadoEmergenciaBD(registro.emergenciaId, 'EN_ATENCION').catch(()=>{});
+    const t = window.setTimeout(
+      () => { void finalizarYRegresar(registro.regresaEn - registro.finalizaEn); },
+      Math.max(0, registro.finalizaEn - ahora)
+    );
+    registerResourceTimer(resourceId, t);
+    return;
+  }
+
+  // Todavia deberia estar en camino -- se pide una ruta OSRM nueva
+  // (cuartel -> emergencia) para el tiempo que falte hasta llegaEn, por la
+  // misma razon que en finalizarYRegresar: sin tramo, el vehiculo quedaba
+  // congelado en su ultima posicion conocida (normalmente el cuartel, que
+  // es como ya habia salido pero sin moverse, o a veces se leia como si ya
+  // hubiera llegado).
+  const msRestantesIda = Math.max(1000, registro.llegaEn - ahora);
+  setResources(rs => rs.map(r => r.id === resourceId
+    ? { ...r, radioState: '6-3' as RadioState, destino, ultimaActualizacion: Date.now() }
+    : r));
+  void (async () => {
+    try {
+      const tramoIda = await prepararTramoOSRM(resourceId, home, destino, msRestantesIda);
+      setResources(rs => rs.map(r => r.id === resourceId && r.radioState === '6-3'
+        ? { ...r, tramo: tramoIda }
+        : r));
+    } catch (error) {
+      console.error(`No se pudo recalcular la ruta de ida de ${resourceId} al reanudar:`, error);
+    }
+  })();
+  const tLlegadaReanudado = window.setTimeout(() => {
+    setResources(rs => rs.map(r => r.id === resourceId
+      ? { ...r, radioState: '6-7' as RadioState, lat: destino.lat, lng: destino.lng,
+          destino, tramo: undefined, ultimaActualizacion: Date.now() }
+      : r));
+    void cambiarEstadoEmergenciaBD(registro.emergenciaId, 'EN_ATENCION').catch(()=>{});
+    const tTrabajoReanudado = window.setTimeout(
+      () => { void finalizarYRegresar(registro.regresaEn - registro.finalizaEn); },
+      Math.max(0, registro.finalizaEn - registro.llegaEn)
+    );
+    registerResourceTimer(resourceId, tTrabajoReanudado);
+  }, msRestantesIda);
+  registerResourceTimer(resourceId, tLlegadaReanudado);
+ };
+
+ // Al cargar la pagina (login o F5), revisa si quedo algun despacho a medio
+ // camino guardado en localStorage (ver DespachoPersistido) y lo retoma --
+ // una sola vez por carga, cuando ya se tiene la flota real desde Postgres
+ // (para saber el cuartel/home de cada unidad y no pisar un estado que haya
+ // cambiado por otra via mientras tanto).
+ useEffect(() => {
+   if (!auth || !recursosCargados || despachosReanudadosRef.current) return;
+   despachosReanudadosRef.current = true;
+
+   let claves: string[] = [];
+   try {
+     claves = Object.keys(localStorage).filter(k => k.startsWith(DESPACHO_LS_PREFIX));
+   } catch {
+     return;
+   }
+
+   for (const clave of claves) {
+     const resourceId = clave.slice(DESPACHO_LS_PREFIX.length);
+     try {
+       const crudo = localStorage.getItem(clave);
+       if (!crudo) continue;
+       const registro: DespachoPersistido = JSON.parse(crudo);
+       const existe = resourcesRef.current.some(r => r.id === resourceId);
+       if (!existe) { limpiarDespachoLS(resourceId); continue; }
+       pushHistorial('en_emergencia', `${resourceId}: ciclo de despacho retomado tras recargar la página`);
+       reanudarDespachoDesdeReload(resourceId, registro);
+     } catch (error) {
+       console.error(`No se pudo reanudar el despacho guardado de ${resourceId}:`, error);
+       limpiarDespachoLS(resourceId);
+     }
+   }
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [auth, recursosCargados]);
 
  // Nucleo compartido del despacho real: lo usan tanto la asignacion
  // automatica (el boton ASIGNAR sobre la recomendacion) como la asignacion
@@ -2965,8 +3977,26 @@ const spawnEmergencia = (): Emergency => {
     }
 
     // Confirmar la asignación en PostgreSQL antes de iniciar la simulación.
-    await cambiarEstadoEmergenciaBD(emergenciaSnap.id, 'ASIGNADA');
-    setQueue(q => q.map(e => e.id === emergenciaSnap.id ? {...e, status: 'Asignada'} : e));
+    const despacho = await fetch(`${API_BASE}/emergencies/${emergenciaSnap.id}/assignments`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {'Content-Type': 'application/json', ...authHeaders()},
+      body: JSON.stringify({codigo_recurso: resourceId, manual}),
+    });
+    if (!despacho.ok) {
+      throw new Error(`No se pudo guardar el carro asignado: ${await despacho.text()}`);
+    }
+    const asignacion = await despacho.json();
+    setQueue(q => q.map(e => e.id === emergenciaSnap.id
+      ? {...e, status: asignacion.estado === 'EN_ATENCION' ? 'EN_ATENCION' : 'Asignada'} : e));
+
+    // Si esta era la emergencia elegida a mano (clic en el mapa o recien
+    // creada desde el formulario), se suelta esa seleccion manual apenas
+    // se le asigna un recurso -- si no, "RECURSO RECOMENDADO" se quedaba
+    // pegado en ella mostrando "ya tiene una unidad respondiendo" para
+    // siempre, en vez de pasar sola a la siguiente emergencia Activa que
+    // todavia necesita despacho (ver currentEmergencia).
+    setEmergenciaSeleccionadaId(id => id === emergenciaSnap.id ? null : id);
 
     // Solo ahora comienza el desplazamiento.
     clearResourceTimers(resourceId);
@@ -3048,6 +4078,10 @@ const spawnEmergencia = (): Emergency => {
      notify('Esa unidad ya no está disponible para asignar.');
      return;
    }
+   if(unidadesEnCaminoA(resources, currentEmergencia.id) >= LIMITE_UNIDADES_POR_EMERGENCIA){
+     notify(`Ya hay ${LIMITE_UNIDADES_POR_EMERGENCIA} unidades despachadas a esta emergencia (límite para emergencias regulares).`);
+     return;
+   }
    despacharUnidad(unidad, currentEmergencia, true);
  };
 
@@ -3071,11 +4105,134 @@ const spawnEmergencia = (): Emergency => {
    setSection('Dashboard');
  };
 
+ // Solo ubicar en el mapa una emergencia puntual (desde la tabla de
+ // Emergencias) sin tocar el orden de la cola ni forzarla como la
+ // emergencia "en curso" del panel de asignacion -- a diferencia de
+ // atenderEmergencia, esto es solo para mirar donde esta ocurriendo.
+ const verEmergenciaEnMapa=(id:number)=>{
+   const target=queue.find(e=>e.id===id);
+   if(!target) return;
+   setFocus({lat:target.lat,lng:target.lng});
+   setSection('Dashboard');
+ };
+
  // Desde Recursos, tocar el nombre de una compañia lleva al Dashboard con
  // el mapa centrado y acercado (zoom 16, ver MapPanel) en ese cuartel.
  const verCuartelEnMapa=(lat:number, lng:number)=>{
    setFocus({lat,lng});
    setSection('Dashboard');
+ };
+
+ // Marcar/quitar "Fuera de servicio" (6-9) manualmente desde Recursos --
+ // solo admin, y solo sobre unidades realmente quietas (6-0 o 6-9): no
+ // tiene sentido sacar de servicio a un carro a mitad de un despacho real.
+ // Reusa el mismo PATCH de posicion que ya usa el resto del despacho, sin
+ // mover al vehiculo (mismas coordenadas), solo cambia el estado_radio.
+ // Fuera de servicio/Reactivar: abierto a admin Y visualizador (a
+ // diferencia del resto del despacho/asignacion, que sigue siendo solo de
+ // admin) -- por eso usa /estado, no /position, que ademas mueve el
+ // vehiculo y se mantiene exclusivo de admin en el backend.
+ const cambiarFueraDeServicio=async(resource:Resource, nuevoEstado:'6-0'|'6-9')=>{
+   if(isAdminSoporte) return;
+   try{
+     const respuesta=await fetch(`${API_BASE}/resources/${encodeURIComponent(resource.codigo ?? resource.id)}/estado`,{
+       method:'PATCH', credentials:'include',
+       headers:{'Content-Type':'application/json', ...authHeaders()},
+       body:JSON.stringify({estado:nuevoEstado}),
+     });
+     if(!respuesta.ok) throw new Error(`HTTP ${respuesta.status}: ${await respuesta.text()}`);
+     setResources(rs=>{
+       const resultado=rs.map(r=>r.id===resource.id?{...r, radioState:nuevoEstado, ultimaActualizacion:Date.now()}:r);
+       resourcesRef.current=resultado;
+       return resultado;
+     });
+     pushHistorial('liberacion', `${resource.id} marcada ${nuevoEstado==='6-9'?'Fuera de servicio':'Disponible'} manualmente`);
+     notify(`${resource.id} ahora está ${nuevoEstado==='6-9'?'fuera de servicio':'disponible'}.`);
+   }catch(error){
+     console.error('No se pudo cambiar el estado del recurso:', error);
+     notify(error instanceof Error?error.message:'No se pudo cambiar el estado del recurso.');
+   }
+ };
+
+ // Formulario "Nueva emergencia" (admin) -- POST /emergencies ya existia en
+ // el backend sin usar desde el frontend; esto lo conecta. Tras crearla se
+ // refresca `queue` de inmediato (sin esperar el poll de 10s), se manda al
+ // operador al Dashboard, y se fuerza esa emergencia como la seleccionada
+ // (mismo mecanismo que tocar su marcador en el mapa) para que la
+ // recomendacion de recurso aparezca de inmediato sobre la que acaba de crear.
+ const recargarEmergenciasAhora=async()=>{
+   try{
+     const emergencias=await obtenerEmergenciasBD();
+     setQueue(emergencias);
+     setApiError(null);
+   }catch(error){
+     console.error('No se pudieron recargar las emergencias:', error);
+   }
+ };
+
+ const crearEmergenciaBD=async(payload:{codigo_emergencia:string; direccion_emergencia:string; latitud_emergencia:number; longitud_emergencia:number; prioridad_emergencia:number})=>{
+   const respuesta=await fetch(`${API_BASE}/emergencies`,{
+     method:'POST', credentials:'include',
+     headers:{'Content-Type':'application/json', ...authHeaders()},
+     body:JSON.stringify(payload),
+   });
+   if(!respuesta.ok) throw new Error(`HTTP ${respuesta.status}: ${await respuesta.text()}`);
+   const creada=await respuesta.json();
+   await recargarEmergenciasAhora();
+   setSection('Dashboard');
+   setEmergenciaSeleccionadaId(creada.id_emergencia);
+   pushHistorial('nueva_emergencia', `Emergencia #${creada.id_emergencia} (${creada.codigo_emergencia}) creada manualmente desde el formulario`);
+   return creada;
+ };
+
+ // Tickets de Soporte contra Postgres real (ticket/respuesta_ticket/
+ // tipo_ticket/apartado_ticket -- ver /tickets en main.py). Cada mutacion
+ // vuelve a pedir la lista completa en vez de actualizar el estado local a
+ // mano, para que tipo/apartado/autor/respuestas queden siempre resueltos
+ // tal como los devuelve el backend.
+ const crearTicketBD=async(idTipo:number, idApartado:number|null, titulo:string, descripcion:string, archivoUrl:string|null)=>{
+   const respuesta=await fetch(`${API_BASE}/tickets`,{
+     method:'POST', credentials:'include',
+     headers:{'Content-Type':'application/json', ...authHeaders()},
+     body:JSON.stringify({id_tipo:idTipo, id_apartado:idApartado, titulo_ticket:titulo, descripcion, archivo_url:archivoUrl}),
+   });
+   if(!respuesta.ok) throw new Error(`HTTP ${respuesta.status}: ${await respuesta.text()}`);
+   const creado=await respuesta.json();
+   await cargarTickets();
+   return creado;
+ };
+
+ const responderTicketBD=async(idTicket:number, mensaje:string, tipoRespuesta:'Respuesta'|'Usuario')=>{
+   const respuesta=await fetch(`${API_BASE}/tickets/${idTicket}/respuestas`,{
+     method:'POST', credentials:'include',
+     headers:{'Content-Type':'application/json', ...authHeaders()},
+     body:JSON.stringify({mensaje, tipo_respuesta:tipoRespuesta}),
+   });
+   if(!respuesta.ok) throw new Error(`HTTP ${respuesta.status}: ${await respuesta.text()}`);
+   await cargarTickets();
+ };
+
+ const cambiarEstadoTicketBD=async(idTicket:number, estado:'Abierto'|'En proceso'|'Resuelto')=>{
+   const respuesta=await fetch(`${API_BASE}/tickets/${idTicket}/estado`,{
+     method:'PATCH', credentials:'include',
+     headers:{'Content-Type':'application/json', ...authHeaders()},
+     body:JSON.stringify({estado}),
+   });
+   if(!respuesta.ok) throw new Error(`HTTP ${respuesta.status}: ${await respuesta.text()}`);
+   await cargarTickets();
+ };
+
+ const cambiarPrioridadTicketBD=async(idTicket:number, prioridad:'Baja'|'Media'|'Alta')=>{
+   const respuesta=await fetch(`${API_BASE}/tickets/${idTicket}/prioridad`,{
+     method:'PATCH', credentials:'include',
+     headers:{'Content-Type':'application/json', ...authHeaders()},
+     body:JSON.stringify({prioridad}),
+   });
+   if(!respuesta.ok){
+     notify(`No se pudo cambiar la prioridad: ${await respuesta.text()}`);
+     return;
+   }
+   await cargarTickets();
  };
 
  useEffect(()=>{
@@ -3147,25 +4304,12 @@ const spawnEmergencia = (): Emergency => {
  // Metricas de asignacion (para "Tiempo promedio"/"Cobertura estimada"),
  // acotadas al cuartel filtrado cuando corresponde.
  const metricasFiltradas=filtroCuartel==='todos'?metricasAsignacion:metricasAsignacion.filter(m=>m.compania===filtroCuartel);
- // Emergencias "de este cuartel": aquellas cuya unidad asignada pertenece a
- // la compañia filtrada (una emergencia sin unidad asignada aun no es "de"
- // ningun cuartel en particular).
- const queueFiltrada=useMemo(()=>{
-   if(filtroCuartel==='todos') return queue;
-   const companiaPorEmergencia=new Map<number,string>();
-   resources.forEach(r=>{ if(r.destino) companiaPorEmergencia.set(r.destino.emergenciaId, r.compania); });
-   return queue.filter(e=>companiaPorEmergencia.get(e.id)===filtroCuartel);
- },[queue, resources, filtroCuartel]);
- // Emergencias mostradas en el mapa del Dashboard cuando hay un cuartel
- // filtrado: las asignadas a ese cuartel, mas la emergencia actual (la que
- // esta en el tope de la cola y necesita despacho) para que siempre se vea
- // que es lo proximo a atender, sea cual sea el cuartel elegido.
- const emergenciasMapaDashboard=useMemo(()=>{
-   if(filtroCuartel==='todos') return queue;
-   const porId=new Map<number,Emergency>(queueFiltrada.map(e=>[e.id,e]));
-   if(currentEmergencia) porId.set(currentEmergencia.id, currentEmergencia);
-   return Array.from(porId.values());
- },[queue, queueFiltrada, currentEmergencia, filtroCuartel]);
+ // El filtro de cuartel acota SOLO los recursos (que unidades se muestran,
+ // cuales se consideran para la recomendacion) -- las alertas activas son
+ // reales independientemente de que cuartel este filtrado, asi que tanto el
+ // conteo como el mapa siempre muestran todas, nunca se ocultan por el
+ // filtro de cuartel.
+ const emergenciasMapaDashboard=queue;
  // "Tiempo promedio": promedio real del ETA calculado en cada asignacion
  // hecha esta sesion (metricasAsignacion), no un numero fijo. Sin
  // asignaciones aun, se muestra "—" en vez de inventar un valor.
@@ -3246,11 +4390,14 @@ const spawnEmergencia = (): Emergency => {
   ) : (
     <>
       {[
+        // "Formulario" (ingreso rapido de emergencias, CAD) solo para admin
+        // -- cambia el orden y el flujo de navegacion unicamente en esa
+        // vista; visualizador mantiene exactamente el menu de siempre.
+        ...(isAdmin ? [['Formulario',FilePlus2]] : []),
         ['Dashboard',BarChart3],
         ['Emergencias',AlertTriangle],
         ['Recursos',Truck],
         ['Historial',History],
-        ['Reportes',Layers3],
         ['Soporte',LifeBuoy],
         ['Configuración',Settings]
       ].map(([label,Icon]:any)=>(
@@ -3273,23 +4420,27 @@ const spawnEmergencia = (): Emergency => {
     ? 'Gestión de tickets de soporte'
     : <>Central de coordinación · Valparaíso{!isAdmin?' · Acceso de solo lectura':''}{!isAdmin && esperandoEstadoRemoto?' · Esperando datos en vivo del operador…':''}{!isAdmin && estadoRemoto?` · En vivo (operador: ${estadoRemoto.publicadoPor})`:''}</>
   }
-</p></div><div className="headerActions">{!isAdmin && !isAdminSoporte && <div className="readOnlyBadge" title="Tu cuenta solo puede visualizar, no asignar recursos"><Eye size={13}/> Solo lectura</div>}<button onClick={()=>setTheme(t=>t==='dark'?'light':'dark')} title={theme==='dark'?'Cambiar a tema claro':'Cambiar a tema oscuro'}>{theme==='dark'?<Sun size={17}/>:<Moon size={17}/>}</button><div className="live"><span/> EN VIVO</div><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
-    {section==='Emergencias' && !isAdminSoporte && <EmergenciasView queue={queue} claves={claves} now={now} onAtender={atenderEmergencia} isAdmin={isAdmin}/>}
-    {section==='Recursos' && !isAdminSoporte && <RecursosView resources={resources} alertaTimeoutIds={unidadesConAlertaTimeout} onVerCuartelEnMapa={verCuartelEnMapa}/>}
+</p></div><div className="headerActions">{!isAdmin && !isAdminSoporte && <div className="readOnlyBadge" title="Tu cuenta solo puede visualizar, no asignar recursos"><Eye size={13}/> Solo lectura</div>}{isAdmin && <div className="readOnlyBadge" title="Tu cuenta puede asignar recursos y despachar"><Eye size={13}/> Admin</div>}{isAdminSoporte && <div className="readOnlyBadge" title="Tu cuenta gestiona tickets de soporte"><Eye size={13}/> Soporte</div>}<button onClick={()=>setTheme(t=>t==='dark'?'light':'dark')} title={theme==='dark'?'Cambiar a tema claro':'Cambiar a tema oscuro'}>{theme==='dark'?<Sun size={17}/>:<Moon size={17}/>}</button><div className={`live liveToggle${activoDB?'':' liveOff'}${cambiandoEstado?' liveBusy':''}`} role="button" tabIndex={0} aria-disabled={cambiandoEstado} onClick={toggleEstadoServicio} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();toggleEstadoServicio();}}} title="Toca para cambiar tu estado de servicio (emergencia.usuario.estado_usuario)"><span/> {activoDB?'Activo':'Fuera de servicio'}</div><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
+    {section==='Formulario' && isAdmin && <NuevaEmergenciaView claves={claves} onCrear={crearEmergenciaBD}/>}
+    {section==='Emergencias' && !isAdminSoporte && <EmergenciasView queue={queue} claves={claves} now={now} onAtender={atenderEmergencia} onVerUbicacion={verEmergenciaEnMapa} isAdmin={isAdmin}/>}
+    {section==='Recursos' && !isAdminSoporte && <RecursosView resources={resources} alertaTimeoutIds={unidadesConAlertaTimeout} onVerCuartelEnMapa={verCuartelEnMapa} isAdmin={isAdmin} puedeCambiarEstado={!isAdminSoporte} onCambiarFueraDeServicio={cambiarFueraDeServicio}/>}
     {section==='Historial' && !isAdminSoporte && <HistorialView historial={historial} now={now}/>}
-    {section==='Reportes' && !isAdminSoporte && <ReportesView historial={historial}/>}
-    {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} onNotify={notify} auth={auth} onLogout={handleLogout} isAdmin={isAdmin} timeoutMinutos={timeoutMinutos} onChangeTimeout={setTimeoutMinutos}/>}
+    {section==='Configuración' && <ConfiguracionView soundOn={soundOn} onToggleSound={setSoundOn} autoRefreshSec={autoRefreshSec} onChangeAutoRefresh={setAutoRefreshSec} onNotify={notify} auth={auth} onLogout={handleLogout} isAdmin={isAdmin} timeoutMinutos={timeoutMinutos} onChangeTimeout={setTimeoutMinutos} companiaDesignada={companiaDesignada}/>}
     {section==='Soporte' && (
       <SoporteView
         tickets={tickets}
-        setTickets={setTickets}
+        catalogos={catalogoTickets}
+        onCrear={crearTicketBD}
+        onResponderUsuario={(id,mensaje)=>responderTicketBD(id,mensaje,'Usuario')}
       />
     )}
 
     {section==='Tickets' && isAdminSoporte && (
       <AdminTicketsView
         tickets={tickets}
-        setTickets={setTickets}
+        onResponder={(id,mensaje)=>responderTicketBD(id,mensaje,'Respuesta')}
+        onCambiarEstado={cambiarEstadoTicketBD}
+        onCambiarPrioridad={cambiarPrioridadTicketBD}
       />
     )}
     {section==='Dashboard' && !isAdminSoporte && <>
@@ -3300,11 +4451,11 @@ const spawnEmergencia = (): Emergency => {
       </select></label>
       {filtroCuartel!=='todos' && <button className="linkBtn" onClick={()=>setFiltroCuartel('todos')}>Quitar filtro</button>}
     </div>
-    <section className="kpis"><Kpi icon={<AlertTriangle/>} label="Emergencias activas" value={String(filtroCuartel==='todos'?queue.length:queueFiltrada.length)} meta={currentEmergencia?`atendiendo clave ${currentEmergencia.codigo}`:'sin emergencia activa'} tone="acento"/><Kpi icon={<Truck/>} label="Recursos disponibles" value={String(disponibles)} meta={filtroCuartel==='todos'?`de ${resources.length} unidades`:`de ${resourcesFiltrados.length} unidades de ${filtroCuartel}`} tone="azul"/><Kpi icon={<Clock3/>} label="Tiempo promedio" value={tiempoPromedioLabel} meta={tiempoPromedioMeta} tone="acento"/><Kpi icon={<ShieldCheck/>} label="Cobertura estimada" value={coberturaLabel} meta={coberturaMeta} tone="azul"/></section>
-    <section className="workspace"><div className="mapCard"><div className="cardHead"><div><b>Mapa operacional</b><span>Emergencias y recursos en tiempo real{isAdmin?' · toca un cuartel o vehículo para asignarlo manualmente':' · modo solo lectura'}</span></div></div><MapPanel resources={resourcesFiltrados} emergencies={emergenciasMapaDashboard} focus={focus} center={operationalCenter} onAsignarManual={handleAsignarManual} isAdmin={isAdmin}/><div className="legend"><span><i className="dot green"/> Disponible</span><span><i className="dot red"/> En misión</span><span><i className="dot blue"/> Ruta recomendada</span></div></div>
+    <section className="kpis"><Kpi icon={<AlertTriangle/>} label="Emergencias activas" value={String(queue.length)} meta={currentEmergencia?`atendiendo clave ${currentEmergencia.codigo}`:'sin emergencia activa'} tone="acento"/><Kpi icon={<Truck/>} label="Recursos disponibles" value={String(disponibles)} meta={filtroCuartel==='todos'?`de ${resources.length} unidades`:`de ${resourcesFiltrados.length} unidades de ${filtroCuartel}`} tone="azul"/><Kpi icon={<Clock3/>} label="Tiempo promedio" value={tiempoPromedioLabel} meta={tiempoPromedioMeta} tone="acento"/><Kpi icon={<ShieldCheck/>} label="Cobertura estimada" value={coberturaLabel} meta={coberturaMeta} tone="azul"/></section>
+    <section className="workspace"><div className="mapCard"><div className="cardHead"><div><b>Mapa operacional</b><span>Emergencias y recursos en tiempo real{isAdmin?' · toca un cuartel o vehículo para asignarlo manualmente':' · modo solo lectura'}</span></div></div><MapPanel resources={resourcesFiltrados} emergencies={emergenciasMapaDashboard} focus={focus} center={operationalCenter} onAsignarManual={handleAsignarManual} onSelectEmergencia={setEmergenciaSeleccionadaId} isAdmin={isAdmin}/><div className="legend"><span><i className="dot green"/> Disponible</span><span><i className="dot red"/> En misión</span><span><i className="dot blue"/> Ruta recomendada</span></div></div>
       <div className="sideCards">
-      {currentEmergencia?<div className="emergencyCard"><div
-  className={`tag prioridad-badge ${obtenerClasePrioridad(currentEmergencia.prioridad)}`}>{obtenerNivelPrioridad(currentEmergencia.prioridad)} PRIORIDAD</div><div className="emergencyTitle"><div className="danger"><AlertTriangle/></div><div><b>Emergencia #{currentEmergencia.id}</b><span>{claveActual?.nombre??currentEmergencia.codigo}</span></div></div><div className="details"><p><MapPin size={18}/><span>{currentEmergencia.address}</span></p><p><Clock3 size={18}/><span>Tiempo transcurrido: <b>{elapsedLabel(currentEmergencia.creadaEn,now)}</b></span></p><p><Radio size={18}/><span>Estado: <b>{currentEmergencia.status}</b></span></p></div><div className="infoTipRow"><InfoTip texto={explicarEmergenciaActual(currentEmergencia.codigo, now)}/></div><button className="locateBtn" onClick={()=>setFocus({lat:currentEmergencia.lat,lng:currentEmergencia.lng})}><Crosshair size={13}/> Ver en el mapa</button></div>:<div className="emergencyCard"><p className="emptyState">Sin emergencias activas por el momento.</p></div>}
+      {currentEmergencia?<div className="emergencyCard"><div className="emergencyHeadRow"><div className="emergencyTitle"><div className="danger"><AlertTriangle/></div><div><b>Emergencia #{currentEmergencia.id}</b><span>{claveActual?.nombre??currentEmergencia.codigo}</span></div></div><div
+  className={`tag prioridad-badge ${obtenerClasePrioridad(currentEmergencia.prioridad)}`}>{obtenerNivelPrioridad(currentEmergencia.prioridad)} PRIORIDAD</div></div><div className="details"><p><MapPin size={18}/><span>{currentEmergencia.address}</span></p><p><Clock3 size={18}/><span>Tiempo transcurrido: <b>{elapsedLabel(currentEmergencia.creadaEn,now)}</b></span></p><p><Radio size={18}/><span>Estado: <b>{currentEmergencia.status}</b></span></p></div><div className="infoTipRow"><InfoTip texto={explicarEmergenciaActual(currentEmergencia.codigo, now)}/></div><button className="locateBtn" onClick={()=>setFocus({lat:currentEmergencia.lat,lng:currentEmergencia.lng})}><Crosshair size={13}/> Ver en el mapa</button></div>:<div className="emergencyCard"><p className="emptyState">Sin emergencias activas por el momento.</p></div>}
       <div className="recommend"><div className="recHead"><div><span>RECURSO RECOMENDADO</span><small>{filtroCuartel==='todos'?'Asignación multicriterio':`Asignación multicriterio · solo ${filtroCuartel}`}</small></div>{recommendation && recomendacionInfo && <div className="score" style={{color:scoreColor(Math.round(score(recommendation,claveActual,recomendacionInfo.distanciaKm,recomendacionInfo.etaMin)))}}>{Math.round(score(recommendation,claveActual,recomendacionInfo.distanciaKm,recomendacionInfo.etaMin))}<small>/100</small></div>}</div>
       {recommendation && recomendacionInfo?<>
        <div className="recBody"><div className="vehicleIcon">{resourceIcon(recommendation.type)}</div><div><b>{recommendation.name}</b><span className="recBodyCia">{recommendation.compania} · {recommendation.sector}</span><p><Clock3 size={17}/><span>ETA estimado: <strong>{recomendacionInfo.etaMin} min</strong></span></p><p><Navigation size={17}/><span>Distancia: <strong>{recomendacionInfo.distanciaKm} km</strong></span></p><p><CheckCircle2 size={17}/><span>Disponibilidad: <strong>{recommendation.radioState==='6-8'?'Regresando (redirigida a esta emergencia)':'Disponible en cuartel'}</strong></span></p><p><ShieldCheck size={17}/><span>Capacidad: <strong>{recommendation.capacity}</strong></span></p><p><Users size={17}/><span>Dotación: <strong>{recommendation.crew} personas</strong></span></p></div></div>
@@ -3313,9 +4464,9 @@ const spawnEmergencia = (): Emergency => {
        {isAdmin
          ?<div className="actions"><button className="assign" onClick={handleAsignar}>ASIGNAR</button><button className="reject" onClick={handleRechazar}>RECHAZAR</button></div>
          :<p className="emptyState readOnlyNote"><Lock size={12}/> Tu cuenta es de solo lectura: no puede asignar ni rechazar unidades.</p>}
-      </>:<p className="emptyState">{filtroCuartel==='todos'?'Sin unidades disponibles para esta emergencia en este momento — todas las compatibles están en misión.':`Sin unidades disponibles de ${filtroCuartel} para esta emergencia en este momento.`}</p>}
+      </>:<p className="emptyState">{currentEmergencia && currentEmergencia.status!=='Activa'?'Esta emergencia ya tiene una unidad respondiendo.':(filtroCuartel==='todos'?'Sin unidades disponibles para esta emergencia en este momento — todas las compatibles están en misión.':`Sin unidades disponibles de ${filtroCuartel} para esta emergencia en este momento.`)}</p>}
       </div></div></section>
-      <section className="workspace"><div className="mapCard"><div className="cardHead"><div><b>Mapa de calor · Demanda de Bomberos</b><span>Predicción ML · próximas {(periodos.length||4)*3} horas · toca una zona para ver el detalle</span></div><span className="mlBadge">ML</span></div><HeatMapPanel zonas={currentZonas} seleccionadaId={zonaSeleccionada} focus={focusHeatmap} onSelectZona={z=>{setZonaSeleccionada(z.zona_id);setFocusHeatmap(z.centroid);}}/><div className="legend heatLegend"><span><i className="dot green"/> Baja</span><span><i className="dot yellow"/> Media</span><span><i className="dot red"/> Alta</span></div></div>
+      <section className="workspace"><div className="mapCard heatMapCard"><div className="cardHead"><div><b>Mapa de calor · Demanda de Bomberos</b><span>Predicción ML · próximas {(periodos.length||4)*3} horas · toca una zona para ver el detalle</span></div><span className="mlBadge">ML</span></div><HeatMapPanel zonas={currentZonas} seleccionadaId={zonaSeleccionada} focus={focusHeatmap} onSelectZona={z=>{setZonaSeleccionada(z.zona_id);setFocusHeatmap(z.centroid);}}/><div className="legend heatLegend"><span><i className="dot green"/> Baja</span><span><i className="dot yellow"/> Media</span><span><i className="dot red"/> Alta</span></div></div>
       <div className="sideCards"><div className="card alertsCard"><div className="cardHead"><div><b>Alertas predictivas</b><span>Zonas y horarios de mayor riesgo</span></div></div>
       <div className="alertsBody">
       {apiError && <div className="apiErrorBox"><AlertTriangle size={14}/> {apiError}</div>}
@@ -3406,7 +4557,7 @@ function Kpi({icon,label,value,meta,tone='acento'}:{icon:React.ReactNode;label:s
 // encima (sin boton ni clic), para no ocupar espacio fijo en pantalla con
 // parrafos largos que casi nadie necesita leer todo el tiempo.
 function InfoTip({texto}:{texto:string}){return <span className="infoTip" tabIndex={0}><Info size={20}/><span className="infoTipBubble">{texto}</span></span>;}
-function Activity({icon,title,detail,time}:{icon:React.ReactNode;title:string;detail:string;time:string}){return <div className="activityRow"><div className="activityIcon">{icon}</div><div><b>{title}</b><span>{detail}</span></div><time>{time}</time></div>}
+function Activity({icon,title,detail,time,estado}:{icon:React.ReactNode;title:string;detail:string;time:string;estado?:{texto:string; clase:string}|null}){return <div className="activityRow"><div className="activityIcon">{icon}</div><div><b>{title}</b><span>{detail}</span></div>{estado && <span className={`historialEstado ${estado.clase}`}>{estado.texto}</span>}<time>{time}</time></div>}
 
 createRoot(document.getElementById('root')!).render(<App/>);
 

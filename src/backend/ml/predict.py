@@ -11,41 +11,45 @@ import pandas as pd
 from core.tiempo import ahora_chile, con_hora_chile
 
 
-from .weather import clima_esperado
+from . import entradas_prediccion_db
 
-from .zones import PERIOD_HOURS, Zone
+from .contratos import PERIOD_HOURS, Zone
+from .db_catalog import obtener_zonas, obtener_tipos
 from database.database import obtener_conexion
 
 def _catalogo_db():
-    with obtener_conexion() as conn, conn.cursor() as cur:
-        cur.execute("""SELECT id_zona, nombre_zona, latitud_minima, latitud_maxima,
-                       longitud_minima, longitud_maxima FROM emergencia.zona
-                       WHERE actividad = TRUE ORDER BY id_zona""")
-        zonas = []
-        for ident, nombre, latmin, latmax, lngmin, lngmax in cur.fetchall():
-            if None in (latmin, latmax, lngmin, lngmax):
-                raise ValueError(f"La zona {ident} ({nombre}) no tiene límites geográficos completos.")
-            zonas.append(Zone(str(ident), nombre, latmin, latmax, lngmin, lngmax, 1.0, {}))
-        cur.execute("SELECT codigo_emergencia FROM emergencia.tipo_emergencia ORDER BY codigo_emergencia")
-        tipos = [row[0] for row in cur.fetchall() if row[0] != "10-12"]
+    zonas=[]
+    for row in obtener_zonas():
+        bounds=row['bounds']
+        values=[bounds[k] for k in ('lat_min','lat_max','lng_min','lng_max')]
+        if any(v is None for v in values):
+            raise ValueError(f"La zona {row['zona_id']} no tiene límites completos.")
+        zonas.append(Zone(row['zona_id'],row['nombre'],*map(float,values)))
+    tipos=[t['codigo'] for t in obtener_tipos() if t['codigo'] != '10-12']
     if not zonas or not tipos:
-        raise ValueError("Se necesitan zonas activas con coordenadas y tipos de emergencia en PostgreSQL.")
-    return zonas, tipos
+        raise ValueError('Faltan zonas o tipos en PostgreSQL.')
+    return zonas,tipos,{z.id:z.id for z in zonas}
 
 ARTIFACT_PATH = pathlib.Path(__file__).parent / "artifacts" / "demand_model.joblib"
 
 _artifact = None
+_artifact_mtime_ns = None
 
 
-def _load_artifact():
-    global _artifact
-    if _artifact is None:
-        if not ARTIFACT_PATH.exists():
-            raise RuntimeError(
-                "No se encontro el modelo entrenado. Ejecuta 'python -m ml.train_model' "
-                "dentro de backend/ antes de iniciar la API."
-            )
-        _artifact = joblib.load(ARTIFACT_PATH)
+def _load_artifact(modelo=None):
+    global _artifact, _artifact_mtime_ns
+    modelo = modelo or entradas_prediccion_db.modelo_activo()
+    ruta = pathlib.Path(modelo['ruta_artefacto'])
+    if not ruta.is_absolute():
+        ruta = pathlib.Path(__file__).resolve().parents[1] / ruta
+    if not ruta.is_file():
+        raise RuntimeError('No existe el archivo indicado en modelo_demanda.ruta_artefacto.')
+    sello = (modelo['id_modelo'],str(ruta.resolve()),ruta.stat().st_mtime_ns)
+    if _artifact is None or _artifact_mtime_ns != sello:
+        artifact = joblib.load(ruta)
+        if int(artifact.get('id_modelo',-1)) != int(modelo['id_modelo']):
+            raise RuntimeError('El archivo del modelo no coincide con el modelo activo de PostgreSQL.')
+        _artifact, _artifact_mtime_ns = artifact, sello
     return _artifact
 
 
@@ -55,31 +59,38 @@ def _next_period_start(now: datetime) -> datetime:
 
 
 def predict_demand(now: datetime | None = None, horizon: int = 4) -> dict:
-    artifact = _load_artifact()
+    modelo = entradas_prediccion_db.modelo_activo()
+    contexto = modelo["entradas"]
+    artifact = _load_artifact(modelo)
     pipeline = artifact["pipeline"]
-    last_features = artifact["last_features"]
+    last_features = entradas_prediccion_db.historico(contexto)
     now = con_hora_chile(now) if now else ahora_chile()
     period_start = _next_period_start(now)
 
-    zonas_db, tipos_db = _catalogo_db()
+    zonas_db, tipos_db, codigos_zonas = _catalogo_db()
+    # Nunca predecir sectores/tipos sin registros de entrenamiento. La BD
+    # puede contener zonas operativas adicionales sin historico propio.
+    zonas_entrenadas = {z for z,t in last_features}
+    tipos_entrenados = {t for z,t in last_features}
+    zonas_db = [z for z in zonas_db if z.id in zonas_entrenadas]
+    tipos_db = [t for t in tipos_db if t in tipos_entrenados]
+    if not zonas_db or not tipos_db:
+        raise ValueError('No hay zonas/tipos del modelo que coincidan con PostgreSQL; reentrena el modelo.')
     zonas_por_id = {z.id: z for z in zonas_db}
     rows = []
     for step in range(horizon):
         ts = period_start + timedelta(hours=3 * step)
         for zone in zonas_db:
 
-            # Sin pronostico meteorologico real integrado, se asume el clima
-            # "normal" esperado para esa epoca del anio y bloque horario en
-            # esa zona (normal climatica, sin ruido diario): ver ml/weather.py.
-            clima = clima_esperado(ts.month, ts.hour, zone.id)
+            # Perfil climático del modelo leído de PostgreSQL, no de constantes locales.
+            clima = entradas_prediccion_db.clima(contexto, zone.id, ts.month, ts.hour)
 
             for tipo in tipos_db:
                 key = (str(zone.id), tipo)
-                if key in last_features.index:
-                    freq_hist = float(last_features.loc[key, "freq_hist_7d"])
-                    demanda_hist = float(last_features.loc[key, "demanda_recursos_hist_7d"])
-                else:
-                    freq_hist, demanda_hist = 0.0, 0.0
+                if key not in last_features:
+                    continue
+                freq_hist = float(last_features[key]["freq_hist_7d"])
+                demanda_hist = float(last_features[key]["demanda_recursos_hist_7d"])
                 rows.append({
                     "timestamp": ts,
                     "dia_semana": ts.weekday(),
@@ -125,12 +136,11 @@ def predict_demand(now: datetime | None = None, horizon: int = 4) -> dict:
                     "lng_min": zone.lng_min, "lng_max": zone.lng_max,
                 },
                 "centroid": {"lat": lat_c, "lng": lng_c},
-                "demanda_total": round(float(zgroup["demanda_esperada"].sum()), 2),
+                "demanda_total": round(sum(desglose.values()), 2),
                 "desglose": desglose,
 
-                # Clima esperado (normal climatica del mes/hora, sin
-                # pronostico real -- ver ml/weather.py) usado como input del
-                # modelo para esta zona y periodo.
+                # Perfil climático calculado desde registro_historico.
+                "fuente_clima": contexto.get("fuente_clima"),
                 "clima_esperado": {
                     "temperatura_c": float(primera_fila["temperatura_c"]),
                     "viento_kmh": float(primera_fila["viento_kmh"]),
@@ -146,9 +156,11 @@ def predict_demand(now: datetime | None = None, horizon: int = 4) -> dict:
         })
 
     return {
+        "id_modelo": int(artifact["id_modelo"]),
         "generado_en": now.isoformat(),
         "periodos": periodos,
-        # Peso real de cada variable segun el RandomForest ya entrenado
-        # (feature_importances_), no un supuesto: ver ml/train_model.py.
-        "importancia_variables": artifact.get("importancia_variables", {}),
+        # Importancia registrada para el modelo activo en PostgreSQL.
+        "importancia_variables": modelo.get("importancia_variables") or {},
+        "contexto_huella": entradas_prediccion_db.huella(contexto),
+        "fuente_clima": contexto.get("fuente_clima"),
     }

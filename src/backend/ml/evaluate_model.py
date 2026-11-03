@@ -12,7 +12,8 @@ import numpy as np
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 from .features import FEATURE_COLUMNS, TARGET_COLUMN, add_rolling_features
-from .generate_validation_dataset import generate_validation
+from .validacion_db import generate_validation
+from .predict import _load_artifact
 
 ARTIFACT_PATH = pathlib.Path(__file__).parent / "artifacts" / "demand_model.joblib"
 
@@ -30,9 +31,7 @@ def nivel(valor: float) -> str:
 
 
 def evaluate() -> dict:
-    if not ARTIFACT_PATH.exists():
-        raise RuntimeError("No se encontro el modelo entrenado. Ejecuta 'python -m ml.train_model' primero.")
-    artifact = joblib.load(ARTIFACT_PATH)
+    artifact = _load_artifact()
     pipeline = artifact["pipeline"]
 
     if artifact.get("modelo_ganador"):
@@ -43,7 +42,8 @@ def evaluate() -> dict:
         print()
 
     df = generate_validation()
-    df = add_rolling_features(df)
+    if int(artifact["id_modelo"]) != df.attrs["id_modelo"]:
+        raise RuntimeError("El modelo activo cambió durante la evaluación; vuelve a ejecutar.")
 
     X = df[FEATURE_COLUMNS]
     y_real = df[TARGET_COLUMN]
@@ -51,7 +51,7 @@ def evaluate() -> dict:
 
     mae = mean_absolute_error(y_real, y_pred)
     rmse = mean_squared_error(y_real, y_pred) ** 0.5
-    baseline_mae = mean_absolute_error(y_real, np.full(len(y_real), y_real.mean()))
+    baseline_mae = mean_absolute_error(y_real, np.full(len(y_real), df.attrs["baseline_media_entrenamiento"]))
     mejora_pct = (1 - mae / baseline_mae) * 100 if baseline_mae else 0.0
 
     # Exactitud de nivel de riesgo: se agrega por zona+periodo (sumando las
@@ -71,6 +71,8 @@ def evaluate() -> dict:
 
     resultado = {
         "registros_validacion": len(df),
+        "origen": df.attrs["origen"],
+        "no_evaluados_pares_desconocidos": df.attrs["no_evaluados_pares_desconocidos"],
         "combinaciones_zona_periodo": len(agregado),
         "mae": round(mae, 4),
         "rmse": round(rmse, 4),
