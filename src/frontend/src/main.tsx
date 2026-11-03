@@ -369,13 +369,12 @@ const VELOCIDAD_URBANO_KMH=30;
 const VELOCIDAD_FORESTAL_KMH=50;
 // Velocidad de la ANIMACION del vehiculo yendo/volviendo de una emergencia
 // (ver despacharUnidad) -- NO toca el ETA real mostrado/guardado, solo
-// cuanto tarda en verse llegar en el mapa. Antes 1 minuto de ETA real
-// animaba en 3200ms; se bajo 50% la velocidad visual (ahora 4800ms por
-// minuto de ETA, tope de 135s en vez de 90s) a pedido del equipo, para que
-// el trayecto se perciba menos apurado en el demo.
-const MS_ANIMACION_POR_MINUTO_ETA=4800;
-const ANIMACION_DESPACHO_MIN_MS=37500;
-const ANIMACION_DESPACHO_MAX_MS=135000;
+// cuanto tarda en verse llegar en el mapa. Se subio 25% la velocidad visual
+// (de 4800ms a 3840ms por minuto de ETA, tope de 108s en vez de 135s) a
+// pedido del equipo, para que las demostraciones sean mas agiles.
+const MS_ANIMACION_POR_MINUTO_ETA=3840;
+const ANIMACION_DESPACHO_MIN_MS=30000;
+const ANIMACION_DESPACHO_MAX_MS=108000;
 function haversineKm(lat1:number,lng1:number,lat2:number,lng2:number):number{
   const R=6371;
   const toRad=(d:number)=>d*Math.PI/180;
@@ -4054,6 +4053,67 @@ const spawnEmergencia = (): Emergency => {
 
   resourceIdsOla.forEach(id => registerResourceTimer(id, tTrabajo));
  };
+
+ // El campo destino de un recurso (de que emergencia es, ver tipo
+ // Resource) vive SOLO en memoria del navegador -- nunca se guarda en
+ // Postgres. Al recargar la pagina, cargarRecursos trae el radioState real
+ // (6-3/6-7/6-8 si la unidad sigue despachada) pero destino siempre nace
+ // undefined, asi que tiposFaltantesPara ya no la cuenta como cobertura y
+ // intentarIniciarTrabajoCompartido nunca se dispara: la emergencia queda
+ // trabada en EN_ATENCION para siempre aunque las unidades ya hayan
+ // llegado. Este efecto reconstruye destino desde el registro real server
+ // side (GET /assignments/activas, ver main.py) apenas recursos y cola
+ // estan cargados, y reintenta la finalizacion de cualquier emergencia que
+ // haya quedado completa.
+ useEffect(() => {
+  if (!recursosCargados) return;
+  let cancelado = false;
+  (async () => {
+   try {
+    const resp = await fetch(`${API_BASE}/assignments/activas`, {
+     credentials: 'include',
+     headers: authHeaders(),
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const activas: { id_recurso: number; id_emergencia: number }[] =
+     Array.isArray(data.asignaciones) ? data.asignaciones : [];
+    if (cancelado || !activas.length) return;
+
+    const tocadas = new Set<number>();
+    setResources(prev => {
+     const resultado = prev.map(r => {
+      if (r.destino || r.idRecurso == null) return r;
+      if (r.radioState !== '6-3' && r.radioState !== '6-7' && r.radioState !== '6-8') return r;
+      const activa = activas.find(a => a.id_recurso === r.idRecurso);
+      if (!activa) return r;
+      const emergenciaDestino = queueRef.current.find(e => e.id === activa.id_emergencia);
+      if (!emergenciaDestino) return r;
+      tocadas.add(emergenciaDestino.id);
+      return {
+       ...r,
+       destino: {
+        emergenciaId: emergenciaDestino.id,
+        lat: emergenciaDestino.lat,
+        lng: emergenciaDestino.lng,
+        address: emergenciaDestino.address,
+       },
+      };
+     });
+     resourcesRef.current = resultado;
+     return resultado;
+    });
+
+    tocadas.forEach(id => {
+     const emergenciaSnap = queueRef.current.find(e => e.id === id);
+     if (emergenciaSnap) intentarIniciarTrabajoCompartido(emergenciaSnap);
+    });
+   } catch (error) {
+    console.error('No se pudieron reconciliar las asignaciones activas al cargar:', error);
+   }
+  })();
+  return () => { cancelado = true; };
+ }, [recursosCargados, queue]);
 
  // El tramo de vuelta (6-8) usa la misma duracion que la ida: mismo
  // trayecto recorrido en sentido inverso, misma velocidad estimada.

@@ -993,6 +993,35 @@ def eta_por_emergencia(id_emergencia: int, usuario: Usuario = Depends(usuario_ac
         raise HTTPException(status_code=503, detail=f"No se pudo calcular el ETA: {exc}")
 
 
+@app.get("/assignments/activas")
+def asignaciones_activas(usuario: Usuario = Depends(usuario_actual)):
+    """Asignaciones ASIGNADO sin retorno registrado (ver fecha_retorno),
+    es decir recursos que a esta hora deberian seguir en camino/en escena
+    de alguna emergencia. El frontend la usa SOLO al cargar la pagina para
+    reconstruir el campo `destino` de cada recurso (ver cargarRecursos en
+    main.tsx) -- ese campo es la unica forma que tiene el cliente de saber
+    que unidad cubre que emergencia, y hoy vive solo en memoria del
+    navegador. Sin este endpoint, cualquier recarga de pagina mientras hay
+    despachos en curso pierde esa informacion: el recurso sigue mostrando
+    su estado radial real (6-3/6-7/6-8, eso si viene de Postgres), pero el
+    sistema ya no sabe a que emergencia pertenece, asi que nunca detecta
+    que esa emergencia ya tiene todas sus unidades y la deja trabada en
+    EN_ATENCION para siempre."""
+    try:
+        with obtener_conexion() as conexion, conexion.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id_recurso, id_emergencia
+                FROM emergencia.asignacion
+                WHERE estado_asignacion = 'ASIGNADO' AND fecha_retorno IS NULL
+                """
+            )
+            filas = cursor.fetchall()
+        return {"asignaciones": [{"id_recurso": r[0], "id_emergencia": r[1]} for r in filas]}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"No se pudieron leer las asignaciones activas: {exc}")
+
+
 @app.post("/assignments")
 def asignar_recurso(
     id_emergencia: int,
