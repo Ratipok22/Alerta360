@@ -161,7 +161,7 @@ function mapearTicketBD(t:any):SupportTicket{
     titulo:t.titulo_ticket,
     descripcion:t.descripcion,
     estado:t.estado_ticket,
-    fecha:new Date(t.fecha_creacion).toLocaleString('es-CL'),
+    fecha:formatFechaHora(t.fecha_creacion),
     archivo:t.archivo_url??'',
     creadoPor:t.creado_por,
     creadoPorEmail:t.creado_por_email,
@@ -491,7 +491,6 @@ function elegirPuntoPatrullaje(){
 // perder la nocion de que la mayoria esta en su cuartel.
 const MAX_EN_PATRULLAJE=5;
 
-const CODIGO_TIPO_PREFERIDO:Record<string,ResourceType>={'10-0':'Bomberos','10-1':'Bomberos','10-2':'Forestal','10-3':'Rescate','10-4':'Rescate','10-5':'Hazmat'};
 // Tiempo (ms, escalado para demo) que la unidad permanece "trabajando" en el
 // lugar segun la clave — un incendio estructural o forestal toma mas tiempo
 // en resolverse que un salvamento, por ejemplo. Mientras dura, el recurso
@@ -622,6 +621,15 @@ function idoneidadTipoPara(tipo:ResourceType, codigoClave:string|undefined):numb
   if(!codigoClave) return 0.4;
   return IDONEIDAD_TIPO_CLAVE[codigoClave]?.[tipo] ?? 0.15;
 }
+// El tipo "ideal" de una clave es el que tiene mayor idoneidad en
+// IDONEIDAD_TIPO_CLAVE (siempre 1.0) -- se deriva de ahi en vez de mantener
+// un segundo mapa a mano (antes CODIGO_TIPO_PREFERIDO), que podia desincronizarse
+// silenciosamente de estos pesos si alguien los reajustaba sin acordarse del otro.
+function tipoPreferidoPara(codigoClave:string|undefined):ResourceType{
+  const pesos=codigoClave?IDONEIDAD_TIPO_CLAVE[codigoClave]:undefined;
+  if(!pesos) return 'Bomberos';
+  return (Object.entries(pesos) as [ResourceType,number][]).reduce((mejor,[tipo,peso])=>peso>pesos[mejor]!?tipo:mejor, Object.keys(pesos)[0] as ResourceType);
+}
 
 type ScoreDesglose={
   total:number; tipoPreferido:ResourceType; coincideTipo:boolean; idoneidadTipo:number; coincideTerreno:boolean;
@@ -644,7 +652,7 @@ type ScoreDesglose={
 //   penaliza mas fuerte en emergencias criticas/altas que en las de baja
 //   prioridad, donde importa mas la idoneidad que la rapidez.
 function scoreDetalle(r:Resource, clave:Clave|undefined, distanciaKm:number, etaMin:number):ScoreDesglose{
-  const tipoPreferido=clave?(CODIGO_TIPO_PREFERIDO[clave.codigo]||'Bomberos'):'Bomberos';
+  const tipoPreferido=tipoPreferidoPara(clave?.codigo);
   const prioridadNivel=clave?.prioridad_nivel??3;
   const terrenoClave=clave?.terreno??'urbano';
   const esCritica=prioridadNivel<=2;
@@ -834,10 +842,14 @@ function historialTitle(tipo:HistorialTipo){
   return 'Nueva emergencia registrada';
 }
 
+// Reutilizado por elapsedLabel, tiempoPromedioLabel y el rango horario del
+// bloque de demanda ML -- antes cada uno repetia su propio
+// String(n).padStart(2,'0').
+const pad2=(n:number)=>String(n).padStart(2,'0');
 function elapsedLabel(startMs:number, nowMs:number){
   const s=Math.max(0,Math.floor((nowMs-startMs)/1000));
   const m=Math.floor(s/60); const sec=s%60;
-  return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+  return `${pad2(m)}:${pad2(sec)}`;
 }
 function timeAgo(ts:number, nowMs:number){
   const diff=Math.max(0,Math.floor((nowMs-ts)/1000));
@@ -861,6 +873,10 @@ function beep(){
 }
 
 function formatHour(iso:string){return new Date(iso).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit',timeZone:CHILE_TZ});}
+// Fecha+hora completa para Soporte (tickets/respuestas) -- a diferencia de
+// un toLocaleString() suelto, fija CHILE_TZ (igual que formatHour) para que
+// no dependa de la zona horaria del navegador de quien lo este mirando.
+function formatFechaHora(iso:string){return new Date(iso).toLocaleString('es-CL',{timeZone:CHILE_TZ});}
 
 function buildAlerts(periodos:Periodo[], claves:Record<string,Clave>){
   const entries:{text:string;value:number;zonaId:string;centroid:{lat:number;lng:number}}[]=[];
@@ -1330,6 +1346,16 @@ function popupCuartel(compania:string, sector:string, unidades:Resource[], hayEm
   </div>`;
 }
 
+// Popup de un marcador de emergencia en el mapa -- dos variantes segun si ya
+// tiene una unidad respondiendo (ver MapPanel: el marcador "!" para una
+// emergencia sin asignar todavia muestra la clave; el marcador "✓" para una
+// ya asignada, ubicado con las coordenadas que trae la propia unidad en
+// camino, no tiene esa clave a mano pero muestra el estado "Asignada").
+function popupEmergencia(id:number, address:string, opciones:{codigo?:string; asignada?:boolean}={}):string{
+  const detalle=opciones.codigo?`Clave ${opciones.codigo}<br/>${address}`:`${address}${opciones.asignada?'<br/><i>Asignada</i>':''}`;
+  return `<b>Emergencia #${id}</b><br/>${detalle}`;
+}
+
 function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSelectEmergencia, isAdmin=true, personalActivoPorCompania={}}:{resources:Resource[]; emergencies:Emergency[]; focus:{lat:number;lng:number}|null; center:{lat:number;lng:number}; onAsignarManual:(resourceId:string)=>void; onSelectEmergencia?:(id:number)=>void; isAdmin?:boolean; personalActivoPorCompania?:Record<string,number>}){
   const mapRef=useRef<L.Map|null>(null);
   const personalActivoRef=useRef(personalActivoPorCompania);
@@ -1471,7 +1497,7 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
     emergencies.forEach(e=>{
       const marker=L.marker([e.lat,e.lng],{icon:L.divIcon({className:'emergency-marker',html:'<div>!</div>',iconSize:[36,36],iconAnchor:[18,18]})})
         .addTo(layer)
-        .bindPopup(`<b>Emergencia #${e.id}</b><br/>Clave ${e.codigo}<br/>${e.address}`)
+        .bindPopup(popupEmergencia(e.id, e.address, {codigo: e.codigo}))
         .on('click', ()=>onSelectEmergenciaRef.current?.(e.id))
         .on('popupopen', ()=>{ emergenciaPopupAbiertaRef.current=e.id; })
         .on('popupclose', ()=>{ if(emergenciaPopupAbiertaRef.current===e.id) emergenciaPopupAbiertaRef.current=null; });
@@ -1487,7 +1513,7 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
         const idEmergenciaDestino=r.destino.emergenciaId;
         const markerAsignada=L.marker([r.destino.lat,r.destino.lng],{icon:L.divIcon({className:'emergency-marker emergency-marker-asignada',html:'<div>✓</div>',iconSize:[34,34],iconAnchor:[17,17]})})
           .addTo(layer)
-          .bindPopup(`<b>Emergencia #${idEmergenciaDestino}</b><br/>${r.destino.address}<br/><i>Asignada</i>`)
+          .bindPopup(popupEmergencia(idEmergenciaDestino, r.destino.address, {asignada: true}))
           .on('click', ()=>onSelectEmergenciaRef.current?.(idEmergenciaDestino))
           .on('popupopen', ()=>{ emergenciaPopupAbiertaRef.current=idEmergenciaDestino; })
           .on('popupclose', ()=>{ if(emergenciaPopupAbiertaRef.current===idEmergenciaDestino) emergenciaPopupAbiertaRef.current=null; });
@@ -1892,7 +1918,7 @@ function TicketThread({respuestas}:{respuestas:TicketRespuesta[]}){
       <div key={i} className={`ticketThreadMsg ${r.tipo_respuesta==='Respuesta'?'esSoporte':'esUsuario'}`}>
         <strong>{r.tipo_respuesta==='Respuesta'?'Soporte':'Usuario'} · {r.autor}</strong>
         <p>{r.mensaje}</p>
-        <small>{new Date(r.fecha_respuesta).toLocaleString('es-CL')}</small>
+        <small>{formatFechaHora(r.fecha_respuesta)}</small>
       </div>
     )}
   </div>;
@@ -3013,8 +3039,10 @@ useEffect(()=>{
  // Info de "estado en vivo" para el rol visualizador: quien lo esta
  // publicando (el admin al mando del despacho) y si ya llego algun dato
  // real o todavia esta esperando la primera publicacion.
- const [estadoRemoto,setEstadoRemoto]=useState<{publicadoPor:string; publicadoEn:string}|null>(null);
- const [esperandoEstadoRemoto,setEsperandoEstadoRemoto]=useState(false);
+ // 'sin_consultar' (todavia no llega la 1ra respuesta de /state), 'esperando'
+ // (ya se consulto, nadie ha publicado) o el dato publicado -- antes eran dos
+ // useState separados que siempre se seteaban juntos en pares complementarios.
+ const [estadoRemoto,setEstadoRemoto]=useState<'sin_consultar'|'esperando'|{publicadoPor:string; publicadoEn:string}>('sin_consultar');
  const [importanciaVariables,setImportanciaVariables]=useState<VariableImportancia[]>([]);
  const [resources,setResources]=useState<Resource[]>([]);
  const [recursosCargados,setRecursosCargados]=useState(false); 
@@ -3655,8 +3683,7 @@ const intentarPatrullaje = async () => {
        .then(r=>r.ok?r.json():null)
        .then(data=>{
          if(cancelado || !data) return;
-         if(!data.publicado){ setEsperandoEstadoRemoto(true); setEstadoRemoto(null); return; }
-         setEsperandoEstadoRemoto(false);
+         if(!data.publicado){ setEstadoRemoto('esperando'); return; }
          setEstadoRemoto({publicadoPor:data.publicadoPor, publicadoEn:data.publicadoEn});
          // /state solo aporta movimientos de unidades que siguen existiendo
          // en PostgreSQL; jamás puede introducir vehículos del catálogo viejo.
@@ -3730,28 +3757,35 @@ const intentarPatrullaje = async () => {
  // una emergencia Activa (sin despachar todavia), y si tampoco hay, muestra
  // la siguiente que siga en curso (ya completa) solo para no dejar el panel
  // vacio.
- const currentEmergencia=
-   (emergenciaSeleccionadaId!=null ? queue.find(e=>e.id===emergenciaSeleccionadaId && emergenciaNecesitaDespacho(e, claves[e.codigo], resources)) : undefined) ??
-   queue.find(e=>e.status!=='Activa' && emergenciaNecesitaDespacho(e, claves[e.codigo], resources))??
-   queue.find(e=>e.status==='Activa')??
-   queue.find(e=>e.status==='Asignada'||e.status==='ASIGNADA')??
-   queue.find(e=>e.status==='EN_ATENCION')??
-   null;
- const claveActual=currentEmergencia?claves[currentEmergencia.codigo]:undefined;
- // Tipos de unidad que todavia faltan para esta emergencia segun el
- // criterio real ya modelado (ver Clave.unidades_requeridas / CLAVES_RADIALES
- // en el backend) -- null si la clave no tiene ese criterio modelado (se
- // mantiene el comportamiento anterior de una sola unidad), [] si ya esta
- // cubierta, o la lista de tipos pendientes (p.ej. ["Escala"]). Se cuenta
- // sobre TODOS los recursos (`resources`), no `resourcesFiltrados`: una
- // unidad ya asignada desde otro cuartel sigue cubriendo el requisito
- // aunque el filtro de cuartel actual la oculte de la vista.
- const tiposFaltantes=currentEmergencia?tiposFaltantesPara(currentEmergencia, claveActual, resources):null;
- // Mismo criterio ya ajustado por tipo de estructura/piso (ver
- // unidadesRequeridasEfectivas), para mostrar el detalle "Unidades: X/Y"
- // en la tarjeta de la emergencia (sin esto, mostraria siempre el criterio
- // BASE de la clave aunque ya se haya descartado la Escala por el piso).
- const requisitosEfectivosActuales=currentEmergencia?unidadesRequeridasEfectivas(claveActual, currentEmergencia):null;
+ // Memoizado: antes estos 4 valores se recalculaban (varios .find/.filter
+ // sobre queue/resources) en CADA render, incluido el que fuerza el reloj
+ // "now" una vez por segundo (ver setInterval de tickNow) sin que ninguno
+ // de los 4 dependa de "now" -- trabajo repetido sin ninguna razon.
+ const {currentEmergencia, claveActual, tiposFaltantes, requisitosEfectivosActuales}=useMemo(()=>{
+   const currentEmergencia=
+     (emergenciaSeleccionadaId!=null ? queue.find(e=>e.id===emergenciaSeleccionadaId && emergenciaNecesitaDespacho(e, claves[e.codigo], resources)) : undefined) ??
+     queue.find(e=>e.status!=='Activa' && emergenciaNecesitaDespacho(e, claves[e.codigo], resources))??
+     queue.find(e=>e.status==='Activa')??
+     queue.find(e=>e.status==='Asignada'||e.status==='ASIGNADA')??
+     queue.find(e=>e.status==='EN_ATENCION')??
+     null;
+   const claveActual=currentEmergencia?claves[currentEmergencia.codigo]:undefined;
+   // Tipos de unidad que todavia faltan para esta emergencia segun el
+   // criterio real ya modelado (ver Clave.unidades_requeridas / CLAVES_RADIALES
+   // en el backend) -- null si la clave no tiene ese criterio modelado (se
+   // mantiene el comportamiento anterior de una sola unidad), [] si ya esta
+   // cubierta, o la lista de tipos pendientes (p.ej. ["Escala"]). Se cuenta
+   // sobre TODOS los recursos (`resources`), no `resourcesFiltrados`: una
+   // unidad ya asignada desde otro cuartel sigue cubriendo el requisito
+   // aunque el filtro de cuartel actual la oculte de la vista.
+   const tiposFaltantes=currentEmergencia?tiposFaltantesPara(currentEmergencia, claveActual, resources):null;
+   // Mismo criterio ya ajustado por tipo de estructura/piso (ver
+   // unidadesRequeridasEfectivas), para mostrar el detalle "Unidades: X/Y"
+   // en la tarjeta de la emergencia (sin esto, mostraria siempre el criterio
+   // BASE de la clave aunque ya se haya descartado la Escala por el piso).
+   const requisitosEfectivosActuales=currentEmergencia?unidadesRequeridasEfectivas(claveActual, currentEmergencia):null;
+   return {currentEmergencia, claveActual, tiposFaltantes, requisitosEfectivosActuales};
+ },[queue, resources, claves, emergenciaSeleccionadaId]);
 
  // Distancia/ETA de todos los recursos hacia la emergencia en pantalla,
  // consultados al backend (ver GET /emergencies/{id}/eta, core/eta.py) --
@@ -3776,7 +3810,12 @@ const intentarPatrullaje = async () => {
        for(const fila of (data.eta ?? [])){
          mapa[fila.id_recurso]={distanciaKm:fila.distancia_km, etaMin:fila.eta_min};
        }
-       setEtaPorRecurso(mapa);
+       // Fusionar, no reemplazar: si esta respuesta viniera vacia o parcial
+       // (ej. la emergencia momentaneamente sin coordenadas en el backend),
+       // antes se borraba todo el cache de un golpe y cada recurso caia de
+       // inmediato al respaldo local (Haversine) en vez de mantener el
+       // ultimo valor real conocido hasta la proxima respuesta completa.
+       setEtaPorRecurso(prev=>({...prev, ...mapa}));
      }catch{ /* red caida: se mantiene el ultimo valor conocido */ }
    };
    consultar();
@@ -3951,7 +3990,10 @@ const spawnEmergencia = (): Emergency => {
   } catch (error) {
     console.error(`OSRM no pudo calcular el regreso de ${resourceId}:`, error);
     // No crear un tramo alternativo en linea recta. La unidad permanece en
-    // estado 6-7.
+    // estado 6-7. Se limpia infoRegresoRef igual que en el camino exitoso,
+    // para no dejar datos de un despacho viejo si esta unidad se reusa en
+    // un ciclo distinto antes de reintentar el regreso.
+    delete infoRegresoRef.current[resourceId];
     notify(`${resourceId}: OSRM Docker no está disponible. El vehículo permanece en la emergencia.`);
   }
  };
@@ -4799,7 +4841,7 @@ const spawnEmergencia = (): Emergency => {
  const tiempoPromedioLabel=metricasFiltradas.length?(()=>{
    const avg=metricasFiltradas.reduce((s,m)=>s+m.etaMin,0)/metricasFiltradas.length;
    const mm=Math.floor(avg), ss=Math.round((avg-mm)*60);
-   return `${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+   return `${pad2(mm)}:${pad2(ss)}`;
  })():'—';
  const tiempoPromedioMeta=metricasFiltradas.length?`promedio de ${metricasFiltradas.length} asignación${metricasFiltradas.length===1?'':'es'} · esta sesión`:'sin asignaciones aún';
  // "Cobertura estimada": % de asignaciones con idoneidad de tipo >= 0.5 —
@@ -4901,7 +4943,7 @@ const spawnEmergencia = (): Emergency => {
    <main className={`main${sidebarCollapsed?' sidebarCollapsed':''}`}><header><button className="mobileMenu" onClick={()=>setMobileNavOpen(o=>!o)}><Menu/></button><div><h1>{section}</h1><p>
   {isAdminSoporte
     ? 'Gestión de tickets de soporte'
-    : <>Central de coordinación · Valparaíso{!isAdmin?' · Acceso de solo lectura':''}{!isAdmin && esperandoEstadoRemoto?' · Esperando datos en vivo del operador…':''}{!isAdmin && estadoRemoto?` · En vivo (operador: ${estadoRemoto.publicadoPor})`:''}</>
+    : <>Central de coordinación · Valparaíso{!isAdmin?' · Acceso de solo lectura':''}{!isAdmin && estadoRemoto==='esperando'?' · Esperando datos en vivo del operador…':''}{!isAdmin && typeof estadoRemoto==='object'?` · En vivo (operador: ${estadoRemoto.publicadoPor})`:''}</>
   }
 </p></div><div className="headerActions">{!isAdmin && !isAdminSoporte && <div className="readOnlyBadge" title="Tu cuenta solo puede visualizar, no asignar recursos"><Eye size={13}/> Solo lectura</div>}{isAdmin && <div className="readOnlyBadge" title="Tu cuenta puede asignar recursos y despachar"><Eye size={13}/> Admin</div>}{isAdminSoporte && <div className="readOnlyBadge" title="Tu cuenta gestiona tickets de soporte"><Eye size={13}/> Soporte</div>}<button onClick={()=>setTheme(t=>t==='dark'?'light':'dark')} title={theme==='dark'?'Cambiar a tema claro':'Cambiar a tema oscuro'}>{theme==='dark'?<Sun size={17}/>:<Moon size={17}/>}</button><div className={`live liveToggle${activoDB?'':' liveOff'}${cambiandoEstado?' liveBusy':''}`} role="button" tabIndex={0} aria-disabled={cambiandoEstado} onClick={toggleEstadoServicio} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();toggleEstadoServicio();}}} title="Toca para cambiar tu estado de servicio (emergencia.usuario.estado_usuario)"><span/> {activoDB?'Activo':'Fuera de servicio'}</div><button className="avatar" onClick={()=>setSection('Configuración')} title={`${auth.nombre} · Ver perfil`}>{iniciales}</button></div></header>
     {section==='Formulario' && isAdmin && <NuevaEmergenciaView claves={claves} onCrear={crearEmergenciaBD}/>}
@@ -4954,7 +4996,7 @@ const spawnEmergencia = (): Emergency => {
       </>:<p className="emptyState">{
         tiposFaltantes && tiposFaltantes.length>0
           ? `Faltan unidades para completar esta emergencia (${tiposFaltantes.join(', ')}), pero no hay ninguna disponible de ese tipo en este momento${filtroCuartel==='todos'?'':` en ${filtroCuartel}`}.`
-          : currentEmergencia && (tiposFaltantes?.length===0 || (tiposFaltantes===null && currentEmergencia.status!=='Activa'))
+          : currentEmergencia && !necesitaMasUnidades
             ? (tiposFaltantes?.length===0?'Esta emergencia ya tiene todas las unidades requeridas respondiendo.':'Esta emergencia ya tiene una unidad respondiendo.')
             : (filtroCuartel==='todos'?'Sin unidades disponibles para esta emergencia en este momento — todas las compatibles están en misión.':`Sin unidades disponibles de ${filtroCuartel} para esta emergencia en este momento.`)
       }</p>}
@@ -5002,8 +5044,8 @@ const spawnEmergencia = (): Emergency => {
               <span>
                 Bloque actual:
                   <strong>
-                    {String(infoBloqueActual.hora).padStart(2,'0')}:00–
-                    {String((infoBloqueActual.hora+3)%24).padStart(2,'0')}:00
+                    {pad2(infoBloqueActual.hora)}:00–
+                    {pad2((infoBloqueActual.hora+3)%24)}:00
                   </strong>
               </span>
 

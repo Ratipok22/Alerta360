@@ -1023,6 +1023,11 @@ def asignar_recurso(
             # 1. Verificar que la emergencia esté activa y traer sus
             # coordenadas + el terreno de su tipo (ver tipo_emergencia.
             # terreno_emergencia) para poder recalcular el ETA real.
+            # FOR UPDATE: bloquea la fila hasta el commit/rollback de esta
+            # transaccion, para que dos despachos casi simultaneos a la misma
+            # emergencia (ej. la recomendacion automatica y un clic manual)
+            # no pasen ambos la validacion antes de que ninguno haya
+            # insertado todavia.
             cursor.execute(
                 """
                 SELECT e.estado_emergencia, e.latitud_emergencia, e.longitud_emergencia,
@@ -1030,6 +1035,7 @@ def asignar_recurso(
                 FROM emergencia.emergencia e
                 JOIN emergencia.tipo_emergencia t ON t.codigo_emergencia = e.codigo_emergencia
                 WHERE e.id_emergencia = %s
+                FOR UPDATE OF e
                 """,
                 (id_emergencia,)
             )
@@ -1042,20 +1048,52 @@ def asignar_recurso(
                     detail="La emergencia no existe"
                 )
 
-            if emergencia[0] != "Activa":
+            # No solo "Activa": una clave con varias unidades requeridas (ver
+            # unidades_requeridas) sigue despachando la 2da/3ra unidad aunque
+            # la emergencia ya haya avanzado a ASIGNADA/EN_ATENCION con la
+            # primera -- exigir "Activa" aca rechazaba esos despachos
+            # posteriores con 400, justo lo contrario de la funcionalidad
+            # multi-unidad que se agrego esta misma sesion. estado_emergencia
+            # siempre se guarda en mayusculas salvo "Activa" (ver INSERT en
+            # /emergencies y el Literal de PATCH .../estado).
+            if emergencia[0] not in ("Activa", "ASIGNADA", "EN_ATENCION"):
                 raise HTTPException(
                     status_code=400,
                     detail="La emergencia no está activa"
                 )
 
+            # Limite server-side de unidades por emergencia (espejo de
+            # LIMITE_UNIDADES_POR_EMERGENCIA en el frontend, main.tsx): sin
+            # esto, ampliar la condicion de arriba para soportar despachos
+            # multi-unidad tambien habilitaba despachar un numero ilimitado
+            # de unidades a una misma emergencia desde una llamada directa a
+            # la API (la unica limitacion antes era del lado del cliente).
+            if estado_asignacion == "ASIGNADO":
+                cursor.execute(
+                    """
+                    SELECT count(*) FROM emergencia.asignacion
+                    WHERE id_emergencia = %s AND estado_asignacion = 'ASIGNADO'
+                    """,
+                    (id_emergencia,)
+                )
+                if cursor.fetchone()[0] >= 3:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Esta emergencia ya alcanzó el máximo de unidades asignadas"
+                    )
+
             lat_emergencia, lng_emergencia, terreno = emergencia[1], emergencia[2], emergencia[3] or "urbano"
 
-            # 2. Verificar que el recurso esté disponible y traer su posición actual
+            # 2. Verificar que el recurso esté disponible y traer su posición
+            # actual. FOR UPDATE por la misma razon que la emergencia arriba
+            # -- evita que dos requests concurrentes despachen la MISMA
+            # unidad a dos emergencias distintas.
             cursor.execute(
                 """
                 SELECT estado_radio, latitud_recurso, longitud_recurso
                 FROM emergencia.recurso
                 WHERE id_recurso = %s
+                FOR UPDATE
                 """,
                 (id_recurso,)
             )
@@ -1072,7 +1110,12 @@ def asignar_recurso(
             # Un RECHAZADO es solo una decision registrada -- el recurso nunca
             # se mueve, asi que no tiene sentido bloquear el registro si por
             # cualquier razon ya no figura como disponible en ese instante.
-            if estado_asignacion == "ASIGNADO" and recurso[0] not in ("6-0", "Disponible"):
+            # "6-8" (regresando) tambien es un estado valido para asignar:
+            # esDisponible() en el frontend ya trata una unidad regresando
+            # como redirigible a una nueva emergencia (panel de recomendacion
+            # la muestra como "Regresando (redirigida a esta emergencia)"),
+            # pero aca se rechazaba con 400 igual.
+            if estado_asignacion == "ASIGNADO" and recurso[0] not in ("6-0", "Disponible", "6-8"):
                 raise HTTPException(
                     status_code=400,
                     detail="El recurso no está disponible"

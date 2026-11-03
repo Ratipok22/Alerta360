@@ -19,17 +19,24 @@ ESTADO_DESCRIPCION: dict[EstadoRadial, str] = {
 }
 
 # Transiciones validas de la maquina de estados, usadas para validar cambios de estado.
+# REGRESANDO -> EN_TRAYECTO: una unidad que va de vuelta a su cuartel puede
+# ser redirigida a una nueva emergencia antes de llegar (ver esDisponible en
+# el frontend y POST /assignments en main.py, que ya aceptan este caso) --
+# sin esta transicion, esta tabla quedaba en desacuerdo con una funcionalidad
+# real y soportada del sistema.
 TRANSICIONES_VALIDAS: dict[EstadoRadial, set[EstadoRadial]] = {
     EstadoRadial.DISPONIBLE: {EstadoRadial.EN_TRAYECTO, EstadoRadial.FUERA_DE_SERVICIO},
     EstadoRadial.EN_TRAYECTO: {EstadoRadial.EN_EMERGENCIA, EstadoRadial.DISPONIBLE},
     EstadoRadial.EN_EMERGENCIA: {EstadoRadial.REGRESANDO},
-    EstadoRadial.REGRESANDO: {EstadoRadial.DISPONIBLE, EstadoRadial.FUERA_DE_SERVICIO},
+    EstadoRadial.REGRESANDO: {EstadoRadial.DISPONIBLE, EstadoRadial.FUERA_DE_SERVICIO, EstadoRadial.EN_TRAYECTO},
     EstadoRadial.FUERA_DE_SERVICIO: {EstadoRadial.DISPONIBLE},
 }
 
 
 def es_disponible(estado: EstadoRadial) -> bool:
-    return estado == EstadoRadial.DISPONIBLE
+    # REGRESANDO cuenta como disponible para un nuevo despacho (redirigible),
+    # igual que esDisponible() en el frontend -- ver nota de TRANSICIONES_VALIDAS.
+    return estado in (EstadoRadial.DISPONIBLE, EstadoRadial.REGRESANDO)
 
 
 def transicion_valida(actual: EstadoRadial, siguiente: EstadoRadial) -> bool:
