@@ -480,6 +480,22 @@ def cambiar_estado_emergencia(
                 (datos.estado, datos.estado, id_emergencia),
             )
         conexion.commit()
+
+        # Traspaso al historico de entrenamiento ML (ver core/historico_emergencias.py,
+        # integrado desde la rama develop de Alexsander) -- solo al cerrar de
+        # verdad la emergencia. Es aditivo: busca el clima real (Open-Meteo) y
+        # fusiona el conteo en el bloque de emergencia.registro_historico que
+        # ya exista para esa zona/fecha/bloque/clave, o crea uno nuevo. Nunca
+        # bloquea ni revierte el cierre si falla (ver registrar_seguro) -- la
+        # emergencia ya quedo FINALIZADA de todas formas, esto solo enriquece
+        # el dataset para el modelo de demanda.
+        if datos.estado == "FINALIZADA":
+            try:
+                from core.historico_emergencias import registrar_seguro
+                registrar_seguro(id_emergencia)
+            except Exception as exc:
+                print(f"[historico_emergencias] No se pudo procesar la emergencia {id_emergencia}: {exc}")
+
         return {"ok": True, "estado": datos.estado}
     except Exception:
         conexion.rollback()
