@@ -15,6 +15,9 @@ load_dotenv(ENV_FILE)
 
 
 def obtener_conexion():
+    url = os.environ.get("DATABASE_URL")
+    if url:
+        return psycopg.connect(url, connect_timeout=10, options="-c timezone=America/Santiago")
     return psycopg.connect(
         host=os.getenv("POSTGRES_HOST", "localhost"),
         port=os.getenv("POSTGRES_PORT", "5432"),

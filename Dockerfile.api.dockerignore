@@ -1,0 +1,13 @@
+**
+!database/
+!database/*.py
+!src/
+!src/backend/
+!src/backend/**/*.py
+!src/backend/**/
+!src/backend/requirements.txt
+!src/backend/core/data/*.geojson
+**/.venv/
+**/__pycache__/
+**/artifacts/
+**/.env
