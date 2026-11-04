@@ -1,0 +1,36 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    env_file: ./api.env
+    environment:
+      APP_ENV: production
+      OSRM_URL: http://osrm:5000
+      MODEL_PATH: /model/demand_model.joblib
+      HISTORIAL_PATH: /state/historial_acciones.json
+      TZ: America/Santiago
+    volumes:
+      - ./model:/model:ro
+      - historial:/state
+  osrm:
+    image: ${OSRM_IMAGE:?Define OSRM_IMAGE con la version que preparo tus datos}
+    command: osrm-routed --algorithm mld /data/valparaiso.osrm
+    restart: unless-stopped
+    volumes:
+      - ./routing:/data:ro
+  https:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?Define el dominio de la API}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - certificados:/data
+volumes:
+  historial:
+  certificados:

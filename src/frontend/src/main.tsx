@@ -12,6 +12,8 @@ import logoLight from "./assets/logo-alerta360-light.png";
 // la URL del backend cambiando el puerto en el mismo subdominio del tunel
 // (ambos puertos deben estar reenviados: 5173 y 8000).
 function detectarApiBase():string{
+  const apiConfigurada = import.meta.env.VITE_API_URL?.trim();
+  if (apiConfigurada) return apiConfigurada.replace(/\/+$/, '');
   const {protocol, hostname}=window.location;
   if(hostname.endsWith('.devtunnels.ms')){
     const hostBackend=hostname.replace(/-\d+\./, '-8000.');
