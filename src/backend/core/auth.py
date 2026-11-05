@@ -8,6 +8,7 @@ El login emite un JWT firmado con JWT_SECRET_KEY (variable de entorno, ver
 .env.example en la raiz del repo) -- sin estado en el servidor, no hace
 falta guardar sesiones en memoria ni en base de datos.
 """
+import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -56,6 +57,17 @@ USUARIOS: dict[str, Usuario] = {
         Usuario("amolina@admin.alerta360.cl", "Alexis Molina", _HASH_DEMO, "soporte"),
     ]
 }
+
+
+if os.getenv("APP_ENV") == "production":
+    if len(os.environ.get("JWT_SECRET_KEY", "")) < 32:
+        raise RuntimeError("Configura JWT_SECRET_KEY con al menos 32 caracteres.")
+    # Solo habilita cuentas configuradas expresamente para el despliegue.
+    hashes = json.loads(os.environ["OPERADORES_BCRYPT_JSON"])
+    if not hashes or any(email not in USUARIOS for email in hashes):
+        raise ValueError("Revisa las cuentas de OPERADORES_BCRYPT_JSON.")
+    USUARIOS = {email: Usuario(email, USUARIOS[email].nombre, valor.encode("ascii"), USUARIOS[email].rol)
+                for email, valor in hashes.items()}
 
 
 def verificar_credenciales(email: str, password: str) -> Usuario | None:

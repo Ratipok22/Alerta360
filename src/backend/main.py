@@ -57,10 +57,10 @@ app = FastAPI(title="Emergency Resource Intelligence API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[origin.strip().rstrip("/") for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if origin.strip()],
     # Permite tambien acceder desde un dev tunnel (VS Code Ports / *.devtunnels.ms)
     # cuando se comparte el avance para revision, ademas de localhost.
-    allow_origin_regex=r"https://.*\.devtunnels\.ms",
+    allow_origin_regex=None if os.getenv("APP_ENV") == "production" else r"https://.*\.devtunnels\.ms",
     # Con credenciales habilitadas, el navegador puede enviar la cookie de
     # consentimiento del propio tunel en las llamadas fetch() en segundo
     # plano; sin esto, el tunel del backend puede seguir interceptandolas
@@ -790,7 +790,7 @@ def route(origen_lat: float, origen_lng: float, destino_lat: float, destino_lng:
 # que no sea estrictamente necesario). Antes vivia solo en memoria del
 # navegador y se perdia con cada F5; con esto sobrevive a recargas y se ve
 # igual desde cualquier cuenta (admin o visualizador).
-HISTORIAL_PATH = Path(__file__).resolve().parent / "historial_acciones.json"
+HISTORIAL_PATH = Path(os.getenv("HISTORIAL_PATH", Path(__file__).resolve().parent / "historial_acciones.json"))
 HISTORIAL_MAX = 300
 _historial_lock = threading.Lock()
 

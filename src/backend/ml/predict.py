@@ -2,6 +2,7 @@
 modelo entrenado, para alimentar el mapa de calor y las alertas del
 frontend.
 """
+import os
 import pathlib
 from datetime import datetime, timedelta
 
@@ -36,7 +37,7 @@ def _catalogo_db():
         raise ValueError("Se necesitan zonas con coordenadas y tipos de emergencia en PostgreSQL.")
     return zonas, tipos, codigos
 
-ARTIFACT_PATH = pathlib.Path(__file__).parent / "artifacts" / "demand_model.joblib"
+ARTIFACT_PATH = pathlib.Path(os.getenv("MODEL_PATH", pathlib.Path(__file__).parent / "artifacts" / "demand_model.joblib"))
 
 _artifact = None
 _artifact_mtime_ns = None
