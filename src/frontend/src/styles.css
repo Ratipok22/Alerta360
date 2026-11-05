@@ -2289,6 +2289,12 @@ html[data-theme="light"] .nuevaEmergenciaCard .cardHead span{
   display:flex;
   flex-direction:column;
   gap:26px;
+  /* Sin esto, un item flex nunca se encoge mas alla del ancho minimo de su
+     contenido (ver tambien .nuevaEmergenciaCampoMapa mas abajo, que ya
+     tenia este mismo fix) -- en una pantalla mas angosta o con escala de
+     Windows >100%, eso empujaba los inputs/textarea fuera del borde de la
+     card en vez de encogerse con ella. */
+  min-width:0;
 }
 
 .nuevaEmergenciaCampo:not(.nuevaEmergenciaCampoMapa){
@@ -2300,6 +2306,7 @@ html[data-theme="light"] .nuevaEmergenciaCard .cardHead span{
   flex-direction:column;
   gap:10px;
   position:relative;
+  min-width:0;
 
   font-size:23px;
   font-weight:700;
@@ -2405,7 +2412,12 @@ html[data-theme="light"] .nuevaEmergenciaCard .cardHead span{
 .formMapaUbicacion{
   width:100%;
   flex:1;
-  min-height:820px;
+  /* min-height en vh (no un px fijo): un valor fijo pensado para pantallas
+     2K (mas altas) hacia que en 1920x1080 -- o cualquier pantalla mas baja --
+     la pagina entera quedara mas alta que el viewport, forzando scroll y
+     cortando el mapa. clamp() lo deja crecer en pantallas altas (hasta
+     820px, como antes) sin imponer ese minimo en una mas baja. */
+  min-height:clamp(360px, 65vh, 820px);
   /* El mapa se estira (flex:1) para llenar todo el alto de su columna,
      calzando con el alto real del sidebar (ver .nuevaEmergenciaLayout) --
      las coordenadas ya no le restan espacio porque van superpuestas. */
