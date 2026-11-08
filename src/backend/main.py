@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import os
 import threading
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Literal
 
 import httpx
@@ -34,6 +35,15 @@ from core.radio_codes import CLAVES_RADIALES
 from core.vehicle_types import TIPOS_CARRO
 
 from database.database import obtener_conexion
+
+
+def fecha_emergencia_api(fecha):
+    """Las fechas operacionales sin zona se almacenan en hora civil de Chile."""
+    if fecha is None:
+        return None
+    chile = ZoneInfo("America/Santiago")
+    return fecha.replace(tzinfo=chile) if fecha.tzinfo is None else fecha.astimezone(chile)
+
 from ml.persistencia_ml import obtener_o_generar, listado_modelos
 from ml.db_catalog import obtener_zonas, obtener_tipos, obtener_recursos
 
@@ -211,9 +221,10 @@ def crear_emergencia(datos: EmergencyCreate, usuario: Usuario = Depends(requiere
                     longitud_emergencia,
                     prioridad_emergencia,
                     estado_emergencia, id_zona,
-                    tipo_estructura_emergencia, piso_emergencia
+                    tipo_estructura_emergencia, piso_emergencia, fecha_creacion_emergencia
                 )
-                VALUES (%s, %s, %s, %s, %s, 'Activa', %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, 'Activa', %s, %s, %s,
+                        CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago')
                 RETURNING id_emergencia,
                           codigo_emergencia,
                           direccion_emergencia,
@@ -248,7 +259,7 @@ def crear_emergencia(datos: EmergencyCreate, usuario: Usuario = Depends(requiere
             "longitud_emergencia": emergencia[4],
             "prioridad_emergencia": emergencia[5],
             "estado_emergencia": emergencia[6],
-            "fecha_creacion_emergencia": emergencia[7],
+            "fecha_creacion_emergencia": fecha_emergencia_api(emergencia[7]),
             "id_zona": emergencia[8],
             "tipo_estructura_emergencia": emergencia[9],
             "piso_emergencia": emergencia[10],
@@ -317,8 +328,8 @@ def obtener_emergencias():
                     "longitud_emergencia": fila[5],
                     "prioridad_emergencia": fila[6],
                     "estado_emergencia": fila[7],
-                    "fecha_creacion_emergencia": fila[8],
-                    "fecha_cierre_emergencia": fila[9],
+                    "fecha_creacion_emergencia": fecha_emergencia_api(fila[8]),
+                    "fecha_cierre_emergencia": fecha_emergencia_api(fila[9]),
                     "id_zona": fila[10],
                     "tipo_estructura_emergencia": fila[11],
                     "piso_emergencia": fila[12],
@@ -472,7 +483,7 @@ def cambiar_estado_emergencia(
                 UPDATE emergencia.emergencia
                 SET estado_emergencia = %s,
                     fecha_cierre_emergencia = CASE
-                        WHEN %s = 'FINALIZADA' THEN CURRENT_TIMESTAMP
+                        WHEN %s = 'FINALIZADA' THEN CURRENT_TIMESTAMP AT TIME ZONE 'America/Santiago'
                         ELSE fecha_cierre_emergencia
                     END
                 WHERE id_emergencia = %s
