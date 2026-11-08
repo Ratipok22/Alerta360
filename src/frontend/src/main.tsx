@@ -22,6 +22,17 @@ function detectarApiBase():string{
   return 'http://localhost:8000';
 }
 const API_BASE = detectarApiBase();
+// ngrok gratuito requiere esta cabecera para las peticiones desde el navegador.
+function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  const hostname = new URL(API_BASE).hostname;
+  if (!hostname.endsWith('.ngrok-free.dev') && !hostname.endsWith('.ngrok-free.app')) {
+    return fetch(input, init);
+  }
+  const headers = new Headers(init?.headers);
+  headers.set('ngrok-skip-browser-warning', '1');
+  return fetch(input, {...init, headers});
+}
+
 // Token de sesion actual (JWT), en una variable de modulo -- lo necesitan
 // funciones sueltas fuera de React (como obtenerRutaReal) que no reciben
 // props/estado directamente. Se mantiene sincronizada con el estado real
@@ -277,7 +288,7 @@ async function obtenerRutaReal(origen: {lat:number;lng:number},destino: {lat:num
     destino_lng: String(destino.lng),
   });
 
-  const resp = await fetch(
+  const resp = await apiFetch(
     `${API_BASE}/route?${params.toString()}`,
     {
       credentials: 'include',
@@ -1863,7 +1874,7 @@ function LoginView({onLogin,theme,onToggleTheme}:{onLogin:(token:string, nombre:
     setError('');
     setCargando(true);
     try{
-      const resp=await fetch(`${API_BASE}/auth/login`,{
+      const resp=await apiFetch(`${API_BASE}/auth/login`,{
         method:'POST',
         headers:{'Content-Type':'application/json'},
         credentials:'include',
@@ -2800,7 +2811,7 @@ function App(){
    let cancelado=false;
    const consultar=async()=>{
      try{
-       const resp=await fetch(`${API_BASE}/auth/me`,{headers:{Authorization:`Bearer ${auth.token}`}});
+       const resp=await apiFetch(`${API_BASE}/auth/me`,{headers:{Authorization:`Bearer ${auth.token}`}});
        if(!resp.ok) return;
        const data=await resp.json();
        if(!cancelado){ setActivoDB(!!data.activo); setCompaniaDesignada(data.compania ?? null); }
@@ -2823,7 +2834,7 @@ function App(){
    let cancelado=false;
    const consultar=async()=>{
      try{
-       const resp=await fetch(`${API_BASE}/companies/personal-activo`,{headers:{Authorization:`Bearer ${auth.token}`}});
+       const resp=await apiFetch(`${API_BASE}/companies/personal-activo`,{headers:{Authorization:`Bearer ${auth.token}`}});
        if(!resp.ok) return;
        const data=await resp.json();
        if(!cancelado) setPersonalActivoPorCompania(data.personal_activo ?? {});
@@ -2842,7 +2853,7 @@ function App(){
    const nuevoActivo=!activoDB;
    setCambiandoEstado(true);
    try{
-     const resp=await fetch(`${API_BASE}/auth/estado`,{
+     const resp=await apiFetch(`${API_BASE}/auth/estado`,{
        method:'PATCH',
        headers:{'Content-Type':'application/json',Authorization:`Bearer ${auth.token}`},
        body:JSON.stringify({activo:nuevoActivo}),
@@ -2871,7 +2882,7 @@ const handleLogin=(
    // de limpiar la sesion local. Si falla (sin red, token ya vencido) no
    // bloquea el logout -- el usuario igual sale de la app.
    if(auth?.token){
-     fetch(`${API_BASE}/auth/logout`,{method:'POST',headers:{Authorization:`Bearer ${auth.token}`}}).catch(()=>{});
+     apiFetch(`${API_BASE}/auth/logout`,{method:'POST',headers:{Authorization:`Bearer ${auth.token}`}}).catch(()=>{});
    }
    setAuth(null);
    setActivoDB(false);
@@ -2937,7 +2948,7 @@ useEffect(()=>{
   let cancelado=false;
   const cargarHistorial=async()=>{
     try{
-      const respuesta=await fetch(`${API_BASE}/historial`, {credentials:'include', headers:{...authHeaders()}});
+      const respuesta=await apiFetch(`${API_BASE}/historial`, {credentials:'include', headers:{...authHeaders()}});
       if(!respuesta.ok || cancelado) return;
       const datos=await respuesta.json();
       if(cancelado) return;
@@ -2967,7 +2978,7 @@ const ultimasRespuestasOficialesRef=useRef<Record<string,number>>({});
 const primerCargaTicketsRef=useRef(true);
 const cargarTickets=async()=>{
   try{
-    const respuesta=await fetch(`${API_BASE}/tickets`, {credentials:'include', headers:authHeaders()});
+    const respuesta=await apiFetch(`${API_BASE}/tickets`, {credentials:'include', headers:authHeaders()});
     if(!respuesta.ok) return;
     const datos=await respuesta.json();
     const nuevos:SupportTicket[]=(datos.tickets||[]).map(mapearTicketBD);
@@ -3008,7 +3019,7 @@ useEffect(()=>{
   let cancelado=false;
   (async()=>{
     try{
-      const respuesta=await fetch(`${API_BASE}/tickets/catalogos`, {credentials:'include', headers:authHeaders()});
+      const respuesta=await apiFetch(`${API_BASE}/tickets/catalogos`, {credentials:'include', headers:authHeaders()});
       if(!respuesta.ok || cancelado) return;
       const datos=await respuesta.json();
       if(!cancelado) setCatalogoTickets({tipos:datos.tipos||[], apartados:datos.apartados||[]});
@@ -3171,7 +3182,7 @@ useEffect(()=>{
 
   const cargarRecursos = async () => {
     try {
-      const resp = await fetch(`${API_BASE}/resources`, {
+      const resp = await apiFetch(`${API_BASE}/resources`, {
         credentials: 'include',
         headers: authHeaders(),
       });
@@ -3319,7 +3330,7 @@ useEffect(()=>{
           const posicion = posicionActual(recurso, ahora);
           const codigo = recurso.codigo ?? recurso.id;
 
-          const respuesta = await fetch(
+          const respuesta = await apiFetch(
             `${API_BASE}/resources/${encodeURIComponent(codigo)}/position`,
             {
               method: 'PATCH',
@@ -3656,7 +3667,7 @@ const intentarPatrullaje = async () => {
      const rechazadosPlano=Object.fromEntries(
        Object.entries(rechazadosPorEmergenciaRef.current).map(([id,set])=>[id, Array.from(set)])
      );
-     fetch(`${API_BASE}/state`,{
+     apiFetch(`${API_BASE}/state`,{
        method:'POST', credentials:'include',
        headers:{'Content-Type':'application/json', ...authHeaders()},
        body:JSON.stringify({
@@ -3680,7 +3691,7 @@ const intentarPatrullaje = async () => {
    if(!auth || isAdmin) return;
    let cancelado=false;
    const consultar=()=>{
-     fetch(`${API_BASE}/state`,{credentials:'include', headers:authHeaders()})
+     apiFetch(`${API_BASE}/state`,{credentials:'include', headers:authHeaders()})
        .then(r=>r.ok?r.json():null)
        .then(data=>{
          if(cancelado || !data) return;
@@ -3803,7 +3814,7 @@ const intentarPatrullaje = async () => {
    let cancelado=false;
    const consultar=async()=>{
      try{
-       const resp=await fetch(`${API_BASE}/emergencies/${currentEmergencia.id}/eta`,{headers:{Authorization:`Bearer ${auth.token}`}});
+       const resp=await apiFetch(`${API_BASE}/emergencies/${currentEmergencia.id}/eta`,{headers:{Authorization:`Bearer ${auth.token}`}});
        if(!resp.ok) return;
        const data=await resp.json();
        if(cancelado) return;
@@ -3855,7 +3866,7 @@ const intentarPatrullaje = async () => {
    id: number,
    estado: 'ASIGNADA' | 'EN_ATENCION' | 'FINALIZADA'
  ): Promise<void> => {
-   const respuesta = await fetch(`${API_BASE}/emergencies/${id}/status`, {
+   const respuesta = await apiFetch(`${API_BASE}/emergencies/${id}/status`, {
      method: 'PATCH',
      credentials: 'include',
      headers: {'Content-Type': 'application/json', ...authHeaders()},
@@ -3872,7 +3883,7 @@ const intentarPatrullaje = async () => {
    // Se persiste en el backend (archivo local, NO en Postgres) para que el
    // historial sobreviva a un F5 y se vea igual desde cualquier cuenta --
    // antes vivia solo en memoria del navegador y se perdia con cada recarga.
-   void fetch(`${API_BASE}/historial`, {
+   void apiFetch(`${API_BASE}/historial`, {
      method: 'POST', credentials: 'include',
      headers: {'Content-Type': 'application/json', ...authHeaders()},
      body: JSON.stringify({tipo, texto}),
@@ -3949,7 +3960,7 @@ const spawnEmergencia = (): Emergency => {
     // regreso (ver PATCH /assignments/retorno) -- no bloquea el ciclo si
     // falla, solo queda sin ese dato historico.
     if (antesDeRegresar.idRecurso != null) {
-      void fetch(
+      void apiFetch(
         `${API_BASE}/assignments/retorno?id_emergencia=${encodeURIComponent(emergenciaSnap.id)}&id_recurso=${encodeURIComponent(antesDeRegresar.idRecurso)}`,
         { method: 'PATCH', credentials: 'include', headers: authHeaders() }
       ).catch(error => console.error(`No se pudo registrar el retorno de ${resourceId}:`, error));
@@ -3971,7 +3982,7 @@ const spawnEmergencia = (): Emergency => {
       });
       // Persistir 6-0 tambien: el polling solo refleja el estado de
       // PostgreSQL y no debe volver a mostrar 6-8.
-      void fetch(`${API_BASE}/resources/${encodeURIComponent(antesDeRegresar.codigo ?? resourceId)}/position`, {
+      void apiFetch(`${API_BASE}/resources/${encodeURIComponent(antesDeRegresar.codigo ?? resourceId)}/position`, {
         method: 'PATCH', credentials: 'include',
         headers: {'Content-Type': 'application/json', ...authHeaders()},
         body: JSON.stringify({lat: home.lat, lng: home.lng, estado: '6-0'}),
@@ -4072,7 +4083,7 @@ const spawnEmergencia = (): Emergency => {
   let cancelado = false;
   (async () => {
    try {
-    const resp = await fetch(`${API_BASE}/assignments/activas`, {
+    const resp = await apiFetch(`${API_BASE}/assignments/activas`, {
      credentials: 'include',
      headers: authHeaders(),
     });
@@ -4264,7 +4275,7 @@ const spawnEmergencia = (): Emergency => {
       return resultado;
     });
     try {
-      const respuesta = await fetch(`${API_BASE}/resources/${encodeURIComponent(resourceId)}/position`, {
+      const respuesta = await apiFetch(`${API_BASE}/resources/${encodeURIComponent(resourceId)}/position`, {
         method: 'PATCH', credentials: 'include',
         headers: {'Content-Type': 'application/json', ...authHeaders()},
         body: JSON.stringify({lat: home.lat, lng: home.lng, estado: '6-0'}),
@@ -4302,7 +4313,7 @@ const spawnEmergencia = (): Emergency => {
       : r));
     const idRecursoRetorno = resourcesRef.current.find(r => r.id === resourceId)?.idRecurso;
     if (idRecursoRetorno != null) {
-      void fetch(
+      void apiFetch(
         `${API_BASE}/assignments/retorno?id_emergencia=${encodeURIComponent(registro.emergenciaId)}&id_recurso=${encodeURIComponent(idRecursoRetorno)}`,
         { method: 'PATCH', credentials: 'include', headers: authHeaders() }
       ).catch(error => console.error(`No se pudo registrar el retorno de ${resourceId} al reanudar:`, error));
@@ -4520,7 +4531,7 @@ const spawnEmergencia = (): Emergency => {
           distancia_km: String(info.distanciaKm),
           eta_minutos: String(Math.round(info.etaMin)),
         });
-        const respAsignacion = await fetch(`${API_BASE}/assignments?${params.toString()}`, {
+        const respAsignacion = await apiFetch(`${API_BASE}/assignments?${params.toString()}`, {
           method: 'POST',
           credentials: 'include',
           headers: authHeaders(),
@@ -4670,7 +4681,7 @@ const spawnEmergencia = (): Emergency => {
        eta_minutos:String(Math.round(recomendacionInfo.etaMin)),
        estado_asignacion:'RECHAZADO',
      });
-     fetch(`${API_BASE}/assignments?${params.toString()}`,{
+     apiFetch(`${API_BASE}/assignments?${params.toString()}`,{
        method:'POST', credentials:'include', headers:authHeaders(),
      }).catch(error=>console.error('No se pudo registrar el rechazo:', error));
    }
@@ -4722,7 +4733,7 @@ const spawnEmergencia = (): Emergency => {
  const cambiarFueraDeServicio=async(resource:Resource, nuevoEstado:'6-0'|'6-9')=>{
    if(isAdminSoporte) return;
    try{
-     const respuesta=await fetch(`${API_BASE}/resources/${encodeURIComponent(resource.codigo ?? resource.id)}/estado`,{
+     const respuesta=await apiFetch(`${API_BASE}/resources/${encodeURIComponent(resource.codigo ?? resource.id)}/estado`,{
        method:'PATCH', credentials:'include',
        headers:{'Content-Type':'application/json', ...authHeaders()},
        body:JSON.stringify({estado:nuevoEstado}),
@@ -4758,7 +4769,7 @@ const spawnEmergencia = (): Emergency => {
  };
 
  const crearEmergenciaBD=async(payload:{codigo_emergencia:string; direccion_emergencia:string; latitud_emergencia:number; longitud_emergencia:number; prioridad_emergencia:number; tipo_estructura_emergencia?:TipoEstructura|null; piso_emergencia?:number|null})=>{
-   const respuesta=await fetch(`${API_BASE}/emergencies`,{
+   const respuesta=await apiFetch(`${API_BASE}/emergencies`,{
      method:'POST', credentials:'include',
      headers:{'Content-Type':'application/json', ...authHeaders()},
      body:JSON.stringify(payload),
@@ -4778,7 +4789,7 @@ const spawnEmergencia = (): Emergency => {
  // mano, para que tipo/apartado/autor/respuestas queden siempre resueltos
  // tal como los devuelve el backend.
  const crearTicketBD=async(idTipo:number, idApartado:number|null, titulo:string, descripcion:string, archivoUrl:string|null)=>{
-   const respuesta=await fetch(`${API_BASE}/tickets`,{
+   const respuesta=await apiFetch(`${API_BASE}/tickets`,{
      method:'POST', credentials:'include',
      headers:{'Content-Type':'application/json', ...authHeaders()},
      body:JSON.stringify({id_tipo:idTipo, id_apartado:idApartado, titulo_ticket:titulo, descripcion, archivo_url:archivoUrl}),
@@ -4790,7 +4801,7 @@ const spawnEmergencia = (): Emergency => {
  };
 
  const responderTicketBD=async(idTicket:number, mensaje:string, tipoRespuesta:'Respuesta'|'Usuario')=>{
-   const respuesta=await fetch(`${API_BASE}/tickets/${idTicket}/respuestas`,{
+   const respuesta=await apiFetch(`${API_BASE}/tickets/${idTicket}/respuestas`,{
      method:'POST', credentials:'include',
      headers:{'Content-Type':'application/json', ...authHeaders()},
      body:JSON.stringify({mensaje, tipo_respuesta:tipoRespuesta}),
@@ -4800,7 +4811,7 @@ const spawnEmergencia = (): Emergency => {
  };
 
  const cambiarEstadoTicketBD=async(idTicket:number, estado:'Abierto'|'En proceso'|'Resuelto')=>{
-   const respuesta=await fetch(`${API_BASE}/tickets/${idTicket}/estado`,{
+   const respuesta=await apiFetch(`${API_BASE}/tickets/${idTicket}/estado`,{
      method:'PATCH', credentials:'include',
      headers:{'Content-Type':'application/json', ...authHeaders()},
      body:JSON.stringify({estado}),
@@ -4810,7 +4821,7 @@ const spawnEmergencia = (): Emergency => {
  };
 
  const cambiarPrioridadTicketBD=async(idTicket:number, prioridad:'Baja'|'Media'|'Alta')=>{
-   const respuesta=await fetch(`${API_BASE}/tickets/${idTicket}/prioridad`,{
+   const respuesta=await apiFetch(`${API_BASE}/tickets/${idTicket}/prioridad`,{
      method:'PATCH', credentials:'include',
      headers:{'Content-Type':'application/json', ...authHeaders()},
      body:JSON.stringify({prioridad}),
@@ -4837,7 +4848,7 @@ const spawnEmergencia = (): Emergency => {
 
  useEffect(()=>{
    if(!auth) return;
-   fetch(`${API_BASE}/prediction/demand?horizon=4`, {credentials:'include', headers:authHeaders()})
+   apiFetch(`${API_BASE}/prediction/demand?horizon=4`, {credentials:'include', headers:authHeaders()})
      .then(r=>{if(!r.ok)throw new Error(`API respondió ${r.status}`); return r.json();})
      .then(d=>{setPeriodos(d.periodos||[]); setImportanciaVariables(Object.values(d.importancia_variables||{})); setApiError(null);})
      .catch(err=>{setPeriodos([]); setApiError(`No se pudo conectar a ${API_BASE}: ${err.message||err}`);});
@@ -4845,7 +4856,7 @@ const spawnEmergencia = (): Emergency => {
 
  useEffect(()=>{
    if(!auth) return;
-   fetch(`${API_BASE}/catalog/claves`, {credentials:'include', headers:authHeaders()})
+   apiFetch(`${API_BASE}/catalog/claves`, {credentials:'include', headers:authHeaders()})
      .then(r=>{if(!r.ok)throw new Error(`API respondió ${r.status}`); return r.json();})
      .then(d=>{
        const porCodigo:Record<string,Clave>={};
@@ -5161,7 +5172,7 @@ createRoot(document.getElementById('root')!).render(<App/>);
 
 //-------------------------------NUeva para la base de datos
 async function obtenerEmergenciasBD():Promise<Emergency[]>{
-  const response=await fetch(
+  const response=await apiFetch(
     `${API_BASE}/emergencies`,
     {
       headers:{
