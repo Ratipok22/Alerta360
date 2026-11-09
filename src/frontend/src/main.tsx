@@ -13,7 +13,7 @@ import logoLight from "./assets/logo-alerta360-light.png";
 // (ambos puertos deben estar reenviados: 5173 y 8000).
 function detectarApiBase():string{
   const apiConfigurada = import.meta.env.VITE_API_URL?.trim();
-  if (apiConfigurada) return apiConfigurada.replace(/\/+$/, '');
+  if (apiConfigurada) return apiConfigurada.replace(/\/+$/, "");
   const {protocol, hostname}=window.location;
   if(hostname.endsWith('.devtunnels.ms')){
     const hostBackend=hostname.replace(/-\d+\./, '-8000.');
@@ -22,6 +22,7 @@ function detectarApiBase():string{
   return 'http://localhost:8000';
 }
 const API_BASE = detectarApiBase();
+
 // ngrok gratuito requiere esta cabecera para las peticiones desde el navegador.
 function apiFetch(input: string, init?: RequestInit): Promise<Response> {
   const hostname = new URL(API_BASE).hostname;
@@ -4023,7 +4024,7 @@ const spawnEmergencia = (): Emergency => {
  // modelado (tiposFaltantesPara devuelve null) se mantiene el
  // comportamiento anterior: se resuelve apenas llega esa unica unidad.
  const intentarIniciarTrabajoCompartido = (emergenciaSnap: Emergency) => {
-  if (trabajoCompartidoRef.current[emergenciaSnap.id]) return;
+  if (!isAdmin || trabajoCompartidoRef.current[emergenciaSnap.id]) return;
 
   const relacionados = resourcesRef.current.filter(r => r.destino?.emergenciaId === emergenciaSnap.id);
   const siguenViajando = relacionados.some(r => r.radioState === '6-3');
@@ -4041,19 +4042,24 @@ const spawnEmergencia = (): Emergency => {
   const tiempoTrabajo = TIEMPO_TRABAJO_MS[emergenciaSnap.codigo] ?? 18000;
 
   const tTrabajo = window.setTimeout(async () => {
-    delete trabajoCompartidoRef.current[emergenciaSnap.id];
-
     const vigentes = resourceIdsOla
       .map(id => resourcesRef.current.find(r => r.id === id))
       .filter((r): r is Resource => !!r && r.radioState === '6-7' && r.destino?.emergenciaId === emergenciaSnap.id);
 
-    if (!vigentes.length) return;
+    const actuales = resourcesRef.current;
+    const faltanAhora = tiposFaltantesPara(emergenciaSnap, claves[emergenciaSnap.codigo], actuales);
+    if (!vigentes.length || (faltanAhora && faltanAhora.length > 0) ||
+        actuales.some(r => r.destino?.emergenciaId === emergenciaSnap.id && r.radioState === '6-3')) {
+      delete trabajoCompartidoRef.current[emergenciaSnap.id];
+      return;
+    }
 
     try {
       await cambiarEstadoEmergenciaBD(emergenciaSnap.id, 'FINALIZADA');
       advanceQueue(emergenciaSnap.id);
       pushHistorial('liberacion', `Emergencia #${emergenciaSnap.id} finalizada en la base de datos (${vigentes.length} unidad${vigentes.length>1?'es':''} regresando a la vez)`);
     } catch (error) {
+      delete trabajoCompartidoRef.current[emergenciaSnap.id];
       console.error('No se pudo finalizar la emergencia:', error);
       notify(error instanceof Error ? error.message : `No se pudo cerrar la emergencia #${emergenciaSnap.id} en la base de datos`);
       return;
@@ -4064,8 +4070,30 @@ const spawnEmergencia = (): Emergency => {
     await Promise.all(vigentes.map(r => iniciarRegresoUnidad(r.id, emergenciaSnap)));
   }, tiempoTrabajo);
 
-  resourceIdsOla.forEach(id => registerResourceTimer(id, tTrabajo));
+  // Pertenece a la emergencia, no a un carro: redespachar una unidad no
+  // debe cancelar silenciosamente el trabajo compartido.
+  timeoutsRef.current.push(tTrabajo);
  };
+
+ // React puede aplazar los actualizadores de setResources. Comprobar aquí,
+ // después del commit, evita perder la llegada de la última unidad.
+ // También recupera escenas completas obtenidas desde PostgreSQL.
+ useEffect(() => {
+  if (!isAdmin || !recursosCargados) return;
+  resourcesRef.current = resources;
+  for (const emergencia of queue) {
+   if (emergencia.status !== 'EN_ATENCION') continue;
+   for (const r of resources) {
+    if (r.destino?.emergenciaId !== emergencia.id || r.radioState !== '6-7' ||
+        infoRegresoRef.current[r.id] || r.homeLat == null || r.homeLng == null) continue;
+    infoRegresoRef.current[r.id] = {
+     home: {lat:r.homeLat, lng:r.homeLng},
+     duracionTramoMs: ANIMACION_DESPACHO_MIN_MS,
+    };
+   }
+   intentarIniciarTrabajoCompartido(emergencia);
+  }
+ }, [resources, queue, claves, isAdmin, recursosCargados]);
 
  // El campo destino de un recurso (de que emergencia es, ver tipo
  // Resource) vive SOLO en memoria del navegador -- nunca se guarda en
@@ -4411,7 +4439,7 @@ const spawnEmergencia = (): Emergency => {
  // (para saber el cuartel/home de cada unidad y no pisar un estado que haya
  // cambiado por otra via mientras tanto).
  useEffect(() => {
-   if (!auth || !recursosCargados || despachosReanudadosRef.current) return;
+   if (!auth || !isAdmin || !recursosCargados || despachosReanudadosRef.current) return;
    despachosReanudadosRef.current = true;
 
    let claves: string[] = [];
