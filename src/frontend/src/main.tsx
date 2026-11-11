@@ -1290,9 +1290,16 @@ function iconoVehiculo(color:string, letra:string, rumbo:number):string{
 // del estado de radio de ninguna unidad puntual (representa el lugar, no
 // una unidad especifica). Muestra las letras de todos los tipos de unidad
 // que pertenecen a esa compania (algunas companias tienen mas de una).
-function iconoCuartel(letras:string[]):string{
-  const texto=Array.from(new Set(letras)).join('·');
-  return `<div style="width:22px;height:22px;border-radius:5px;background:#1c2029;border:2px solid #5b6472;color:#cbd5e1;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;box-shadow:0 1px 4px #000a;">${texto}</div>`;
+// Icono FIJO de cuartel/compañía -- antes mostraba las letras de cada tipo
+// de vehiculo presente ("B·H", "R·B·H"...), que terminaba siendo una letra
+// distinta por recurso y saturaba la vista general. El cuartel es un lugar,
+// no una lista de vehiculos: el mismo simbolo generico para todas las
+// companias, independiente de que carros tenga. El detalle recurso por
+// recurso sigue disponible al hacer clic (ver popupCuartel).
+function iconoCuartel():string{
+  return `<div style="width:22px;height:22px;border-radius:5px;background:#1c2029;border:2px solid #5b6472;color:#cbd5e1;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px #000a;">`
+    + `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 12 3l9 6.5"/><path d="M5 9.5V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.5"/><path d="M9 21v-6h6v6"/></svg>`
+    + `</div>`;
 }
 
 // Boton "asignar manualmente" dentro de un popup: solo aparece si hay una
@@ -1495,9 +1502,8 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
       const lat=unidades[0].homeLat;
       const lng=unidades[0].homeLng;
       if(lat == null || lng == null || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
-      const letras=unidades.map(u=>RESOURCE_LETRA[u.type]);
       L.marker([lat,lng],{
-        icon:L.divIcon({className:'cuartel-marker', html:iconoCuartel(letras), iconSize:[22,22], iconAnchor:[11,11]}),
+        icon:L.divIcon({className:'cuartel-marker', html:iconoCuartel(), iconSize:[22,22], iconAnchor:[11,11]}),
         // Por encima del zIndexOffset del marcador de vehiculo (200): cuando
         // una unidad esta "Disponible en cuartel" (6-0), comparte exactas las
         // mismas coordenadas que su cuartel, y sin esto el vehiculo (encima)
@@ -1561,10 +1567,16 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
       // por eso no basta con mirar el radioState solo). En 6-0 sin tramo o
       // en 6-9 esta fisicamente en el mismo punto que el marcador fijo del
       // cuartel -- no hace falta un segundo icono ahi encima.
-      // Mostrar TODOS los recursos que devuelve PostgreSQL, también los
-      // disponibles (6-0) y fuera de servicio (6-9). El cuartel se mantiene
-      // como un marcador independiente y fijo en la capa inferior.
-      const fueraDeCuartel=true;
+      // Solo se dibuja un marcador de vehiculo aparte cuando de verdad esta
+      // fuera del cuartel (en camino/trabajando/regresando, o en
+      // patrullaje -- que mantiene radioState '6-0' pero SI tiene tramo
+      // activo). Disponible en cuartel (6-0 sin tramo) y Fuera de servicio
+      // (6-9) comparten el mismo punto que el marcador fijo del cuartel, asi
+      // que mostrarlos tambien satura la vista general sin aportar nada: el
+      // badge combinado del cuartel (iconoCuartel) ya resume que unidades
+      // tiene, y su popup (ver popupCuartel) sigue listando cada una por
+      // separado al hacer clic.
+      const fueraDeCuartel=!!r.tramo || r.radioState==='6-3' || r.radioState==='6-7' || r.radioState==='6-8';
       if(!fueraDeCuartel){
         const existente=marcadoresRef.current[r.id];
         if(existente){existente.remove(); delete marcadoresRef.current[r.id]; delete estadoIconoRef.current[r.id];}

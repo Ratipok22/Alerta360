@@ -31,7 +31,11 @@ def obtener_tipos():
     return [{"codigo": c, "nombre": n, "prioridad": p, "prioridad_nivel": pn, "terreno": t}
             for c,n,p,pn,t in filas]
 
-def obtener_recursos():
+def obtener_recursos(id_compania_filtro: int | None = None):
+    # id_compania_filtro (ver PER05 en la matriz de pruebas de seguridad):
+    # un visualizador solo debe ver los recursos de SU propia compania, no
+    # los de las 26 companias del sistema. None = sin filtro (admin/soporte,
+    # que si necesitan ver todo para coordinar/atender).
     with obtener_conexion() as conn, conn.cursor() as cur:
         cur.execute("""
             SELECT
@@ -53,8 +57,9 @@ def obtener_recursos():
             FROM emergencia.recurso r
             INNER JOIN emergencia.compania c
                 ON c.id_compania = r.id_compania
+            WHERE %(id_compania)s::integer IS NULL OR c.id_compania = %(id_compania)s::integer
             ORDER BY r.id_recurso
-        """)
+        """, {"id_compania": id_compania_filtro})
 
         filas = cur.fetchall()
 

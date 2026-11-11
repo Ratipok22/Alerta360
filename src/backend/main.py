@@ -10,6 +10,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 #-------------------------------
 
+import base64
+import binascii
 import os
 import threading
 from datetime import datetime, timezone
@@ -28,7 +30,7 @@ from pydantic import BaseModel
 # que ya vengan puestas por el entorno).
 load_dotenv()
 
-from core.auth import Usuario, crear_token, verificar_credenciales, verificar_token
+from core.auth import CuentaBloqueada, LimiteExcedido, LimitadorTasa, Usuario, crear_token, verificar_credenciales, verificar_token
 from core.companies import todas_las_unidades
 from core.eta import calcular_eta
 from core.radio_codes import CLAVES_RADIALES
@@ -285,7 +287,10 @@ def crear_emergencia(datos: EmergencyCreate, usuario: Usuario = Depends(requiere
 
 
 @app.get("/emergencies")
-def obtener_emergencias():
+def obtener_emergencias(usuario: Usuario = Depends(usuario_actual)):
+    # DEF-02 (ver matriz de pruebas de seguridad): este endpoint no exigia
+    # sesion, a diferencia de todos sus pares -- exponia direccion,
+    # coordenadas y estado de cada emergencia a cualquiera sin login.
     conexion = None
 
     try:
@@ -339,9 +344,14 @@ def obtener_emergencias():
         }
 
     except Exception as e:
+        # DEF-03 (ver matriz de pruebas de seguridad): antes se reenviaba
+        # str(e) tal cual al cliente -- un error de conexion a Postgres
+        # exponia usuario de BD, hosts y puerto en la respuesta HTTP. El
+        # detalle real queda solo en este log del servidor.
+        print(f"[/emergencies] Error al obtener emergencias: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Error al obtener emergencias: {str(e)}"
+            detail="No se pudo obtener las emergencias."
         )
 
     finally:
@@ -369,7 +379,17 @@ def login(datos: LoginRequest):
     """Login sin registro: solo los 3 operadores fijos definidos en
     core/auth.py pueden entrar. Las contraseñas se verifican contra su
     hash bcrypt, nunca en texto plano."""
-    usuario = verificar_credenciales(datos.email, datos.password)
+    try:
+        usuario = verificar_credenciales(datos.email, datos.password)
+    except CuentaBloqueada as exc:
+        # DEF-01 (ver matriz de pruebas de seguridad): demasiados intentos
+        # fallidos seguidos para esta cuenta -- 429 con cuanto falta para
+        # poder reintentar, en vez de seguir aceptando intentos ilimitados.
+        raise HTTPException(
+            status_code=429,
+            detail=f"Demasiados intentos fallidos. Intenta de nuevo en {exc.segundos_restantes} segundos.",
+            headers={"Retry-After": str(exc.segundos_restantes)},
+        )
     if not usuario:
         raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
     with obtener_conexion() as conexion, conexion.cursor() as cursor:
@@ -515,10 +535,29 @@ def cambiar_estado_emergencia(
         conexion.close()
 
 
+def _resolver_id_compania_usuario(email: str) -> int | None:
+    """Compania asignada a esta cuenta (emergencia.usuario.id_compania),
+    o None si no tiene una asignada. Ver PER05 en la matriz de pruebas de
+    seguridad -- antes un visualizador veia los recursos de las 26
+    companias; ahora esto se usa para que solo vea/administre la suya."""
+    with obtener_conexion() as conexion, conexion.cursor() as cursor:
+        cursor.execute(
+            "SELECT id_compania FROM emergencia.usuario WHERE email_usuario = %s",
+            (email,),
+        )
+        fila = cursor.fetchone()
+    return fila[0] if fila else None
+
+
 @app.get("/resources")
 def resources(usuario: Usuario = Depends(usuario_actual)):
     try:
-        return {"resources": obtener_recursos()}
+        # admin y soporte necesitan ver todo el sistema para coordinar y
+        # atender tickets; visualizador solo ve su propia compania.
+        id_compania_filtro = None
+        if usuario.rol == "visualizador":
+            id_compania_filtro = _resolver_id_compania_usuario(usuario.email)
+        return {"resources": obtener_recursos(id_compania_filtro)}
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"No se pudieron consultar los recursos: {exc}")
 
@@ -605,10 +644,25 @@ def cambiar_estado_recurso(
     PATCH /resources/{..}/position (que tambien mueve el vehiculo durante
     el despacho y sigue siendo solo-admin), este endpoint NO toca
     latitud/longitud y por eso puede abrirse tambien a visualizador sin
-    permitirle mover ni asignar unidades."""
+    permitirle mover ni asignar unidades.
+
+    Un visualizador solo puede dar de baja/reactivar recursos de SU PROPIA
+    compania (ver PER05 en la matriz de pruebas de seguridad) -- admin
+    sigue sin restriccion, porque coordina toda la flota."""
     conexion = obtener_conexion()
     try:
         with conexion.cursor() as cursor:
+            if usuario.rol == "visualizador":
+                id_compania_usuario = _resolver_id_compania_usuario(usuario.email)
+                cursor.execute(
+                    "SELECT id_compania FROM emergencia.recurso WHERE codigo_recurso = %s",
+                    (codigo_recurso,),
+                )
+                fila_compania = cursor.fetchone()
+                if fila_compania is None:
+                    raise HTTPException(status_code=404, detail=f"No existe el recurso {codigo_recurso}")
+                if id_compania_usuario is None or fila_compania[0] != id_compania_usuario:
+                    raise HTTPException(status_code=403, detail="Solo puedes dar de baja recursos de tu propia compañía")
             cursor.execute(
                 """
                 UPDATE emergencia.recurso
@@ -708,6 +762,13 @@ def personal_activo_por_compania(usuario: Usuario = Depends(usuario_actual)):
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"No se pudo consultar el personal activo: {exc}")
 
+# DEF-05 (ver matriz de pruebas de seguridad): 30 requests seguidas a este
+# endpoint no encontraban ningun rechazo. 20 por minuto alcanza de sobra
+# para el polling normal del frontend (cada 10s, ver main.tsx) sin dejar
+# la puerta abierta a repetirlo sin limite.
+_limitador_prediccion = LimitadorTasa(limite=20, ventana_segundos=60)
+
+
 @app.get("/prediction/demand")
 def prediction_demand(horizon: int = 4, fecha: str | None = None, recalcular: bool = False, usuario: Usuario = Depends(usuario_actual)):
     """Prediccion de demanda esperada por zona/periodo/tipo (modelo ML).
@@ -721,6 +782,14 @@ def prediction_demand(horizon: int = 4, fecha: str | None = None, recalcular: bo
     prediccion reciente (<60 min) para el mismo bloque horario no se
     recalcula en cada GET -- `recalcular=true` fuerza un calculo nuevo.
     """
+    try:
+        _limitador_prediccion.verificar(usuario.email)
+    except LimiteExcedido as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Demasiadas solicitudes. Intenta de nuevo en {exc.segundos_restantes} segundos.",
+            headers={"Retry-After": str(exc.segundos_restantes)},
+        )
     now = None
     if fecha:
         try:
@@ -1399,6 +1468,22 @@ class TicketCreate(BaseModel):
 _TIPOS_IMAGEN_PERMITIDOS = ("image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp")
 _LIMITE_ADJUNTO_BASE64 = 4 * 1024 * 1024
 
+# DEF-04 (ver matriz de pruebas de seguridad): antes solo se validaba el
+# tipo MIME declarado en el encabezado "data:" -- un base64 corrupto o con
+# contenido arbitrario, pero con un MIME permitido, pasaba igual. Esto
+# verifica la firma real de bytes de cada formato (magic numbers), para
+# que el contenido coincida con lo que dice ser.
+def _firma_valida(tipo_mime: str, datos: bytes) -> bool:
+    if tipo_mime in ("image/png",):
+        return datos.startswith(b"\x89PNG\r\n\x1a\n")
+    if tipo_mime in ("image/jpeg", "image/jpg"):
+        return datos.startswith(b"\xff\xd8\xff")
+    if tipo_mime == "image/gif":
+        return datos.startswith(b"GIF87a") or datos.startswith(b"GIF89a")
+    if tipo_mime == "image/webp":
+        return datos.startswith(b"RIFF") and datos[8:12] == b"WEBP"
+    return False
+
 
 def _validar_archivo_adjunto(archivo_url: str | None) -> None:
     if not archivo_url:
@@ -1412,6 +1497,12 @@ def _validar_archivo_adjunto(archivo_url: str | None) -> None:
             raise HTTPException(status_code=400, detail=f"Tipo de imagen no permitido: {tipo_mime}")
         if len(datos_base64) > _LIMITE_ADJUNTO_BASE64:
             raise HTTPException(status_code=400, detail="La imagen adjunta pesa demasiado (máximo 3 MB).")
+        try:
+            datos_crudos = base64.b64decode(datos_base64, validate=True)
+        except (binascii.Error, ValueError):
+            raise HTTPException(status_code=400, detail="El contenido de la imagen no es un base64 válido.")
+        if not _firma_valida(tipo_mime, datos_crudos):
+            raise HTTPException(status_code=400, detail="El contenido del archivo no coincide con el tipo de imagen declarado.")
         return
     raise HTTPException(status_code=400, detail="Archivo adjunto inválido: debe ser una URL http(s) o una imagen.")
 

@@ -10,7 +10,9 @@ falta guardar sesiones en memoria ni en base de datos.
 """
 import json
 import os
-from dataclasses import dataclass
+import threading
+import time
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -70,12 +72,69 @@ if os.getenv("APP_ENV") == "production":
                 for email, valor in hashes.items()}
 
 
+# Limite de intentos de login por cuenta (ver DEF-01 en la matriz de
+# pruebas de seguridad): sin esto, un ataque de fuerza bruta puede probar
+# contraseñas sin ninguna friccion. En memoria del proceso alcanza porque
+# son 4 cuentas fijas y un solo proceso de backend -- si se escala a mas
+# de un worker/replica, esto deberia moverse a algo compartido (Redis).
+_LIMITE_INTENTOS = 5
+_VENTANA_SEGUNDOS = 60
+_BLOQUEO_SEGUNDOS = 60
+
+_intentos_fallidos: dict[str, list[float]] = {}
+_bloqueados_hasta: dict[str, float] = {}
+_lock_intentos = threading.Lock()
+
+
+class CuentaBloqueada(Exception):
+    """Se lanza cuando una cuenta supero el limite de intentos fallidos."""
+    def __init__(self, segundos_restantes: int):
+        self.segundos_restantes = segundos_restantes
+        super().__init__(f"Cuenta bloqueada por {segundos_restantes}s tras demasiados intentos fallidos.")
+
+
+def _segundos_bloqueo_restante(email: str) -> int | None:
+    with _lock_intentos:
+        hasta = _bloqueados_hasta.get(email)
+        if hasta is None:
+            return None
+        restante = hasta - time.monotonic()
+        if restante <= 0:
+            _bloqueados_hasta.pop(email, None)
+            _intentos_fallidos.pop(email, None)
+            return None
+        return int(restante) + 1
+
+
+def _registrar_intento_fallido(email: str) -> None:
+    ahora = time.monotonic()
+    with _lock_intentos:
+        intentos = [t for t in _intentos_fallidos.get(email, []) if ahora - t < _VENTANA_SEGUNDOS]
+        intentos.append(ahora)
+        if len(intentos) >= _LIMITE_INTENTOS:
+            _bloqueados_hasta[email] = ahora + _BLOQUEO_SEGUNDOS
+            intentos = []
+        _intentos_fallidos[email] = intentos
+
+
+def _limpiar_intentos(email: str) -> None:
+    with _lock_intentos:
+        _intentos_fallidos.pop(email, None)
+        _bloqueados_hasta.pop(email, None)
+
+
 def verificar_credenciales(email: str, password: str) -> Usuario | None:
-    usuario = USUARIOS.get(email.strip().lower())
-    if not usuario:
+    email = email.strip().lower()
+    restante = _segundos_bloqueo_restante(email)
+    if restante is not None:
+        raise CuentaBloqueada(restante)
+
+    usuario = USUARIOS.get(email)
+    if not usuario or not bcrypt.checkpw(password.encode("utf-8"), usuario.password_hash):
+        _registrar_intento_fallido(email)
         return None
-    if not bcrypt.checkpw(password.encode("utf-8"), usuario.password_hash):
-        return None
+
+    _limpiar_intentos(email)
     return usuario
 
 
@@ -97,3 +156,36 @@ def verificar_token(token: str) -> Usuario | None:
         return None
     email = payload.get("sub")
     return USUARIOS.get(email) if email else None
+
+
+class LimiteExcedido(Exception):
+    """Se lanza cuando un cliente supero el limite de requests permitido."""
+    def __init__(self, segundos_restantes: int):
+        self.segundos_restantes = segundos_restantes
+        super().__init__(f"Limite de requests excedido, reintentar en {segundos_restantes}s.")
+
+
+class LimitadorTasa:
+    """Limitador de tasa generico en memoria (ventana deslizante), para
+    endpoints pesados que no tenian ningun control (ver DEF-05 en la
+    matriz de pruebas de seguridad: 30 requests seguidas a
+    /prediction/demand no encontraban ningun rechazo). Misma limitacion
+    que el bloqueo de login de mas arriba: vive en memoria de un solo
+    proceso, suficiente para este despliegue de demo -- si se escala a
+    mas de un worker/replica, debería moverse a algo compartido (Redis)."""
+    def __init__(self, limite: int, ventana_segundos: int):
+        self.limite = limite
+        self.ventana_segundos = ventana_segundos
+        self._peticiones: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
+
+    def verificar(self, clave: str) -> None:
+        ahora = time.monotonic()
+        with self._lock:
+            historial = [t for t in self._peticiones.get(clave, []) if ahora - t < self.ventana_segundos]
+            if len(historial) >= self.limite:
+                mas_antigua = historial[0]
+                restante = int(self.ventana_segundos - (ahora - mas_antigua)) + 1
+                raise LimiteExcedido(max(restante, 1))
+            historial.append(ahora)
+            self._peticiones[clave] = historial
