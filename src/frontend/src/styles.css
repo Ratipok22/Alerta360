@@ -502,6 +502,17 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
 .activityRow span.historialEstado{display:inline-block;flex-shrink:0;margin:0 0 0 12px;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
 .historialEstado-activa{background:color-mix(in srgb, var(--rojo-alerta) 16%, transparent);color:var(--rojo-alerta)}
 .historialEstado-finalizada{background:color-mix(in srgb, var(--verde-disponible) 16%, transparent);color:var(--verde-disponible)}
+/* Historial en movil: con badge, el detalle usa todo el ancho y badge + hora
+   bajan a una segunda linea (antes el texto quedaba en ~150px). */
+/* Con badge, la hora se partia en 2-3 lineas ("hace / 155 / h") en tablet. */
+@media (max-width:1365px){
+  .sectionCard .activityRow time{white-space:nowrap}
+}
+@media (max-width:720px){
+  .sectionCard .activityRow:has(.historialEstado){flex-wrap:wrap;row-gap:6px}
+  .sectionCard .activityRow:has(.historialEstado)>div:not(.activityIcon){flex:1 1 calc(100% - 41px)}
+  .sectionCard .activityRow span.historialEstado{margin-left:40px}
+}
 
 .toast{position:fixed;right:24px;bottom:22px;background:var(--negro-tarjeta);border:1px solid var(--verde-disponible);color:var(--verde-disponible);padding:12px 15px;border-radius:8px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px;box-shadow:0 10px 30px #0008}
 
@@ -517,6 +528,11 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
 .filterRow{display:flex;flex-wrap:wrap;gap:8px;padding:10px 20px 14px}
 .filterRow input,.filterRow select{background:var(--negro-panel);color:var(--gris-texto);border:1px solid var(--borde-sutil);border-radius:6px;padding:7px 10px;font-size:12px;font-family:inherit}
 .filterRow input{flex:1;min-width:160px}
+@media (max-width:720px){
+  .filterRow{padding:10px 14px 14px}
+  .filterRow input{flex-basis:100%}
+  .filterRow select{flex:1 1 140px;min-width:0}
+}
 .tableWrap{overflow-x:auto;padding:0 20px 16px}
 .dataTable{width:100%;border-collapse:collapse;font-size:12px}
 .dataTable th{text-align:left;color:var(--gris-tenue);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:1px;padding:9px 10px;border-bottom:1px solid var(--borde-sutil);white-space:nowrap}
@@ -534,6 +550,24 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
    realmente no necesitan tanto espacio. */
 .resNombreCell{max-width:170px}
 .resEstadoCell{max-width:200px}
+/* Bajo 1366px (escritorio intacto): en contenedor angosto la tabla conserva un
+   ancho minimo legible y se desplaza dentro de la tarjeta, en vez de aplastar
+   las columnas de texto en filas de 5-8 lineas. */
+@media (max-width:1365px){
+  .tableWrap{container:tabla / inline-size;overscroll-behavior-x:contain}
+}
+@container tabla (max-width:699px){
+  .dataTable:has(.resIconCell){min-width:1180px}
+  .dataTable:has(.emergenciaRow){min-width:940px}
+  /* Sin filas, el encabezado (nowrap) desbordaba y dejaba el aviso fuera de vista. */
+  .dataTable:has(.emptyState) thead{display:none}
+}
+/* Tablet/ventana: sin esto la tabla se aplastaba al minimo (Sector en 7 lineas) y
+   aun asi desbordaba; con el ancho que tiene a 1366 se lee igual y se desplaza. */
+@container tabla (min-width:700px) and (max-width:1039px){
+  .dataTable:has(.resIconCell){min-width:1040px}
+  .dataTable:has(.emergenciaRow){min-width:940px}
+}
 
 /* Pastillas: clave radial (10-0, 10-4...) y estado 6-X */
 .prio,.estado{padding:5px 10px;border-radius:6px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;background:var(--negro-panel);border:1px solid}
@@ -566,6 +600,11 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
 .configNote{font-size:12px;color:var(--gris-tenue)}
 .logoutBtn{color:var(--rojo-alerta);border-color:#ff3b3055}
 .logoutBtn:hover{background:#ff3b3015}
+/* Movil: input/select bajo su etiqueta y a todo el ancho (en fila quedaban
+   desalineados por el largo distinto de cada etiqueta). El checkbox no cambia. */
+@media(max-width:720px){
+  .configRow:has(> select, > input:not([type="checkbox"])){flex-direction:column;align-items:stretch;gap:6px}
+}
 
 .mobileMenu{display:none;border:0;background:transparent;color:var(--blanco);cursor:pointer;padding:0}
 .navBackdrop{display:none}
@@ -642,14 +681,14 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
   .kpis{grid-template-columns:repeat(2,1fr)}
 }
 @media(max-width:720px){
-  .sidebar{display:flex;transform:translateX(-100%);box-shadow:8px 0 30px #0008}
-  .sidebar.open{transform:translateX(0)}
+  .sidebar{display:flex;transform:translateX(-100%);visibility:hidden;transition:transform .25s,visibility 0s linear .25s}
+  .sidebar.open{transform:translateX(0);visibility:visible;transition:transform .25s;box-shadow:8px 0 30px #0008}
   .main,.main.sidebarCollapsed{margin-left:0;width:100%;padding:16px}
   .cuartelFilterRow{flex-wrap:wrap}
   .cuartelFilterRow select{min-width:0;flex:1}
   .mobileMenu{display:grid;place-items:center;margin-right:10px;width:32px;height:32px;flex-shrink:0}
   .navBackdrop{display:block;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:35}
-  .headerActions .live{display:none}
+  .headerActions{flex-wrap:wrap;justify-content:flex-end;row-gap:8px}
   header{flex-wrap:wrap;height:auto;gap:10px 0}
   header>div:first-child{display:flex}
   h1{font-size:19px}
@@ -1828,8 +1867,25 @@ html[data-theme="light"] .adminTicketsToolbar select:focus{
 
 @media(max-width:800px){
 
+  /* Las 3 cifras en una fila compacta: apiladas empujaban la lista casi
+     una pantalla hacia abajo. */
   .adminTicketsStats{
-    grid-template-columns:1fr;
+    grid-template-columns:repeat(3,minmax(0,1fr));
+    gap:8px;
+  }
+
+  .adminTicketStat{
+    padding:12px;
+  }
+
+  .adminTicketStat span{
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+
+  .adminTicketStat strong{
+    font-size:22px;
   }
 
   .adminTicketsToolbar{
@@ -2212,6 +2268,38 @@ html[data-theme="light"] .adminTicketResponse textarea{
   background:var(--fondo-pagina);
 }
 
+/* Texto libre de usuarios: palabras o URLs largas sin espacios se parten en
+   vez de desbordar la card (el panel con overflow:hidden las cortaba). */
+.ticketCard h3,
+.ticketCard p,
+.ticketThreadMsg p,
+.ticketSupportResponse p,
+.adminTicketUserResponse p,
+.adminTicketDescription p,
+.adminTicketExistingResponse p,
+.adminTicketDetail .cardHead b{
+  overflow-wrap:anywhere;
+}
+
+.adminTicketDetail .cardHead > div{
+  min-width:0;
+}
+
+@media(max-width:600px){
+  .adminTicketRow{
+    padding:18px;
+  }
+
+  .adminTicketDetailBody{
+    padding:16px;
+  }
+
+  .adminTicketActions .adminTicketBtn{
+    flex:1 1 auto;
+    justify-content:center;
+  }
+}
+
 
 /* =========================================================
    NUEVA EMERGENCIA (FORMULARIO CAD, SOLO ADMIN)
@@ -2278,7 +2366,10 @@ html[data-theme="light"] .nuevaEmergenciaCard .cardHead span{
 
 .nuevaEmergenciaLayout{
   display:grid;
-  grid-template-columns:minmax(420px,620px) minmax(800px,1500px);
+  /* min(): si la card no alcanza para 420+800px, ambas columnas se achican
+     hasta caber (antes desbordaban a 1366/1536); con espacio suficiente el
+     resultado es identico al de antes. */
+  grid-template-columns:minmax(min(420px, calc((100% - 36px) * .42)),620px) minmax(min(800px, calc(100% - 36px - min(420px, calc((100% - 36px) * .42)))),1500px);
   align-items:stretch;
   justify-content:center;
   gap:36px;
@@ -2510,10 +2601,31 @@ html[data-theme="light"] .nuevaEmergenciaCard .cardHead span{
    se calcula y se envia sola a partir del codigo de emergencia elegido
    (ver elegirCodigo en NuevaEmergenciaView), sin UI propia. */
 
-@media (max-width: 860px){
+/* Una sola columna. display:contents deja los campos del sidebar como items
+   del grid para ordenarlos 1, 2, mapa (3), 4 y al final el boton (antes
+   "Crear" quedaba arriba del mapa). */
+@media (max-width: 1180px){
   .nuevaEmergenciaLayout{
-    grid-template-columns:1fr;
+    grid-template-columns:minmax(0,1fr);
+    gap:26px;
   }
+  .nuevaEmergenciaSidebar{ display:contents; }
+  .nuevaEmergenciaSidebar > .nuevaEmergenciaCampo:nth-of-type(3){ order:1; }
+  .nuevaEmergenciaCrearBtn{ order:2; margin:0; }
+  .formMapaUbicacion{ min-height:clamp(240px, 55vh, 640px); }
+}
+
+@media (max-width: 720px){
+  .nuevaEmergenciaLayout{ padding:18px 16px; gap:22px; }
+  .nuevaEmergenciaCard .cardHead b{ font-size:23px; }
+  .nuevaEmergenciaCard .cardHead span{ font-size:15px; }
+  .nuevaEmergenciaCampo{ font-size:19px; }
+  /* 16px: minimo para que iOS no haga zoom al enfocar el campo */
+  .nuevaEmergenciaCampo input[type="text"],
+  .nuevaEmergenciaDireccionInput,
+  .nuevaEmergenciaSelect,
+  .nuevaEmergenciaPisoInput{ padding:13px 14px; font-size:16px; }
+  .nuevaEmergenciaCrearBtn{ padding:16px 20px; font-size:17px; }
 }
 
 /* Popup del cuartel en el mapa operacional (ver popupCuartel en main.tsx).
@@ -2534,3 +2646,58 @@ html[data-theme="light"] .nuevaEmergenciaCard .cardHead span{
 .popupRecursoNombre{ font-weight:700; font-size:12.5px; }
 .popupRecursoTipo{ font-weight:400; opacity:.65; }
 .popupRecursoEstado{ font-size:11.5px; opacity:.85; margin-top:2px; }
+
+/* ============ SHELL RESPONSIVO ============ */
+/* Scroll propio del menu: en alturas bajas (celular horizontal, ventana
+   reducida) los ultimos items quedaban cortados y fuera de alcance. */
+.sidebar{overflow-y:auto;overscroll-behavior:contain}
+/* Sin z-index el toast quedaba debajo de los mapas (#map/#heatmap y el del
+   Formulario tienen z-index:1). */
+.toast{z-index:50}
+/* dvh: alto visible real en movil (sin la barra del navegador). */
+.app,.loginPage{min-height:100dvh}
+.loginPage{padding:16px}
+@media(min-width:721px) and (max-width:1365px){
+  /* Si titulo y acciones no caben en una fila, las acciones bajan en vez de
+     desbordar el alto fijo de 55px. */
+  header{height:auto;min-height:55px;flex-wrap:wrap;row-gap:10px}
+}
+@media(max-width:720px){
+  /* Red de seguridad: un hijo mas ancho que la pantalla no debe generar scroll
+     horizontal ni el zoom-out automatico del navegador movil. */
+  .main{overflow-x:clip}
+  .toast{left:16px;right:16px;bottom:16px}
+}
+
+/* ============ DASHBOARD · TABLET / MOVIL ============ */
+@media(max-width:1050px){
+  .workspace{grid-template-columns:minmax(0,1fr)}
+  /* El select vive dentro del label: sin min-width:0 el label no se encoge y saca el select de la fila. */
+  .cuartelFilterRow{flex-wrap:wrap}
+  .cuartelFilterRow label{min-width:0}
+  .kpi>div{min-width:0}
+  /* 2 columnas solo si cada tarjeta tiene >=300px; con una sola (Alertas predictivas) ocupa todo el ancho. */
+  .sideCards{grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))}
+  .mapCard,.heatMapCard{min-height:0}
+  .mapCard #map,.heatMapCard #heatmap{flex:none;height:clamp(260px,60vh,440px);min-height:0}
+  .predictiveMainAlertInfo strong{text-align:right}
+}
+@media(max-width:720px){
+  .cuartelFilterRow label{flex:1 1 100%;flex-wrap:wrap}
+  .cuartelFilterRow select{flex:1 1 200px;max-width:100%}
+  .sideCards{grid-template-columns:minmax(0,1fr)}
+  /* Mas bajo que el viewport para poder seguir haciendo scroll con el dedo fuera del mapa. */
+  .mapCard #map,.heatMapCard #heatmap{height:clamp(240px,50vh,380px)}
+  .heatMapCard .cardHead{flex-wrap:nowrap;align-items:flex-start}
+  .heatMapCard .cardHead>div{min-width:0}
+  .heatMapCard + .sideCards .alertsList{padding-left:8px;padding-right:8px}
+  .heatMapCard + .sideCards .predictiveMainAlert{margin-left:16px;margin-right:16px;padding:16px}
+  .activity .activityRow>div:not(.activityIcon){flex:1;min-width:0;overflow-wrap:anywhere}
+  .activity .activityRow time{flex-shrink:0;white-space:nowrap}
+  .cuartelFilterRow .linkBtn,.resourcesCard .linkBtn,.zonaDetalleHead .linkBtn{padding:8px 4px}
+  .infoTipBubble{max-width:calc(100vw - 56px);font-size:15px}
+}
+/* En touch no hay hover ni :focus-visible al tocar: el tooltip se abre con el foco del toque. */
+@media(hover:none){
+  .infoTip:focus .infoTipBubble{opacity:1;visibility:visible}
+}

@@ -1288,8 +1288,7 @@ function iconoVehiculo(color:string, letra:string, rumbo:number):string{
 // anima), a proposito distinto del vehiculo -- forma cuadrada/insignia en
 // vez de flecha, sin anillo de movimiento, un color neutro que no depende
 // del estado de radio de ninguna unidad puntual (representa el lugar, no
-// una unidad especifica). Muestra las letras de todos los tipos de unidad
-// que pertenecen a esa compania (algunas companias tienen mas de una).
+// una unidad especifica).
 // Icono FIJO de cuartel/compañía -- antes mostraba las letras de cada tipo
 // de vehiculo presente ("B·H", "R·B·H"...), que terminaba siendo una letra
 // distinta por recurso y saturaba la vista general. El cuartel es un lugar,
@@ -1397,6 +1396,8 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
   // de cual estaba abierta para volver a abrirla justo despues de recrear
   // los marcadores, en vez de que se cierre sola sin que el operador la cerrara.
   const emergenciaPopupAbiertaRef=useRef<number|null>(null);
+  // Lo mismo para el popup de cuartel (por nombre de compañia).
+  const cuartelPopupAbiertoRef=useRef<string|null>(null);
   // Capa "estatica": emergencias, marcador de emergencia asignada y el
   // trazado de ruta -- se redibuja solo cuando cambian los datos (no en
   // cada tick), porque nada de esto se mueve cuadro a cuadro.
@@ -1418,15 +1419,16 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
   // quedaria desactualizada si no se lee desde aca en vez de capturarla).
   const datosRef=useRef<Record<string, Resource>>({});
 
-  // Si el popup de un vehiculo ya esta abierto cuando llega personal activo
+  // Si el popup de un cuartel ya esta abierto cuando llega personal activo
   // nuevo (ver poll de GET /companies/personal-activo en App()), Leaflet NO
   // vuelve a llamar solo a la funcion de contenido del popup -- queda
   // mostrando el numero viejo hasta que el operador lo cierra y lo abre de
   // nuevo. Forzamos el refresco aca para que se vea "en vivo", sin F5 ni
-  // tener que cerrar/reabrir el popup a mano.
+  // tener que cerrar/reabrir el popup a mano. Los cuarteles viven en
+  // layerRef; el popup del vehiculo ya no muestra personal activo.
   useEffect(()=>{
-    Object.values(marcadoresRef.current).forEach(marcador=>{
-      if(marcador.isPopupOpen()) marcador.getPopup()?.update();
+    layerRef.current?.eachLayer(capa=>{
+      if(capa instanceof L.Marker && capa.isPopupOpen()) capa.getPopup()?.update();
     });
   },[personalActivoPorCompania]);
 
@@ -1459,14 +1461,18 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
     // delegacion de eventos: cada vez que se abre un popup, se buscan
     // botones con data-asignar-id adentro y se conecta el callback real.
     map.on('popupopen', (e:any)=>{
-      const el=e.popup?.getElement?.();
-      if(!el) return;
-      el.querySelectorAll('[data-asignar-id]').forEach((btn:Element)=>{
-        btn.addEventListener('click', ()=>{
-          const id=btn.getAttribute('data-asignar-id');
-          if(id) onAsignarManualRef.current(id);
-          map.closePopup();
-        }, {once:true});
+      const popup=e.popup;
+      const el:HTMLElement|undefined=popup?.getElement?.();
+      // Un solo listener por contenedor (Leaflet lo reutiliza): popup.update()
+      // reemplaza el HTML interno y los botones quedaban sin listener.
+      if(!el || el.dataset.asignarDelegado) return;
+      el.dataset.asignarDelegado='1';
+      el.addEventListener('click', (ev:MouseEvent)=>{
+        const id=(ev.target as Element|null)?.closest?.('[data-asignar-id]')?.getAttribute('data-asignar-id');
+        // isOpen(): ignora un 2º clic mientras el popup ya cerrado se desvanece (200ms).
+        if(!id || !popup.isOpen()) return;
+        onAsignarManualRef.current(id);
+        map.closePopup();
       });
     });
     const cleanupResize=fixOperationalMapSize(map);
@@ -1484,6 +1490,7 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
     // quedaria en null antes de llegar al forEach de abajo, y el marcador
     // nuevo de esa misma emergencia nunca se reabriria.
     const idPopupAbiertaAntes=emergenciaPopupAbiertaRef.current;
+    const cuartelAbiertoAntes=cuartelPopupAbiertoRef.current;
     layer.clearLayers();
     // Marcador de cuartel: FIJO, uno por compañía (varias unidades pueden
     // compartir el mismo cuartel), nunca se mueve -- independiente del
@@ -1502,7 +1509,7 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
       const lat=unidades[0].homeLat;
       const lng=unidades[0].homeLng;
       if(lat == null || lng == null || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
-      L.marker([lat,lng],{
+      const markerCuartel=L.marker([lat,lng],{
         icon:L.divIcon({className:'cuartel-marker', html:iconoCuartel(), iconSize:[22,22], iconAnchor:[11,11]}),
         // Por encima del zIndexOffset del marcador de vehiculo (200): cuando
         // una unidad esta "Disponible en cuartel" (6-0), comparte exactas las
@@ -1511,7 +1518,10 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
         // cuartel. El popup del cuartel ya lista cada unidad con su propio
         // boton de asignar, asi que no se pierde nada al priorizarlo aca.
         zIndexOffset:250,
-      }).addTo(layer).bindTooltip(`${compania} · ${sector}`).bindPopup(()=>popupCuartel(compania, sector, unidades, emergenciesRef.current.length>0, isAdminRef.current, personalActivoRef.current));
+      }).addTo(layer).bindTooltip(`${compania} · ${sector}`).bindPopup(()=>popupCuartel(compania, sector, unidades, emergenciesRef.current.length>0, isAdminRef.current, personalActivoRef.current))
+        .on('popupopen', ()=>{ cuartelPopupAbiertoRef.current=compania; })
+        .on('popupclose', ()=>{ if(cuartelPopupAbiertoRef.current===compania) cuartelPopupAbiertoRef.current=null; });
+      if(cuartelAbiertoAntes===compania) markerCuartel.openPopup();
     });
     emergencies.forEach(e=>{
       const marker=L.marker([e.lat,e.lng],{icon:L.divIcon({className:'emergency-marker',html:'<div>!</div>',iconSize:[36,36],iconAnchor:[18,18]})})
@@ -1566,16 +1576,8 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
       // proposito -- sigue "disponible" -- pero SI tiene un tramo activo,
       // por eso no basta con mirar el radioState solo). En 6-0 sin tramo o
       // en 6-9 esta fisicamente en el mismo punto que el marcador fijo del
-      // cuartel -- no hace falta un segundo icono ahi encima.
-      // Solo se dibuja un marcador de vehiculo aparte cuando de verdad esta
-      // fuera del cuartel (en camino/trabajando/regresando, o en
-      // patrullaje -- que mantiene radioState '6-0' pero SI tiene tramo
-      // activo). Disponible en cuartel (6-0 sin tramo) y Fuera de servicio
-      // (6-9) comparten el mismo punto que el marcador fijo del cuartel, asi
-      // que mostrarlos tambien satura la vista general sin aportar nada: el
-      // badge combinado del cuartel (iconoCuartel) ya resume que unidades
-      // tiene, y su popup (ver popupCuartel) sigue listando cada una por
-      // separado al hacer clic.
+      // cuartel -- no hace falta un segundo icono ahi encima; el popup del
+      // cuartel (ver popupCuartel) sigue listando cada unidad al hacer clic.
       const fueraDeCuartel=!!r.tramo || r.radioState==='6-3' || r.radioState==='6-7' || r.radioState==='6-8';
       if(!fueraDeCuartel){
         const existente=marcadoresRef.current[r.id];
@@ -3096,6 +3098,13 @@ useEffect(()=>{
  const [autoRefreshSec,setAutoRefreshSec]=useState(0);
  const [zonaSeleccionada,setZonaSeleccionada]=useState<string|null>(null);
  const [mobileNavOpen,setMobileNavOpen]=useState(false);
+ // Al pasar a ancho de escritorio (rotar/redimensionar) se cierra el drawer movil.
+ useEffect(()=>{
+   const mq=window.matchMedia('(max-width: 720px)');
+   const cerrar=()=>{ if(!mq.matches) setMobileNavOpen(false); };
+   mq.addEventListener('change',cerrar);
+   return ()=>mq.removeEventListener('change',cerrar);
+ },[]);
  // Nombre/correo ya no viven aca -- son los de la cuenta real (auth), no
  // editables. Lo unico que es una preferencia local de verdad es el
  // telefono de contacto.
@@ -4093,6 +4102,9 @@ const spawnEmergencia = (): Emergency => {
  useEffect(() => {
   if (!isAdmin || !recursosCargados) return;
   resourcesRef.current = resources;
+  // Sin el catalogo de claves, tiposFaltantesPara devuelve null y una escena
+  // recuperada tras recargar se daria por completa (FINALIZADA) antes de tiempo.
+  if (!Object.keys(claves).length) return;
   for (const emergencia of queue) {
    if (emergencia.status !== 'EN_ATENCION') continue;
    for (const r of resources) {
@@ -4133,16 +4145,19 @@ const spawnEmergencia = (): Emergency => {
      Array.isArray(data.asignaciones) ? data.asignaciones : [];
     if (cancelado || !activas.length) return;
 
-    const tocadas = new Set<number>();
+    // El trabajo compartido lo arranca el efecto de arriba tras el commit,
+    // con `claves` vigente: esta closure puede tenerlas aun vacias.
     setResources(prev => {
      const resultado = prev.map(r => {
       if (r.destino || r.idRecurso == null) return r;
       if (r.radioState !== '6-3' && r.radioState !== '6-7' && r.radioState !== '6-8') return r;
-      const activa = activas.find(a => a.id_recurso === r.idRecurso);
-      if (!activa) return r;
-      const emergenciaDestino = queueRef.current.find(e => e.id === activa.id_emergencia);
+      // Puede quedar una fila vieja sin fecha_retorno (PATCH /retorno fallido):
+      // se usa la asignacion cuya emergencia sigue en la cola.
+      const emergenciaDestino = activas
+       .filter(a => a.id_recurso === r.idRecurso)
+       .map(a => queueRef.current.find(e => e.id === a.id_emergencia))
+       .find((e): e is Emergency => !!e);
       if (!emergenciaDestino) return r;
-      tocadas.add(emergenciaDestino.id);
       return {
        ...r,
        destino: {
@@ -4153,13 +4168,10 @@ const spawnEmergencia = (): Emergency => {
        },
       };
      });
+     // Sin cambios se devuelve prev: evita re-render y redibujar el mapa en cada poll.
+     if (resultado.every((r, i) => r === prev[i])) return prev;
      resourcesRef.current = resultado;
      return resultado;
-    });
-
-    tocadas.forEach(id => {
-     const emergenciaSnap = queueRef.current.find(e => e.id === id);
-     if (emergenciaSnap) intentarIniciarTrabajoCompartido(emergenciaSnap);
     });
    } catch (error) {
     console.error('No se pudieron reconciliar las asignaciones activas al cargar:', error);
@@ -4999,12 +5011,14 @@ const spawnEmergencia = (): Emergency => {
  if(!auth) return <LoginView onLogin={handleLogin} theme={theme} onToggleTheme={()=>setTheme(t=>t==='dark'?'light':'dark')}/>;
 
  const iniciales=auth.nombre.split(' ').filter(Boolean).slice(0,2).map(p=>p[0].toUpperCase()).join('')||'OP';
+ // En el drawer movil el menu va siempre expandido aunque en escritorio este colapsado.
+ const navCompacto=sidebarCollapsed&&!mobileNavOpen;
 
  return <div className="app" data-theme={theme}>
    {mobileNavOpen && <div className="navBackdrop" onClick={()=>setMobileNavOpen(false)}/>}
-   <aside className={`sidebar${mobileNavOpen?' open':''}${sidebarCollapsed?' collapsed':''}`}>
-    <button className="sidebarToggleBtn" onClick={()=>setSidebarCollapsed(c=>!c)} title={sidebarCollapsed?'Expandir menú':'Colapsar menú'}><Menu size={20}/></button>
-    <div className="brand"><div className="brandIcon"><img src={logoDark} className="logoDark" alt="ALERTA360"/><img src={logoLight} className="logoLight" alt="ALERTA360"/></div>{!sidebarCollapsed && <div><b>ALERTA360</b><span>BOMBEROS · VALPARAÍSO</span></div>}</div>
+   <aside className={`sidebar${mobileNavOpen?' open':''}${navCompacto?' collapsed':''}`}>
+    <button className="sidebarToggleBtn" onClick={()=>mobileNavOpen?setMobileNavOpen(false):setSidebarCollapsed(c=>!c)} title={mobileNavOpen?'Cerrar menú':sidebarCollapsed?'Expandir menú':'Colapsar menú'}><Menu size={20}/></button>
+    <div className="brand"><div className="brandIcon"><img src={logoDark} className="logoDark" alt="ALERTA360"/><img src={logoLight} className="logoLight" alt="ALERTA360"/></div>{!navCompacto && <div><b>ALERTA360</b><span>BOMBEROS · VALPARAÍSO</span></div>}</div>
   <nav>
   {isAdminSoporte ? (
     <>
@@ -5014,7 +5028,7 @@ const spawnEmergencia = (): Emergency => {
         title="Tickets"
       >
         <Ticket size={18}/>
-        {!sidebarCollapsed && <span>Tickets</span>}
+        {!navCompacto && <span>Tickets</span>}
       </button>
       <button
         className={section==='Configuración'?'active':''}
@@ -5022,7 +5036,7 @@ const spawnEmergencia = (): Emergency => {
         title="Configuración"
       >
         <Settings size={18}/>
-        {!sidebarCollapsed && <span>Configuración</span>}
+        {!navCompacto && <span>Configuración</span>}
       </button>
     </>
   ) : (
@@ -5046,12 +5060,12 @@ const spawnEmergencia = (): Emergency => {
           title={label}
         >
           <Icon size={18}/>
-          {!sidebarCollapsed && <span>{label}</span>}
+          {!navCompacto && <span>{label}</span>}
         </button>
       ))}
     </>
   )}
-</nav>    {!sidebarCollapsed && <div className="sidebarBottom"><div className="online"><span></span>Sistema operativo</div><small>Última sincronización<br/><b>hace 18 segundos</b></small></div>}
+</nav>    {!navCompacto && <div className="sidebarBottom"><div className="online"><span></span>Sistema operativo</div><small>Última sincronización<br/><b>hace 18 segundos</b></small></div>}
    </aside>
    <main className={`main${sidebarCollapsed?' sidebarCollapsed':''}`}><header><button className="mobileMenu" onClick={()=>setMobileNavOpen(o=>!o)}><Menu/></button><div><h1>{section}</h1><p>
   {isAdminSoporte
