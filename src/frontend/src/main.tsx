@@ -943,6 +943,31 @@ function fixOperationalMapSize(map:L.Map):()=>void{
 // una cosa: donde hace clic el operador. El click pone/mueve un marcador y
 // entrega lat/lng en crudo; el operador NUNCA digita coordenadas a mano,
 // tal como pide la especificacion del formulario CAD.
+// Zoom por teclado comun a todos los mapas (con el mapa enfocado):
+// Shift solo = acercar, Control solo = alejar. Se aplica al soltar la tecla y
+// solo si no se combino con otra (asi Shift+Tab sigue navegando normal).
+// Ademas, Enter/Espacio sobre los botones +/- repite el zoom sin que Leaflet
+// devuelva el foco al mapa.
+function habilitarZoomTeclado(map:L.Map){
+  const cont=map.getContainer();
+  let modificadorSolo:string|null=null;
+  cont.addEventListener('keydown',(e:KeyboardEvent)=>{
+    modificadorSolo=(e.key==='Shift'||e.key==='Control') && e.target===cont ? e.key : null;
+  });
+  cont.addEventListener('keyup',(e:KeyboardEvent)=>{
+    if(e.key===modificadorSolo){ if(e.key==='Shift') map.zoomIn(); else map.zoomOut(); }
+    modificadorSolo=null;
+  });
+  cont.querySelectorAll<HTMLElement>('.leaflet-control-zoom-in, .leaflet-control-zoom-out').forEach(btn=>{
+    btn.addEventListener('keydown',(e:KeyboardEvent)=>{
+      if(e.key!=='Enter' && e.key!==' ') return;
+      e.preventDefault(); e.stopPropagation();
+      if(btn.classList.contains('leaflet-control-zoom-in')) map.zoomIn(); else map.zoomOut();
+      btn.focus();
+    });
+  });
+}
+
 function MapaSeleccionUbicacion({lat, lng, onSeleccionar}:{lat:number|null; lng:number|null; onSeleccionar:(lat:number, lng:number)=>void}){
   const mapRef=useRef<L.Map|null>(null);
   const markerRef=useRef<L.Marker|null>(null);
@@ -955,6 +980,19 @@ function MapaSeleccionUbicacion({lat, lng, onSeleccionar}:{lat:number|null; lng:
     );
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors'}).addTo(map);
     map.on('click',(e:L.LeafletMouseEvent)=>{ onSeleccionarRef.current(e.latlng.lat, e.latlng.lng); });
+    // Accesibilidad por teclado: con el mapa enfocado, flechas mueven y +/-
+    // hacen zoom (nativo de Leaflet); Enter o Espacio marcan el centro, que
+    // se indica con la mira de .formMapaMira.
+    const cont=map.getContainer();
+    cont.setAttribute('aria-label','Mapa de ubicación: flechas para mover, + o Shift para acercar, - o Control para alejar, Enter o Espacio para marcar el centro');
+    habilitarZoomTeclado(map);
+    cont.addEventListener('keydown',(e:KeyboardEvent)=>{
+      // Solo con el foco en el mapa mismo: Enter sobre los botones +/- debe hacer zoom.
+      if(e.target!==cont || (e.key!=='Enter' && e.key!==' ')) return;
+      e.preventDefault();
+      const c=map.getCenter();
+      onSeleccionarRef.current(c.lat, c.lng);
+    });
     mapRef.current=map;
     const cleanupResize=fixOperationalMapSize(map);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -980,7 +1018,7 @@ function MapaSeleccionUbicacion({lat, lng, onSeleccionar}:{lat:number|null; lng:
     map.setView([lat,lng], map.getZoom());
   },[lat,lng]);
 
-  return <div id="form-map" className="formMapaUbicacion"/>;
+  return <div className="formMapaWrap"><div id="form-map" className="formMapaUbicacion"/><span className="formMapaMira" aria-hidden="true"/></div>;
 }
 
 // Combobox con filtrado dinamico de claves radiales (10-0, 10-1, ...) --
@@ -997,6 +1035,11 @@ function ComboCodigoEmergencia({claves, onElegir}:{claves:Record<string,Clave>; 
   const [ultimoSeleccionado,setUltimoSeleccionado]=useState('');
   const [abierto,setAbierto]=useState(false);
   const [indiceActivo,setIndiceActivo]=useState(0);
+  const listaRef=useRef<HTMLUListElement|null>(null);
+  // Al navegar con flechas, la lista se desplaza para mantener visible la opcion activa.
+  useEffect(()=>{
+    (listaRef.current?.children[indiceActivo] as HTMLElement|undefined)?.scrollIntoView({block:'nearest'});
+  },[indiceActivo, abierto]);
 
   // Orden NUMERICO, no alfabetico -- "10-10".localeCompare("10-2") los
   // ordenaba como texto (1 < 2, asi que 10-10 quedaba antes que 10-2).
@@ -1036,7 +1079,7 @@ function ComboCodigoEmergencia({claves, onElegir}:{claves:Record<string,Clave>; 
         placeholder="Buscar clave (ej: 10-0 o incendio)"
       />
       {abierto && filtradas.length>0 && (
-        <ul className="comboClaveLista">
+        <ul className="comboClaveLista" ref={listaRef}>
           {filtradas.map((c,i)=>(
             <li
               key={c.codigo}
@@ -1123,6 +1166,11 @@ function NuevaEmergenciaView({claves, onCrear}:{
   const [enviando,setEnviando]=useState(false);
   const {sugerencias, estado:estadoBusquedaDireccion, buscar, limpiar}=useBuscadorDirecciones();
   const [indiceDireccion,setIndiceDireccion]=useState(-1);
+  const listaDireccionRef=useRef<HTMLUListElement|null>(null);
+  useEffect(()=>{
+    if(indiceDireccion<0) return;
+    (listaDireccionRef.current?.children[indiceDireccion] as HTMLElement|undefined)?.scrollIntoView({block:'nearest'});
+  },[indiceDireccion]);
 
   const claveSeleccionada=claves[codigo];
   const mostrarTipoEstructura=claveExigeEscala(claveSeleccionada);
@@ -1217,7 +1265,7 @@ function NuevaEmergenciaView({claves, onCrear}:{
               placeholder="AV. ARGENTINA, BARRIO ALMENDRAL, VALPARAÍSO"
             />
             {sugerencias.length>0 && (
-              <ul className="comboDireccionLista">
+              <ul className="comboDireccionLista" ref={listaDireccionRef}>
                 {sugerencias.map((s,i)=>(
                   <li key={i} className={i===indiceDireccion?'activo':''} aria-selected={i===indiceDireccion} onMouseDown={()=>elegirDireccionSugerida(s)}>{s.display_name}</li>
                 ))}
@@ -1461,6 +1509,7 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors'}).addTo(map);
     const layer=L.layerGroup().addTo(map);
     const highlightLayer=L.layerGroup().addTo(map);
+    habilitarZoomTeclado(map);
     mapRef.current=map;
     layerRef.current=layer;
     highlightLayerRef.current=highlightLayer;
@@ -1519,7 +1568,7 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
       const lat=unidades[0].homeLat;
       const lng=unidades[0].homeLng;
       if(lat == null || lng == null || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
-      const markerCuartel=L.marker([lat,lng],{
+      const markerCuartel=L.marker([lat,lng],{title:`Cuartel ${compania}`,
         icon:L.divIcon({className:'cuartel-marker', html:iconoCuartel(), iconSize:[22,22], iconAnchor:[11,11]}),
         // Por encima del zIndexOffset del marcador de vehiculo (200): cuando
         // una unidad esta "Disponible en cuartel" (6-0), comparte exactas las
@@ -1534,7 +1583,7 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
       if(cuartelAbiertoAntes===compania) markerCuartel.openPopup();
     });
     emergencies.forEach(e=>{
-      const marker=L.marker([e.lat,e.lng],{icon:L.divIcon({className:'emergency-marker',html:'<div>!</div>',iconSize:[36,36],iconAnchor:[18,18]})})
+      const marker=L.marker([e.lat,e.lng],{title:`Emergencia #${e.id}`,icon:L.divIcon({className:'emergency-marker',html:'<div>!</div>',iconSize:[36,36],iconAnchor:[18,18]})})
         .addTo(layer)
         .bindPopup(popupEmergencia(e.id, e.address, {codigo: e.codigo}))
         .on('click', ()=>onSelectEmergenciaRef.current?.(e.id))
@@ -1550,7 +1599,7 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
       if(r.destino && (r.radioState==='6-3'||r.radioState==='6-7') && !destinosMostrados.has(r.destino.emergenciaId)){
         destinosMostrados.add(r.destino.emergenciaId);
         const idEmergenciaDestino=r.destino.emergenciaId;
-        const markerAsignada=L.marker([r.destino.lat,r.destino.lng],{icon:L.divIcon({className:'emergency-marker emergency-marker-asignada',html:'<div>✓</div>',iconSize:[34,34],iconAnchor:[17,17]})})
+        const markerAsignada=L.marker([r.destino.lat,r.destino.lng],{title:`Emergencia #${idEmergenciaDestino} asignada`,icon:L.divIcon({className:'emergency-marker emergency-marker-asignada',html:'<div>✓</div>',iconSize:[34,34],iconAnchor:[17,17]})})
           .addTo(layer)
           .bindPopup(popupEmergencia(idEmergenciaDestino, r.destino.address, {asignada: true}))
           .on('click', ()=>onSelectEmergenciaRef.current?.(idEmergenciaDestino))
@@ -1604,7 +1653,7 @@ function MapPanel({resources, emergencies, focus, center, onAsignarManual, onSel
       let m=marcadoresRef.current[r.id];
       if(!m){
         m=L.marker([pos.lat,pos.lng],{
-          icon:L.divIcon({className:'resource-marker', html:iconoVehiculo(color, RESOURCE_LETRA[r.type], rumbo), iconSize:[30,30], iconAnchor:[15,15]}),
+          title:r.name, icon:L.divIcon({className:'resource-marker', html:iconoVehiculo(color, RESOURCE_LETRA[r.type], rumbo), iconSize:[30,30], iconAnchor:[15,15]}),
           zIndexOffset:200,
         }).addTo(map);
         m.bindTooltip(()=>{const d=datosRef.current[r.id]; return `${d.name} · ${RADIO_LABELS[d.radioState]}`;});
@@ -1688,6 +1737,7 @@ function HeatMapPanel({zonas, seleccionadaId, onSelectZona, focus}:{zonas:ZoneDe
     const map=L.map('heatmap',{zoomControl:false}).setView([-33.01,-71.565],11);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors'}).addTo(map);
     zoneLayerRef.current=L.layerGroup().addTo(map);
+    habilitarZoomTeclado(map);
     mapRef.current=map;
     const cleanupResize=fixMapSize(map);
     return()=>{cleanupResize(); map.remove(); mapRef.current=null; zoneLayerRef.current=null;};
@@ -5083,7 +5133,7 @@ const spawnEmergencia = (): Emergency => {
   )}
 </nav>    {!navCompacto && <div className="sidebarBottom"><div className="online"><span></span>Sistema operativo</div><small>Última sincronización<br/><b>hace 18 segundos</b></small></div>}
    </aside>
-   <main className={`main${sidebarCollapsed?' sidebarCollapsed':''}`}><header><button className="mobileMenu" onClick={()=>setMobileNavOpen(o=>!o)}><Menu/></button><div><h1>{section}</h1><p>
+   <main className={`main${sidebarCollapsed?' sidebarCollapsed':''}`}><header><button className="mobileMenu" aria-label="Abrir menú" onClick={()=>setMobileNavOpen(o=>!o)}><Menu/></button><div><h1>{section}</h1><p>
   {isAdminSoporte
     ? 'Gestión de tickets de soporte'
     : <>Central de coordinación · Valparaíso{!isAdmin?' · Acceso de solo lectura':''}{!isAdmin && estadoRemoto==='esperando'?' · Esperando datos en vivo del operador…':''}{!isAdmin && typeof estadoRemoto==='object'?` · En vivo (operador: ${estadoRemoto.publicadoPor})`:''}</>

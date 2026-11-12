@@ -960,7 +960,15 @@ def obtener_estado(usuario: Usuario = Depends(usuario_actual)):
     with _estado_lock:
         if _estado_compartido is None:
             return {"publicado": False}
-        return {"publicado": True, **_estado_compartido}
+        estado = dict(_estado_compartido)
+    # El estado lo publica el admin con la flota completa; el visualizador
+    # solo puede ver los recursos de su propia compania (igual que en
+    # GET /resources), si no esta ruta seria un atajo para ver las 26.
+    if usuario.rol == "visualizador":
+        id_compania = _resolver_id_compania_usuario(usuario.email)
+        propios = {r["codigo"] for r in obtener_recursos(id_compania)} if id_compania is not None else set()
+        estado["resources"] = [r for r in estado.get("resources") or [] if r.get("codigo") in propios]
+    return {"publicado": True, **estado}
 
 # Tipos de recurso compatibles con cada clave radial (10-X), segun el
 # equipamiento real que exige cada tipo de emergencia.

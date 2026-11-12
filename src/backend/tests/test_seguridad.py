@@ -121,6 +121,16 @@ def test_PER05_visualizador_no_da_de_baja_recurso_ajeno(client, monkeypatch):
     assert not any("UPDATE" in sql for sql, _ in cursor.consultas)
 
 
+def test_PER05_estado_compartido_filtrado_para_visualizador(client, monkeypatch):
+    monkeypatch.setattr(main, "_estado_compartido", {"resources": [{"codigo": "B-9"}, {"codigo": "R-8"}], "queue": []})
+    monkeypatch.setattr(main, "_resolver_id_compania_usuario", lambda email: 9)
+    monkeypatch.setattr(main, "obtener_recursos", lambda filtro=None: [{"codigo": "B-9"}])
+    vis = client.get("/state", headers=headers_de(VISUALIZADOR)).json()
+    adm = client.get("/state", headers=headers_de(ADMIN)).json()
+    assert [r["codigo"] for r in vis["resources"]] == ["B-9"]
+    assert len(adm["resources"]) == 2
+
+
 # ---------------------------------------------------------------- Tickets
 PNG_REAL = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 

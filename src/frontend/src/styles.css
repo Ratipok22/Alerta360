@@ -2701,3 +2701,14 @@ html[data-theme="light"] .nuevaEmergenciaCard .cardHead span{
 @media(hover:none){
   .infoTip:focus .infoTipBubble{opacity:1;visibility:visible}
 }
+
+/* Mira del mapa del formulario: solo visible con foco de teclado, marca el
+   punto que se selecciona con Enter/Espacio (ver MapaSeleccionUbicacion). */
+.formMapaWrap{ position:relative; flex:1; display:flex; flex-direction:column; min-width:0; }
+.formMapaMira{
+  display:none; position:absolute; left:50%; top:50%; width:16px; height:16px;
+  margin:-8px 0 0 -8px; border:2px solid #fff; border-radius:50%;
+  box-shadow:0 0 0 2px #000a; pointer-events:none; z-index:500;
+}
+.formMapaWrap:has(.formMapaUbicacion:focus-visible) .formMapaMira{ display:block; }
+.formMapaUbicacion:focus-visible{ outline:3px solid var(--azul-operativo); outline-offset:2px; }
