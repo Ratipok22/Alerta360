@@ -2593,7 +2593,7 @@ html[data-theme="light"] .nuevaEmergenciaCard .cardHead span{
 }
 
 .comboClaveLista li:hover, .comboClaveLista li.activo,
-.comboDireccionLista li:hover{
+.comboDireccionLista li:hover, .comboDireccionLista li.activo{
   background:color-mix(in srgb, var(--acento) 14%, transparent);
 }
 

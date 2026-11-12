@@ -1122,6 +1122,7 @@ function NuevaEmergenciaView({claves, onCrear}:{
   const [piso,setPiso]=useState('');
   const [enviando,setEnviando]=useState(false);
   const {sugerencias, estado:estadoBusquedaDireccion, buscar, limpiar}=useBuscadorDirecciones();
+  const [indiceDireccion,setIndiceDireccion]=useState(-1);
 
   const claveSeleccionada=claves[codigo];
   const mostrarTipoEstructura=claveExigeEscala(claveSeleccionada);
@@ -1203,13 +1204,22 @@ function NuevaEmergenciaView({claves, onCrear}:{
               className="nuevaEmergenciaDireccionInput"
               rows={3}
               value={direccion}
-              onChange={e=>{ const v=e.target.value.toUpperCase(); setDireccion(v); buscar(v); }}
+              onChange={e=>{ const v=e.target.value.toUpperCase(); setDireccion(v); buscar(v); setIndiceDireccion(-1); }}
+              onKeyDown={e=>{
+                if(!sugerencias.length) return;
+                if(e.key==='ArrowDown'){ e.preventDefault(); setIndiceDireccion(i=>Math.min(i+1, sugerencias.length-1)); }
+                else if(e.key==='ArrowUp'){ e.preventDefault(); setIndiceDireccion(i=>Math.max(i-1,0)); }
+                else if(e.key==='Enter' && indiceDireccion>=0){ e.preventDefault(); elegirDireccionSugerida(sugerencias[indiceDireccion]); setIndiceDireccion(-1); }
+                else if(e.key==='Escape'){ limpiar(); setIndiceDireccion(-1); }
+              }}
+              aria-autocomplete="list"
+              aria-expanded={sugerencias.length>0}
               placeholder="AV. ARGENTINA, BARRIO ALMENDRAL, VALPARAÍSO"
             />
             {sugerencias.length>0 && (
               <ul className="comboDireccionLista">
                 {sugerencias.map((s,i)=>(
-                  <li key={i} onMouseDown={()=>elegirDireccionSugerida(s)}>{s.display_name}</li>
+                  <li key={i} className={i===indiceDireccion?'activo':''} aria-selected={i===indiceDireccion} onMouseDown={()=>elegirDireccionSugerida(s)}>{s.display_name}</li>
                 ))}
               </ul>
             )}
@@ -3062,6 +3072,7 @@ useEffect(()=>{
  const [operationalCenter,setOperationalCenter]=useState(VALPARAISO_CENTER);
  const [periodos,setPeriodos]=useState<Periodo[]>([]);
  const [claves,setClaves]=useState<Record<string,Clave>>({});
+ const [reintentoClaves,setReintentoClaves]=useState(0);
  const [apiError,setApiError]=useState<string|null>(null);
  // Info de "estado en vivo" para el rol visualizador: quien lo esta
  // publicando (el admin al mando del despacho) y si ya llego algun dato
@@ -4915,8 +4926,13 @@ const spawnEmergencia = (): Emergency => {
        (d.claves||[]).forEach((c:Clave)=>{porCodigo[c.codigo]=c;});
        setClaves(porCodigo);
      })
-     .catch(err=>{setClaves({}); setApiError(`No se pudo conectar a ${API_BASE}: ${err.message||err}`);});
- },[auth]);
+     .catch(err=>{
+       setClaves({}); setApiError(`No se pudo conectar a ${API_BASE}: ${err.message||err}`);
+       // Sin catalogo el combo de claves queda vacio hasta el proximo login:
+       // reintenta solo si el backend aun no estaba listo al cargar.
+       window.setTimeout(()=>setReintentoClaves(n=>n+1), 5000);
+     });
+ },[auth, reintentoClaves]);
 
  useEffect(()=>{
    if(!autoRefreshSec) return;
