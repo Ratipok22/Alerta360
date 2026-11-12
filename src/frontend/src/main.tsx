@@ -2,7 +2,15 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import markerIcon from 'leaflet/dist/images/marker-icon.png';
+import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
+import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 import './styles.css';
+
+// Leaflet arma la ruta del pin por defecto en tiempo de ejecucion, lo que se
+// rompe en el build de produccion (Vercel): se importan las imagenes para que
+// Vite las incluya y el marcador se vea igual en local y desplegado.
+L.Icon.Default.mergeOptions({iconUrl: markerIcon, iconRetinaUrl: markerIcon2x, shadowUrl: markerShadow});
 import {AlertTriangle, BarChart3, Building2, CheckCircle2, Clock3, Crosshair, Download, Droplet, Eye, FilePlus2, Flame, HardHat, History, Info, LifeBuoy, Lightbulb, Lock, LogOut, Mail, MapPin, Menu, Moon, Navigation, Paperclip, Phone, Radio, Send, Settings, ShieldCheck, Sun, Ticket, Truck, TreePine, Users, XCircle, Zap, Bug} from 'lucide-react';
 import logoDark from "./assets/logo-alerta360-dark.png";
 import logoLight from "./assets/logo-alerta360-light.png";
