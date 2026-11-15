@@ -95,7 +95,6 @@ type Resource={
   // marca con una alerta visual para que la central la verifique.
   ultimaActualizacion?:number;
 };
-//-------------------------NUEVA BASE DE DATOS
 // Tipo de inmueble donde ocurre el incidente (emergencia.emergencia.
 // tipo_estructura_emergencia) -- NO es el terreno (urbano/forestal, usado
 // para la velocidad del ETA): describe el INMUEBLE puntual de ESTA
@@ -129,11 +128,9 @@ type Emergency={
   tipoEstructura?:TipoEstructura|null;
   piso?:number|null;
 };
-//-------------------------
 type ClimaEsperado={temperatura_c:number; viento_kmh:number; precipitacion_mm:number;};
 type ZoneDemand={zona_id:string; nombre:string; bounds:{lat_min:number;lat_max:number;lng_min:number;lng_max:number}; centroid:{lat:number;lng:number}; demanda_total:number; desglose:Record<string,number>; clima_esperado?:ClimaEsperado;};
 type Periodo={periodo_inicio:string; periodo_fin:string; zonas:ZoneDemand[];};
-type VariableImportancia={nombre:string; peso_pct:number};
 // unidades_requeridas viene de GET /catalog/claves (ver _unidades_requeridas_para
 // en main.py, backend) -- null/undefined para una clave sin este criterio ya
 // modelado (ver CLAVES_RADIALES en core/radio_codes.py), en cuyo caso se
@@ -461,22 +458,6 @@ function nombreRecursoBD(fila: any, codigo: string, tipo: ResourceType): string 
   return `${etiquetas[tipo]} ${codigo}`;
 }
 
-// Pool de emergencias simuladas que rota (una nueva reemplaza a la que se atiende)
-// Coordenadas geocodificadas con Nominatim/OpenStreetMap (2026-09-09).
-const POOL_EMERGENCIAS:{codigo:string; address:string; lat:number; lng:number}[]=[
-{codigo:'10-2', address:'Camino cerros, sector Reñaca Alto, Viña del Mar', lat:-32.9968, lng:-71.4884},
-{codigo:'10-0', address:'Av. Argentina, Barrio Almendral, Valparaíso', lat:-33.0499, lng:-71.6031},
-{codigo:'10-4', address:'Av. España, Valparaíso', lat:-33.0395, lng:-71.6036},
-{codigo:'10-1', address:'Camino Internacional, Placilla, Valparaíso', lat:-33.1149, lng:-71.5680},
-{codigo:'10-5', address:'Terminal Pacífico Sur, Puerto de Valparaíso', lat:-33.0327, lng:-71.6276},
-{codigo:'10-3', address:'Población Rodelillo, Valparaíso', lat:-33.0577, lng:-71.5764},
-{codigo:'10-0', address:'Casona patrimonial, Cerro Concepción, Valparaíso', lat:-33.0423, lng:-71.6265},
-{codigo:'10-2', address:'Sector Cerro Placeres, Valparaíso', lat:-33.0366, lng:-71.5952},
-{codigo:'10-1', address:'Camino Troncal, Miraflores, Viña del Mar', lat:-33.0357, lng:-71.4998},
-{codigo:'10-4', address:'Av. Alemania (curva), Valparaíso', lat:-33.0564, lng:-71.6072},
-{codigo:'10-5', address:'Planta industrial, zona Placilla, Valparaíso', lat:-33.1149, lng:-71.5680},
-{codigo:'10-3', address:'Cerro Bellavista, Valparaíso', lat:-33.0501, lng:-71.6223},
-];
 
 // Puntos reales de patrullaje: mismas coordenadas ya verificadas usadas en
 // otras partes del sistema (companias, pool de emergencias, zonas del
@@ -555,7 +536,6 @@ const CLAVE_FACTORES:Record<string,FactorClave>={
   '10-5':{horasAltas:[9,12],diasAltas:[0,1,2,3],mesesAltos:[],motivoHora:'horario de mayor actividad portuaria e industrial',motivoDia:'días hábiles, con más operación industrial',motivoMes:''},
 };
 const DIA_NOMBRES=['lunes','martes','miércoles','jueves','viernes','sábado','domingo'];
-const MES_NOMBRES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 
 const DOW_ABREV_A_INDICE:Record<string,number>={Mon:0,Tue:1,Wed:2,Thu:3,Fri:4,Sat:5,Sun:6};
 
@@ -855,11 +835,12 @@ function historialIcon(tipo:HistorialTipo){
   if(tipo==='liberacion') return <Truck size={14}/>;
   return <AlertTriangle size={14}/>;
 }
-function historialTitle(tipo:HistorialTipo){
+// texto opcional: distingue el marcado manual 6-9 dentro de 'liberacion'
+function historialTitle(tipo:HistorialTipo, texto=''){
   if(tipo==='asignacion') return 'Recurso asignado';
   if(tipo==='rechazo') return 'Recomendación rechazada';
   if(tipo==='en_emergencia') return 'Unidad en la emergencia';
-  if(tipo==='liberacion') return 'Unidad disponible';
+  if(tipo==='liberacion') return texto.includes('marcada Fuera de servicio')?'Unidad fuera de servicio':'Unidad disponible';
   return 'Nueva emergencia registrada';
 }
 
@@ -880,18 +861,6 @@ function timeAgo(ts:number, nowMs:number){
   return `hace ${Math.floor(m/60)} h`;
 }
 
-function beep(){
-  try{
-    const Ctx=window.AudioContext || (window as any).webkitAudioContext;
-    const ctx=new Ctx();
-    const o=ctx.createOscillator(); const g=ctx.createGain();
-    o.frequency.value=880; o.connect(g); g.connect(ctx.destination);
-    g.gain.setValueAtTime(0.001,ctx.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.2,ctx.currentTime+0.01);
-    g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+0.3);
-    o.start(); o.stop(ctx.currentTime+0.3);
-  }catch{ /* audio no disponible en este navegador */ }
-}
 
 function formatHour(iso:string){return new Date(iso).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit',timeZone:CHILE_TZ});}
 // Fecha+hora completa para Soporte (tickets/respuestas) -- a diferencia de
@@ -1937,7 +1906,7 @@ function HistorialView({historial,now}:{historial:HistorialEntry[];now:number}){
         {TIPOS_HISTORIAL.map(t=><option key={t} value={t}>{historialTitle(t)}</option>)}
       </select>
     </div>
-    <div className="activityRows">{filtrado.length?filtrado.map(h=><Activity key={h.id} icon={historialIcon(h.tipo)} title={historialTitle(h.tipo)} detail={h.texto} time={timeAgo(h.ts,now)} estado={estadoEmergenciaDeEvento(h.tipo,h.texto)}/>):<p className="emptyState">{historial.length?'Ningún evento coincide con el filtro.':'Aún no hay acciones registradas. Asigna o rechaza una recomendación desde el Dashboard para empezar a construir el historial.'}</p>}</div>
+    <div className="activityRows">{filtrado.length?filtrado.map(h=><Activity key={h.id} icon={historialIcon(h.tipo)} title={historialTitle(h.tipo,h.texto)} detail={h.texto} time={timeAgo(h.ts,now)} estado={estadoEmergenciaDeEvento(h.tipo,h.texto)}/>):<p className="emptyState">{historial.length?'Ningún evento coincide con el filtro.':'Aún no hay acciones registradas. Asigna o rechaza una recomendación desde el Dashboard para empezar a construir el historial.'}</p>}</div>
   </div>;
 }
 
@@ -2980,7 +2949,6 @@ const handleLogin=(
 
 const isAdminSoporte=auth?.rol==='soporte';
 
- //-------------------NUEVA BASE DE DATOS
 useEffect(()=>{
   if(!auth) return;
 
@@ -3113,7 +3081,6 @@ useEffect(()=>{
   return()=>{cancelado=true;};
 },[auth]);
 
- //--------------------------------------------
 
  // Tambien se restaura el apartado que se estaba viendo (no solo la
  // sesion): si no, un F5 dejaba logueado pero igual "interrumpia" saltando
@@ -3139,14 +3106,11 @@ useEffect(()=>{
  // (ya se consulto, nadie ha publicado) o el dato publicado -- antes eran dos
  // useState separados que siempre se seteaban juntos en pares complementarios.
  const [estadoRemoto,setEstadoRemoto]=useState<'sin_consultar'|'esperando'|{publicadoPor:string; publicadoEn:string}>('sin_consultar');
- const [importanciaVariables,setImportanciaVariables]=useState<VariableImportancia[]>([]);
  const [resources,setResources]=useState<Resource[]>([]);
  const [recursosCargados,setRecursosCargados]=useState(false); 
 
 
- //--------------NUEVA BASE DE DATOS----------------
  const [queue,setQueue]=useState<Emergency[]>([]); 
- //-------------------------------------------------
 
 
  const [rechazadosPorEmergencia,setRechazadosPorEmergencia]=useState<Record<number,Set<string>>>({});
@@ -3213,8 +3177,6 @@ useEffect(()=>{
  // Configuracion, solo por el rol admin (ver ConfiguracionView).
  const [timeoutMinutos,setTimeoutMinutos]=useState(5);
 
- const emergenciaIdRef=useRef(1258+4);
- const poolIndexRef=useRef(4%POOL_EMERGENCIAS.length);
  const historialIdRef=useRef(1);
  const timeoutsRef=useRef<number[]>([]);
  // Temporizadores pendientes POR unidad (llegada, fin de trabajo, llegada a
@@ -3982,26 +3944,6 @@ const intentarPatrullaje = async () => {
  };
 
 
-  //--------------------------NUEVA BASE DE DATOS
-const spawnEmergencia = (): Emergency => {
-  const seed =
-    POOL_EMERGENCIAS[
-      poolIndexRef.current % POOL_EMERGENCIAS.length
-    ];
-
-  poolIndexRef.current += 1;
-
-  const id = emergenciaIdRef.current++;
-
-  return {
-    ...seed,
-    id,
-    status: 'Activa',
-    creadaEn: Date.now(),
-    prioridad: 3,
-  };
-};
-
  const advanceQueue=(resolvedId:number)=>{
   setQueue(q=>q.filter(e=>e.id!==resolvedId));
 
@@ -4012,7 +3954,6 @@ const spawnEmergencia = (): Emergency => {
   });
 };
 
-//--------------------------
 
  // Inicia el regreso de UN recurso a SU propio cuartel (ruta OSRM real,
  // 6-8, y luego 6-0 al llegar). Separado de scheduleResourceLifecycle
@@ -4971,7 +4912,7 @@ const spawnEmergencia = (): Emergency => {
    if(!auth) return;
    apiFetch(`${API_BASE}/prediction/demand?horizon=4`, {credentials:'include', headers:authHeaders()})
      .then(r=>{if(!r.ok)throw new Error(`API respondió ${r.status}`); return r.json();})
-     .then(d=>{setPeriodos(d.periodos||[]); setImportanciaVariables(Object.values(d.importancia_variables||{})); setApiError(null);})
+     .then(d=>{setPeriodos(d.periodos||[]); setApiError(null);})
      .catch(err=>{setPeriodos([]); setApiError(`No se pudo conectar a ${API_BASE}: ${err.message||err}`);});
  },[refresh, auth]);
 
@@ -5283,7 +5224,7 @@ const spawnEmergencia = (): Emergency => {
       </>}
       </div></div></div></section>
       <section className="singleRow"><div className="resourcesCard card"><div className="cardHead"><div><b>Recursos disponibles</b><span>{filtroCuartel==='todos'?'Unidades consideradas por el algoritmo':`Unidades de ${filtroCuartel}`}</span></div><button className="linkBtn" onClick={()=>setSection('Recursos')}>Ver todos</button></div><div className="resourceGrid">{resourcesFiltrados.length?resourcesFiltrados.slice(0,4).map(r=><div className={`resource ${esDisponible(r)?'':'busy'}`} key={r.id}><div className="resIcon">{resourceIcon(r.type)}</div><div><b>{r.name}</b><span className={esDisponible(r)?'available':'busyText'}>{RADIO_LABELS[r.radioState]}</span><small>{r.distance} km {esDisponible(r)&&`· ${r.eta} min`}</small></div></div>):<p className="emptyState">Sin unidades para este cuartel.</p>}</div></div></section>
-      <section className="activity card"><div className="cardHead"><div><b>Actividad reciente</b><span>Últimos eventos del sistema</span></div><span className="liveText"><span/> actualización automática</span></div><div className="activityRows">{historial.length?historial.slice(0,5).map(h=><Activity key={h.id} icon={historialIcon(h.tipo)} title={historialTitle(h.tipo)} detail={h.texto} time={timeAgo(h.ts,now)}/>):<Activity icon={<Radio/>} title="Sistema iniciado" detail="Esperando primera asignación" time="ahora"/>}</div></section>
+      <section className="activity card"><div className="cardHead"><div><b>Actividad reciente</b><span>Últimos eventos del sistema</span></div><span className="liveText"><span/> actualización automática</span></div><div className="activityRows">{historial.length?historial.slice(0,5).map(h=><Activity key={h.id} icon={historialIcon(h.tipo)} title={historialTitle(h.tipo,h.texto)} detail={h.texto} time={timeAgo(h.ts,now)}/>):<Activity icon={<Radio/>} title="Sistema iniciado" detail="Esperando primera asignación" time="ahora"/>}</div></section>
     </>}
     </main>{toast&&<div className="toast"><CheckCircle2 size={18}/>{toast}</div>}
  </div>
@@ -5298,7 +5239,6 @@ function Activity({icon,title,detail,time,estado}:{icon:React.ReactNode;title:st
 createRoot(document.getElementById('root')!).render(<App/>);
 
 
-//-------------------------------NUeva para la base de datos
 async function obtenerEmergenciasBD():Promise<Emergency[]>{
   const response=await apiFetch(
     `${API_BASE}/emergencies`,
@@ -5368,4 +5308,3 @@ function obtenerClasePrioridad(
 
 
 
-//-------------------------------

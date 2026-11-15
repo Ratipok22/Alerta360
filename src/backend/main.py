@@ -31,10 +31,8 @@ from pydantic import BaseModel
 load_dotenv()
 
 from core.auth import CuentaBloqueada, LimiteExcedido, LimitadorTasa, Usuario, crear_token, verificar_credenciales, verificar_token
-from core.companies import todas_las_unidades
 from core.eta import calcular_eta
 from core.radio_codes import CLAVES_RADIALES
-from core.vehicle_types import TIPOS_CARRO
 
 from database.database import obtener_conexion
 
@@ -1653,6 +1651,23 @@ def listar_tickets(usuario: Usuario = Depends(usuario_actual)):
     return {"tickets": tickets}
 
 
+def _actualizar_columna_ticket(columna: str, valor: str, id_ticket: int) -> None:
+    """UPDATE comun de estado/prioridad de ticket (columna fija, nunca del cliente)."""
+    conexion = obtener_conexion()
+    try:
+        with conexion.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE emergencia.ticket SET {columna} = %s, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id_ticket = %s",
+                (valor, id_ticket),
+            )
+        conexion.commit()
+    except Exception:
+        conexion.rollback()
+        raise
+    finally:
+        conexion.close()
+
+
 def requiere_soporte(usuario: Usuario = Depends(usuario_actual)) -> Usuario:
     """Dependencia de RBAC para el apartado de Tickets: solo la cuenta con
     rol 'soporte' (ver core/auth.py) puede responder o cerrar solicitudes --
@@ -1729,20 +1744,8 @@ class TicketEstadoUpdate(BaseModel):
 
 @app.patch("/tickets/{id_ticket}/estado")
 def cambiar_estado_ticket(id_ticket: int, datos: TicketEstadoUpdate, usuario: Usuario = Depends(requiere_soporte)):
-    conexion = obtener_conexion()
-    try:
-        with conexion.cursor() as cursor:
-            cursor.execute(
-                "UPDATE emergencia.ticket SET estado_ticket = %s, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id_ticket = %s",
-                (datos.estado, id_ticket),
-            )
-        conexion.commit()
-        return {"ok": True, "estado": datos.estado}
-    except Exception:
-        conexion.rollback()
-        raise
-    finally:
-        conexion.close()
+    _actualizar_columna_ticket("estado_ticket", datos.estado, id_ticket)
+    return {"ok": True, "estado": datos.estado}
 
 
 class TicketPrioridadUpdate(BaseModel):
@@ -1754,17 +1757,5 @@ def cambiar_prioridad_ticket(id_ticket: int, datos: TicketPrioridadUpdate, usuar
     """Quien reporta el problema NO decide que tan urgente es -- eso lo
     evalua soporte al revisar el ticket, por eso este endpoint (a
     diferencia de la creacion del ticket) exige rol soporte."""
-    conexion = obtener_conexion()
-    try:
-        with conexion.cursor() as cursor:
-            cursor.execute(
-                "UPDATE emergencia.ticket SET prioridad = %s, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id_ticket = %s",
-                (datos.prioridad, id_ticket),
-            )
-        conexion.commit()
-        return {"ok": True, "prioridad": datos.prioridad}
-    except Exception:
-        conexion.rollback()
-        raise
-    finally:
-        conexion.close()
+    _actualizar_columna_ticket("prioridad", datos.prioridad, id_ticket)
+    return {"ok": True, "prioridad": datos.prioridad}

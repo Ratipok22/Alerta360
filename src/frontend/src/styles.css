@@ -257,9 +257,6 @@ html[data-theme="light"] .kpiIcon-azul{background:var(--azul-operativo)}
 .heatMapCard{min-height:600px}
 .heatMapCard #heatmap{min-height:500px}
 .mapCard .cardHead{flex-shrink:0}
-.mapControls{display:flex;gap:6px}
-.mapControls button{background:var(--negro-tarjeta);color:var(--gris-texto);border:1px solid var(--borde-sutil);border-radius:6px;width:31px;height:29px;display:grid;place-items:center;cursor:pointer}
-.mapControls button:hover{border-color:var(--acento);color:var(--acento)}
 .mapCard #map{flex:1;min-height:300px}
 /* OSM estandar no tiene una variante oscura gratuita sin API key (se
    probo CARTO Dark Matter, ahora la exige). El filtro se aplica SOLO al
@@ -450,13 +447,6 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
 .heatMapCard + .sideCards .alertRow{font-size:14px;gap:10px;padding:8px}
 .alertRowClickable{cursor:pointer}
 .alertRowClickable:hover{background:var(--negro-panel)}
-.importanciaBox{margin:4px 14px 14px;padding-top:10px;border-top:1px solid var(--borde-sutil)}
-.importanciaTitle{font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--gris-tenue);margin-bottom:8px}
-.importanciaRow{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:8px;font-size:10px;color:var(--gris-texto);margin:6px 0}
-.importanciaRow span{white-space:nowrap}
-.importanciaRow b{color:var(--blanco);width:32px;text-align:right}
-.importanciaBarWrap{background:var(--negro-panel);border-radius:4px;height:6px;overflow:hidden}
-.importanciaBar{height:100%;background:var(--azul-operativo);border-radius:4px}
 .apiErrorBox{margin:14px 14px 0;padding:10px 12px;border:1px solid var(--rojo-alerta);background:rgba(255,59,48,.1);color:#ffb4ae;border-radius:6px;font-size:11px;line-height:1.5;display:flex;gap:8px;align-items:flex-start}
 .apiErrorBox svg{flex-shrink:0;margin-top:1px;color:var(--rojo-alerta)}
 .resumenText{padding:14px 14px 4px;font-size:12px;color:var(--gris-texto);line-height:1.55}
@@ -517,7 +507,6 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
 .toast{position:fixed;right:24px;bottom:22px;background:var(--negro-tarjeta);border:1px solid var(--verde-disponible);color:var(--verde-disponible);padding:12px 15px;border-radius:8px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px;box-shadow:0 10px 30px #0008}
 
 .placeholder{min-height:500px;display:grid;place-content:center;text-align:center;padding:40px}
-.placeholderIcon{margin:auto;width:60px;height:60px;border-radius:12px;background:rgba(44,154,246,.12);color:var(--azul-operativo);display:grid;place-items:center}
 .placeholder h2{margin:18px 0 5px;color:var(--blanco)}
 .placeholder p{max-width:500px;color:var(--gris-tenue);font-size:13px}
 
@@ -571,10 +560,6 @@ html[data-theme="dark"] .atenderBtn:hover{background:#1B7FCF}
 
 /* Pastillas: clave radial (10-0, 10-4...) y estado 6-X */
 .prio,.estado{padding:5px 10px;border-radius:6px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;background:var(--negro-panel);border:1px solid}
-.prio-1{color:var(--rojo-alerta);border-color:var(--rojo-alerta)}
-.prio-2{color:var(--amarillo-precaucion);border-color:var(--amarillo-precaucion)}
-.prio-3{color:var(--azul-operativo);border-color:var(--azul-operativo)}
-.prio-4{color:var(--gris-tenue);border-color:var(--borde-sutil)}
 .estado-0{color:var(--verde-disponible);border-color:var(--verde-disponible)}
 .estado-3{color:var(--azul-operativo);border-color:var(--azul-operativo)}
 .estado-7{color:var(--amarillo-precaucion);border-color:var(--amarillo-precaucion)}
@@ -1911,33 +1896,11 @@ html[data-theme="light"] .adminTicketsToolbar select:focus{
    CONVERSACIÓN DE SOPORTE
    ========================================================= */
 
-.ticketSupportResponse{
-  margin-top:14px;
-  padding:13px 14px;
-  border-left:3px solid var(--acento);
-  background:var(--negro-panel);
-  border-radius:7px;
-}
 
-.ticketSupportResponse strong{
-  display:block;
-  color:var(--acento);
-  font-size:11px;
-  font-weight:700;
-  text-transform:uppercase;
-  margin-bottom:6px;
-}
-
-.ticketSupportResponse p{
-  margin:0;
-  color:var(--gris-texto);
-  font-size:12px;
-  line-height:1.5;
-}
 
 /* Hilo completo de la conversacion (ver TicketThread): antes solo se veia
    la ULTIMA respuesta de cada lado y se perdia el resto del intercambio.
-   Mismo lenguaje visual que .ticketSupportResponse, un mensaje por burbuja
+   Un mensaje por burbuja
    en orden cronologico, con el borde de color segun quien escribio. */
 .ticketThread{display:flex; flex-direction:column; gap:10px; margin-top:14px}
 .ticketThreadMsg{padding:13px 14px; border-left:3px solid var(--acento); background:var(--negro-panel); border-radius:7px}
@@ -2092,32 +2055,10 @@ html[data-theme="light"] .adminTicketsToolbar select:focus{
   filter:brightness(1.08);
 }
 
-.adminTicketUserResponse{
-  padding:14px;
-  border:1px solid var(--borde-sutil);
-  border-radius:8px;
-  background:var(--negro-panel);
-}
 
-.adminTicketUserResponse span{
-  display:block;
-  margin-bottom:7px;
-  color:var(--gris-tenue);
-  font-size:11px;
-  font-weight:700;
-  text-transform:uppercase;
-}
 
-.adminTicketUserResponse p{
-  margin:0;
-  color:var(--gris-texto);
-  font-size:13px;
-  line-height:1.6;
-}
 
-html[data-theme="light"] .ticketSupportResponse,
-html[data-theme="light"] .ticketUserReply,
-html[data-theme="light"] .adminTicketUserResponse{
+html[data-theme="light"] .ticketUserReply{
   background:var(--fondo-pagina);
 }
 
@@ -2162,16 +2103,14 @@ html[data-theme="light"] .ticketUserReply textarea{
   gap:5px;
 }
 
-.adminTicketDescription,
-.adminTicketExistingResponse{
+.adminTicketDescription{
   padding:14px;
   border:1px solid var(--borde-sutil);
   border-radius:8px;
   background:var(--negro-panel);
 }
 
-.adminTicketDescription span,
-.adminTicketExistingResponse span{
+.adminTicketDescription span{
   display:block;
   margin-bottom:7px;
   color:var(--gris-tenue);
@@ -2180,8 +2119,7 @@ html[data-theme="light"] .ticketUserReply textarea{
   text-transform:uppercase;
 }
 
-.adminTicketDescription p,
-.adminTicketExistingResponse p{
+.adminTicketDescription p{
   margin:0;
   color:var(--gris-texto);
   font-size:13px;
@@ -2259,8 +2197,7 @@ html[data-theme="light"] .ticketUserReply textarea{
   cursor:pointer;
 }
 
-html[data-theme="light"] .adminTicketDescription,
-html[data-theme="light"] .adminTicketExistingResponse{
+html[data-theme="light"] .adminTicketDescription{
   background:var(--fondo-pagina);
 }
 
@@ -2273,10 +2210,7 @@ html[data-theme="light"] .adminTicketResponse textarea{
 .ticketCard h3,
 .ticketCard p,
 .ticketThreadMsg p,
-.ticketSupportResponse p,
-.adminTicketUserResponse p,
 .adminTicketDescription p,
-.adminTicketExistingResponse p,
 .adminTicketDetail .cardHead b{
   overflow-wrap:anywhere;
 }

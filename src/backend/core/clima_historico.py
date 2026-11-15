@@ -1,7 +1,7 @@
 """Clima Open-Meteo: ERA5 para fechas antiguas y API reciente para cierres actuales.
 Los datos recientes son estimaciones meteorológicas, no mediciones de estación.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from math import isfinite
 from zoneinfo import ZoneInfo
 
