@@ -76,7 +76,7 @@ PostgreSQL 16, esquema emergencia                           -> Supabase (local: 
 
 El navegador nunca se conecta directamente a la base de datos: todo acceso pasa por la API. La API se documenta automáticamente con Swagger UI en `/docs`.
 
-Diagramas detallados (arquitectura, modelo entidad-relación, flujo general y algoritmo de asignación) en [`Evidencias de documentación/Diagramas`](docs/FASE%202/EVIDENCIAS%20PROYECTO/Evidencias%20de%20documentaci%C3%B3n/Diagramas).
+Diagramas detallados (arquitectura, modelo entidad-relación, flujo general y algoritmo de asignación) en [`Evidencias de documentación/Diagramas`](docs/Fase%202/Evidencias%20Proyecto/Evidencias%20de%20documentaci%C3%B3n/Diagramas).
 
 ## Stack tecnológico
 
@@ -118,7 +118,7 @@ Cada paso parte desde la carpeta raíz del repositorio (`Alerta360/`), en una te
 - Node.js 20.19 o superior (o 22.12+), con npm
 - Docker Desktop (en ejecución)
 - Git
-- Respaldo de la base de datos: archivo `emergencia` en [`Evidencias de sistema/Base de datos`](docs/FASE%202/EVIDENCIAS%20PROYECTO/Evidencias%20de%20sistema/Base%20de%20datos)
+- Respaldo de la base de datos: archivo `alerta360_respaldo.dump` en [`Evidencias de sistema/Base de datos`](docs/Fase%202/Evidencias%20Proyecto/Evidencias%20de%20sistema/Base%20de%20datos)
 
 ### 1. Clonar el repositorio
 
@@ -138,7 +138,7 @@ docker compose up -d db
 El contenedor crea una base vacía con el nombre y usuario definidos en `docker/.env` (`POSTGRES_DB` y `POSTGRES_USER`). Restaurar en ella el respaldo, que incluye el esquema, las 281 zonas, compañías, recursos, usuarios y el histórico de emergencias:
 
 ```bash
-docker cp "docs/FASE 2/EVIDENCIAS PROYECTO/Evidencias de sistema/Base de datos/emergencia" docker-db-1:/tmp/respaldo.dump
+docker cp "docs/Fase 2/Evidencias Proyecto/Evidencias de sistema/Base de datos/alerta360_respaldo.dump" docker-db-1:/tmp/respaldo.dump
 docker exec docker-db-1 pg_restore -U <POSTGRES_USER> -d <POSTGRES_DB> --no-owner --no-privileges /tmp/respaldo.dump
 ```
 
@@ -267,11 +267,11 @@ La estrategia multicriterio asigna la unidad adecuada en casi todos los casos, a
 
 | Documento | Ubicación |
 |---|---|
-| Documentación General del Proyecto APT | [Alerta360_Documentacion_General_Proyecto_APT.docx](docs/FASE%202/EVIDENCIAS%20PROYECTO/Evidencias%20de%20documentaci%C3%B3n/Alerta360_Documentacion_General_Proyecto_APT.docx) |
-| Manual Técnico (instalación local y despliegue) | [Manual_Tecnico_Alerta360.docx](docs/FASE%202/EVIDENCIAS%20PROYECTO/Evidencias%20de%20documentaci%C3%B3n/Manual_Tecnico_Alerta360.docx) |
-| Product Vision y metas de sprint | [Alerta360_Product_Vision_y_metas_de_sprint.docx](docs/FASE%202/EVIDENCIAS%20PROYECTO/Evidencias%20de%20documentaci%C3%B3n/Alerta360_Product_Vision_y_metas_de_sprint.docx) |
-| Diagramas | [Evidencias de documentación/Diagramas](docs/FASE%202/EVIDENCIAS%20PROYECTO/Evidencias%20de%20documentaci%C3%B3n/Diagramas) |
-| Respaldo de la base de datos | [Evidencias de sistema/Base de datos](docs/FASE%202/EVIDENCIAS%20PROYECTO/Evidencias%20de%20sistema/Base%20de%20datos) |
+| Documentación General del Proyecto APT | [Alerta360_Documentacion_General_Proyecto_APT.docx](docs/Fase%202/Evidencias%20Proyecto/Evidencias%20de%20documentaci%C3%B3n/Alerta360_Documentacion_General_Proyecto_APT.docx) |
+| Manual Técnico (instalación local y despliegue) | [Manual_Tecnico_Alerta360.docx](docs/Fase%202/Evidencias%20Proyecto/Evidencias%20de%20documentaci%C3%B3n/Manual_Tecnico_Alerta360.docx) |
+| Product Vision y metas de sprint | [Alerta360_Product_Vision_y_metas_de_sprint.docx](docs/Fase%202/Evidencias%20Proyecto/Evidencias%20de%20documentaci%C3%B3n/Alerta360_Product_Vision_y_metas_de_sprint.docx) |
+| Diagramas | [Evidencias de documentación/Diagramas](docs/Fase%202/Evidencias%20Proyecto/Evidencias%20de%20documentaci%C3%B3n/Diagramas) |
+| Respaldo de la base de datos | [Evidencias de sistema/Base de datos](docs/Fase%202/Evidencias%20Proyecto/Evidencias%20de%20sistema/Base%20de%20datos) |
 | Evidencias por fase | [`docs/`](docs/) |
 
 ## Metodología y retrospectiva
