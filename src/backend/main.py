@@ -396,6 +396,12 @@ def login(datos: LoginRequest):
         # es la unica cuenta "activa" -- el resto queda inactiva aunque se
         # haya quedado pegada en "activo" por un cierre de pestaña anterior
         # sin logout explicito.
+        # Todos los logins bloquean las mismas filas en orden estable antes de
+        # modificar la presencia. Evita el ciclo de espera entre cuentas distintas
+        # y funciona también con varios procesos de API conectados a PostgreSQL.
+        # Se conserva la regla de demo: solo la última cuenta queda activa.
+        cursor.execute("SELECT id_usuario FROM emergencia.usuario ORDER BY id_usuario FOR UPDATE")
+        cursor.fetchall()
         cursor.execute("UPDATE emergencia.usuario SET estado_usuario = 'inactivo' WHERE email_usuario != %s", (usuario.email,))
         cursor.execute("UPDATE emergencia.usuario SET estado_usuario = 'activo' WHERE email_usuario = %s", (usuario.email,))
         conexion.commit()
