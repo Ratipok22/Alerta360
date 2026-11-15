@@ -2,7 +2,7 @@
 
 **Sistema de apoyo a la decisión para el despacho de recursos de Bomberos en la Región de Valparaíso.**
 
-Proyecto de Título (APT) — Ingeniería en Informática, Duoc UC.
+Proyecto APT de la asignatura Capstone (APT122, sección 002D) — Ingeniería en Informática, Duoc UC, sede Valparaíso.
 
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-Vite-3178C6?logo=typescript&logoColor=white)
@@ -322,6 +322,8 @@ El detalle de cada sprint (trabajo realizado, aspectos positivos, dificultades y
 
 ## Equipo
 
+Equipo 06, sede Valparaíso.
+
 | Integrante | Rol |
 |---|---|
 | Alexsander Aravena | Backend y arquitectura: API, autenticación, lógica de negocio y despliegue |
@@ -330,4 +332,4 @@ El detalle de cada sprint (trabajo realizado, aspectos positivos, dificultades y
 
 ---
 
-Proyecto académico desarrollado para la asignatura Proyecto APT de Duoc UC. Uso educativo.
+Proyecto académico desarrollado en la asignatura Capstone (APT122, sección 002D) de Ingeniería en Informática, Duoc UC, sede Valparaíso. Uso educativo.
