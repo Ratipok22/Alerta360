@@ -43,6 +43,39 @@ Alerta360 centraliza la información operacional de emergencias y recursos de Bo
 
 Alerta360 dispone de un catálogo territorial de 281 zonas de la Región de Valparaíso, basado en cartografía del Censo 2024 del INE. El modelo predictivo actualmente entrenado utiliza información histórica correspondiente a 14 zonas, mientras que la arquitectura permite ampliar progresivamente esta cobertura mediante la incorporación de datos y nuevos entrenamientos.
 
+### Innovación de la propuesta
+**¿Qué problema resuelve?**
+La coordinación de emergencias de Bomberos requiere analizar múltiples factores para determinar qué recursos deben responder a cada incidente. Los procedimientos y sistemas de despacho actuales consideran aspectos como la ubicación, el tipo y magnitud de la emergencia, las pautas de despacho, la especialidad de las unidades, su disponibilidad operacional y la dotación de personal. Además, durante la atención, las necesidades pueden cambiar según la información proporcionada por las unidades en terreno, requiriendo ajustar los recursos inicialmente asignados.
+En este contexto, el desafío que aborda Alerta360 no es reemplazar los mecanismos de despacho existentes, sino explorar cómo la integración de información operacional, criterios de asignación multicriterio y análisis predictivo puede complementar la evaluación de recursos y apoyar la toma de decisiones.
+Para ello, el proyecto desarrolla un prototipo que permite centralizar información de emergencias y unidades de Bomberos, evaluar alternativas de asignación según distintos criterios, visualizar los factores considerados en las recomendaciones y representar el seguimiento de los recursos mediante un mapa interactivo. Adicionalmente, incorpora un módulo de Machine Learning orientado a estimar la demanda futura de emergencias a partir de información histórica.
+De esta manera, Alerta360 busca abordar la necesidad de disponer de herramientas integradas que faciliten la comparación de alternativas, la interpretación de recomendaciones y el análisis anticipado de la demanda, manteniendo siempre la decisión final bajo responsabilidad del operador autorizado. Su funcionamiento se desarrolla en un entorno experimental con datos simulados, sin sustituir los procedimientos institucionales ni los sistemas operacionales utilizados actualmente por Bomberos.
+
+**¿Qué hace diferente a la solución?**
+Alerta360 se diferencia por integrar, dentro de un mismo prototipo la gestión operacional de emergencias, la evaluación multicriterio de recursos, la visualización geográfica y la predicción de demanda mediante Machine Learning. Su enfoque permite presentar recomendaciones de asignación acompañadas de los criterios utilizados, facilitando su interpretación y manteniendo la decisión final bajo responsabilidad del operador. Además, incorpora un mapa predictivo que permite visualizar la demanda estimada por zona geográfica, tipo de emergencia y período horario, complementando la información operacional con herramientas de análisis anticipado. El aporte diferenciador de Alerta360 radica en la integración de estas funcionalidades dentro de una plataforma desarrollada y evaluada en un entorno simulado de la Región de Valparaíso, con énfasis en la transparencia de las recomendaciones, el análisis de alternativas y el apoyo a la toma de decisiones. Esta propuesta complementa los enfoques presentes en otros sistemas de gestión y despacho de emergencias, sin pretender sustituir sus capacidades operacionales.
+
+**¿Qué valor agrega?**
+Alerta360 aporta valor al integrar herramientas que facilitan el análisis y la toma de decisiones en la gestión de emergencias de Bomberos. Mediante la asignación multicriterio, permite evaluar los recursos disponibles considerando factores como la compatibilidad con el tipo de emergencia, la disponibilidad, la distancia, el tiempo estimado de llegada, la capacidad y la dotación.
+Además, la incorporación de mapas interactivos y predicciones de demanda mediante Machine Learning proporciona información complementaria para identificar posibles concentraciones de emergencias y apoyar la planificación operativa.
+Su principal aporte consiste en ofrecer una plataforma que reúne información operacional, recomendaciones explicables y análisis predictivo, manteniendo la decisión final bajo responsabilidad del personal autorizado. De esta manera, el proyecto establece una base tecnológica que podría contribuir a mejorar los procesos de coordinación y asignación de recursos, una vez validado con datos reales y en colaboración con las instituciones correspondientes.
+
+### Limitaciones
+Datos sintéticos. El sistema trabaja con datos simulados, construidos a partir de información pública, y está limitado a la Región de Valparaíso; sus emergencias no corresponden a casos reales. El conjunto inicial de entrenamiento contiene información generada para representar patrones plausibles, por lo que el desempeño obtenido describe principalmente el comportamiento sobre esos datos y no garantiza resultados equivalentes frente a emergencias reales.
+
+Cobertura predictiva. El catálogo territorial contiene 281 zonas, mientras que la versión predictiva verificada entrega estimaciones para 14 zonas por bloque. Que una zona exista en la base de datos no implica que cuente con datos suficientes, entrenamiento o predicciones disponibles.
+
+Disponibilidad del despliegue. FastAPI y OSRM se ejecutan en Docker en el computador del responsable de backend, y el acceso público depende de ese equipo y del túnel de ngrok. Si el computador se apaga, las funciones que requieren la API dejan de responder. La configuración actual no proporciona una infraestructura de alta disponibilidad.
+
+Ubicación y tiempos estimados. El movimiento de los vehículos se representa mediante simulación. Las rutas y los tiempos estimados de llegada son estimaciones y no incorporan condiciones reales de tránsito, preparación de la unidad, restricciones operacionales ni tiempos efectivos de respuesta. El tiempo estimado de llegada se calcula con la distancia en línea recta y una velocidad promedio limitada (30 km/h en terreno urbano y 50 km/h en terreno forestal), y no con la duración de la ruta calculada por OSRM.
+
+Evaluación experimental. Los resultados de asignación dependen de los escenarios, las reglas y los parámetros utilizados. Una mayor compatibilidad del recurso seleccionado no implica automáticamente una reducción del tiempo de llegada, ni permite inferir efectos sobre vidas o bienes.
+
+Controles de seguridad en memoria. El bloqueo por intentos fallidos de inicio de sesión y el límite de solicitudes se mantienen en la memoria de un único proceso del backend, por lo que no se comparten si la API se escala a varias instancias.
+
+Historial de acciones. El historial de acciones operacionales se guarda en un archivo JSON (historial_acciones.json) y no en la base de datos.
+Dependencia de servicios externos. Las funciones que utilizan cartografía, servicios meteorológicos o conectividad externa pueden verse afectadas por interrupciones, límites de uso o datos no disponibles. Su comportamiento ante estas situaciones debe documentarse y verificarse mediante pruebas.
+
+Dependencia de servicios externos. Las funciones que utilizan cartografía, servicios meteorológicos o conectividad externa pueden verse afectadas por interrupciones, límites de uso o datos no disponibles. Su comportamiento ante estas situaciones debe documentarse y verificarse mediante pruebas.
+
 ## Funcionalidades por rol
 
 | Rol | Puede |
