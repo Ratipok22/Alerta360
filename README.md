@@ -236,7 +236,7 @@ python -m pytest -v tests
 - **Modelos:** se comparan Random Forest, Extra Trees y Gradient Boosting, con una regresión Ridge como referencia, y se selecciona el de menor error.
 - **Predicción:** cantidad esperada de emergencias por zona, clave radial y bloque horario de 3 horas. Los resultados se guardan en `emergencia.prediccion` y se muestran como mapa de calor en el Dashboard.
 - **Calibración:** la tasa base de incendio forestal está calibrada con la cifra oficial de CONAF para la temporada 2025-2026 en la Región de Valparaíso.
-- **Limitación:** la evaluación usa una partición aleatoria; la validación cronológica queda como trabajo futuro.
+- **Limitación:** as predicciones utilizan características históricas calculadas durante el último entrenamiento y almacenadas en el artefacto del modelo. Estas características no se recalculan automáticamente desde PostgreSQL en cada solicitud, por lo que incorporar nuevos registros requiere ejecutar nuevamente el entrenamiento para actualizar la información utilizada. Asimismo, las condiciones meteorológicas futuras corresponden a valores climáticos estimados según zona, mes y bloque horario, no a pronósticos meteorológicos en tiempo real. La evaluación actual utiliza una partición aleatoria y permanece pendiente una validación cronológica estricta.
 
 ## Fuentes de datos
 
