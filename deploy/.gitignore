@@ -2,3 +2,6 @@
 /model/
 /routing/
 *.dump
+
+/.env
+/ngrok.env
