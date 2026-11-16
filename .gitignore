@@ -21,3 +21,9 @@ src/backend/ml/artifacts/*.joblib
 src/backend/historial_acciones.json
 **/docs
 
+/api.env
+/model/
+/routing/
+*.dump
+
+/ngrok.env
