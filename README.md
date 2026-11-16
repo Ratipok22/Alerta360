@@ -219,20 +219,6 @@ python -m pytest -v tests
 
 **Pruebas de rendimiento** — carga, concurrencia, roles combinados y transferencia del frontend. Instrucciones en [`tests/performance/README.md`](tests/performance/README.md).
 
-**Benchmark del algoritmo de asignación** — compara la estrategia multicriterio con la de "recurso más cercano" en 1.500 escenarios simulados:
-
-```bash
-cd src/backend
-python -m evaluacion.benchmark_asignacion
-```
-
-| Métrica | Recurso más cercano | Multicriterio |
-|---|---|---|
-| Cobertura con recurso del tipo adecuado | 46 % | 95 % |
-| Tiempo estimado de llegada promedio | 1,4 min | 3,4 min |
-
-La estrategia multicriterio asigna la unidad adecuada en casi todos los casos, a cambio de un tiempo de llegada mayor, ya que esa unidad no siempre es la más cercana. Resultados completos en [`src/backend/evaluacion/resultados_benchmark.json`](src/backend/evaluacion/resultados_benchmark.json).
-
 ## Marco normativo (Bomberos de Chile)
 
 `src/backend/core/` centraliza el estándar operativo usado por todo el sistema:
