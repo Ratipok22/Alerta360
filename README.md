@@ -276,7 +276,7 @@ La estrategia multicriterio asigna la unidad adecuada en casi todos los casos, a
 
 ## Metodología y retrospectiva
 
-El proyecto se desarrolló con Scrum, en 9 sprints de 2 semanas (18 semanas) organizados en 3 fases, con un Product Backlog priorizado, entregas incrementales y una retrospectiva al cierre de cada sprint.
+El proyecto se desarrolló con Scrum, en 9 sprints de 2 semanas (18 semanas) organizados en 3 fases, con un Product Backlog priorizado y gestionado en [Trello](https://trello.com/b/5twV1x8e/alerta-360), entregas incrementales y una retrospectiva al cierre de cada sprint.
 
 | Sprint | Semanas | Enfoque | Aprendizaje principal |
 |---|---|---|---|
@@ -325,11 +325,11 @@ El detalle de cada sprint (trabajo realizado, aspectos positivos, dificultades y
 
 Equipo 06, sede Valparaíso.
 
-| Integrante | Rol |
+| Integrante | Responsabilidades principales |
 |---|---|
-| Alexsander Aravena | Backend y arquitectura: API, autenticación, lógica de negocio y despliegue |
-| Benjamin Saavedra | Frontend: dashboard, mapas, gestión de emergencias e integración con la API |
-| Bruno Molina | Datos y Machine Learning: preparación de datos, modelos predictivos y evaluación |
+| Alexsander Aravena | Backend, frontend, API, base de datos, arquitectura, lógica de asignación, despliegue (Docker, Supabase y ngrok) y pruebas de rendimiento |
+| Benjamín Saavedra | Backend, frontend, interfaz, dashboard, mapas, experiencia de usuario, diseño responsivo, accesibilidad y pruebas de seguridad |
+| Bruno Molina | Backend, frontend, datos y Machine Learning (preparación del dataset, entrenamiento, evaluación de modelos y predicción de demanda), pruebas de integración y unitarias |
 
 ---
 
