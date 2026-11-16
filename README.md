@@ -2,7 +2,7 @@
 
 **Sistema de apoyo a la decisión para el despacho de recursos de Bomberos en la Región de Valparaíso.**
 
-Proyecto APT de la asignatura Capstone (APT122, sección 002D) — Ingeniería en Informática, Duoc UC, sede Valparaíso.
+Proyecto APT de la asignatura Capstone (PTY4614, sección 002D) — Ingeniería en Informática, Duoc UC, sede Valparaíso.
 
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-Vite-3178C6?logo=typescript&logoColor=white)
@@ -333,4 +333,4 @@ Equipo 06, sede Valparaíso.
 
 ---
 
-Proyecto académico desarrollado en la asignatura Capstone (APT122, sección 002D) de Ingeniería en Informática, Duoc UC, sede Valparaíso. Uso educativo.
+Proyecto académico desarrollado en la asignatura Capstone (PTY4614, sección 002D) de Ingeniería en Informática, Duoc UC, sede Valparaíso. Uso educativo.
