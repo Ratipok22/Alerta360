@@ -41,7 +41,7 @@ Alerta360 centraliza la información operacional de emergencias y recursos de Bo
 - **Qué recurso despachar:** un algoritmo multicriterio recomienda la unidad más adecuada considerando disponibilidad, compatibilidad con el tipo de emergencia, distancia, tiempo estimado de llegada, capacidad y dotación. La decisión final siempre queda en manos del operador.
 - **Dónde se espera mayor demanda:** un modelo de Machine Learning estima la cantidad de emergencias esperadas por zona, tipo de emergencia y bloque horario, y la muestra como mapa de calor.
 
-El sistema cubre 281 zonas de la Región de Valparaíso, basadas en la cartografía del Censo 2024 del INE, y está ambientado exclusivamente a Bomberos y sus especialidades: incendio estructural, incendio forestal, rescate vehicular y materiales peligrosos (HazMat). No cubre atención médica ni ambulancias.
+Alerta360 dispone de un catálogo territorial de 281 zonas de la Región de Valparaíso, basado en cartografía del Censo 2024 del INE. El modelo predictivo actualmente entrenado utiliza información histórica correspondiente a 14 zonas, mientras que la arquitectura permite ampliar progresivamente esta cobertura mediante la incorporación de datos y nuevos entrenamientos.
 
 ## Funcionalidades por rol
 
